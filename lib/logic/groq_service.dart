@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class GroqService {
-  static const String _apiKey = 'PASTE_YOUR_GROQ_API_KEY_HERE';
+  static const String _apiKey = '';
 
   static const String _baseUrl =
       'https://api.groq.com/openai/v1/chat/completions';
@@ -34,8 +34,8 @@ class GroqService {
                 {'role': 'system', 'content': _systemPrompt()},
                 {'role': 'user', 'content': _buildRecipePrompt(usableItems)},
               ],
-              'temperature': 0.3,
-              'max_tokens': 1200,
+              'temperature': 0.25,
+              'max_tokens': 1600,
               'response_format': {'type': 'json_object'},
             }),
           )
@@ -51,10 +51,12 @@ class GroqService {
       return _fallbackApiFailed(response.statusCode);
     } on TimeoutException {
       return _fallbackMessage(
-        'Groq request timeout. Showing safe demo recipes.',
+        'Groq request timeout. Showing safe cafe recipe suggestion.',
       );
     } catch (_) {
-      return _fallbackMessage('Groq failed. Showing safe demo recipes.');
+      return _fallbackMessage(
+        'Groq failed. Showing safe cafe recipe suggestion.',
+      );
     }
   }
 
@@ -99,16 +101,47 @@ class GroqService {
 
   String _systemPrompt() {
     return '''
-You are Velora AI, a smart food inventory assistant.
+You are Velora AI, a professional cafe chef and smart food inventory assistant for a small cafe or small F&B business.
+
 You must return ONLY valid JSON.
 Do not use markdown.
 Do not add explanation outside JSON.
-Generate only real existing recipes.
-Never invent fake recipe names.
-Use only safe, usable inventory ingredients.
-Expired ingredients are already removed.
-Prioritize near-expiry ingredients first.
-Maximum 3 recipes only.
+
+Main goal:
+Generate realistic cafe-suitable recipe suggestions using safe usable inventory ingredients.
+
+Recipe quality rules:
+- Generate ONLY real, common, existing recipe names used in real cooking or cafe menus.
+- Do NOT invent fake recipe names.
+- Do NOT create random names such as "Inventory Mix", "Cafe Fresh Bowl", "AI Special", or "Smart Stock Stir".
+- Recipe names must sound natural, for example:
+  "Tortilla Pizza", "Egg Fried Rice", "Egg Mayo Sandwich", "Chicken Wrap",
+  "Garlic Butter Toast", "Tomato Omelette", "Cheese Toast",
+  "Creamy Mushroom Pasta", "Banana Pancake", "Fruit Yogurt Cup".
+
+Cafe scope rules:
+- Recipes must be suitable for a small cafe, bakery, dessert shop, beverage shop, or light F&B menu.
+- Suitable categories include sandwiches, wraps, toast, pasta, rice meals, breakfast food, pastries, cakes, desserts, simple snacks, and cafe beverages.
+- Avoid recipes that are too complex, too fancy, too restaurant-heavy, or unrelated to cafe operations.
+
+Inventory safety rules:
+- Expired ingredients are already removed.
+- Quantity 0 ingredients are already removed.
+- Use inventory ingredients as the main recipe base.
+- Prioritize near-expiry ingredients first.
+- Do not suggest a recipe if most main ingredients are missing.
+- Missing ingredients must be optional, small, or realistic restock items only.
+- If the inventory is not enough for a real recipe, return fewer recipes or an empty recipes list with a restock message.
+- Do not force fake recipes just to reach 3 recipes.
+
+Output rules:
+- Maximum 3 recipes only.
+- Each recipe must have a clean title only, without numbering.
+- ingredientsUsed must contain only ingredients from the provided inventory.
+- missingIngredients can contain optional restock ingredients only.
+- Steps must be clear, complete, and practical for cafe staff.
+- Each recipe should have 5 to 8 clear preparation steps.
+- whyRecommended must explain how the recipe uses available stock or reduces waste.
 ''';
   }
 
@@ -129,7 +162,7 @@ Maximum 3 recipes only.
     }).toList();
 
     return '''
-Generate recipe suggestions using this inventory:
+Generate cafe recipe suggestions using this usable inventory:
 
 ${jsonEncode(inventoryText)}
 
@@ -137,26 +170,45 @@ Return JSON exactly in this structure:
 
 {
   "status": "success",
-  "message": "Generated recipe suggestions.",
+  "message": "Generated cafe recipe suggestions.",
   "recipes": [
     {
-      "title": "Real recipe name",
+      "title": "Real cafe recipe name",
       "ingredientsUsed": ["ingredient from inventory"],
-      "missingIngredients": ["optional missing ingredient"],
-      "steps": ["step 1", "step 2", "step 3"],
-      "whyRecommended": "Explain how this recipe reduces food waste."
+      "missingIngredients": ["optional missing or restock ingredient"],
+      "steps": [
+        "Prepare the ingredients clearly.",
+        "Explain the cooking or preparation process clearly.",
+        "Continue with practical cafe preparation steps.",
+        "Finish with serving or storage instruction."
+      ],
+      "whyRecommended": "Explain how this recipe reduces food waste or uses available cafe stock."
     }
   ]
 }
 
-Rules:
-- Maximum 3 recipes.
-- Use inventory ingredients only for ingredientsUsed.
-- Missing ingredients must be small optional items only.
-- Prioritize items with lowest daysLeft.
-- Do not use expired items.
+Strict rules:
+- Maximum 3 recipes only.
+- Recipe title must be clean, for example "Tortilla Pizza", not "Recipe 1: Tortilla Pizza" and not "1. Tortilla Pizza".
+- Suggest only real cafe-suitable recipes that exist in normal cooking references.
+- Use inventory ingredients only in ingredientsUsed.
+- Do not place missing ingredients inside ingredientsUsed.
+- Do not use expired ingredients.
+- Do not use quantity 0 ingredients.
+- Prioritize ingredients with lowest daysLeft.
+- Missing ingredients must be realistic restock items only, such as cheese, tomato sauce, bread, cream, butter, or seasoning.
+- Do not suggest a recipe if the key main ingredient is missing.
+- If only a small optional ingredient is missing, include it in missingIngredients.
+- If there are not enough ingredients for a real cafe recipe, return:
+{
+  "status": "restock_needed",
+  "message": "Not enough usable ingredients to generate a safe real cafe recipe. Please restock key ingredients first.",
+  "recipes": []
+}
+- Cooking steps must be detailed enough for a cafe worker to follow.
+- Do not write simple steps like "cook and serve" only.
+- Each recipe should include 5 to 8 clear steps.
 - Do not repeat recipe titles.
-- Cooking steps must be clear and complete.
 ''';
   }
 
@@ -170,7 +222,7 @@ Rules:
 
   Map<String, dynamic> _fallbackApiFailed(int statusCode) {
     return _fallbackMessage(
-      'Groq API error $statusCode. Showing safe demo recipes.',
+      'Groq API error $statusCode. Showing safe cafe recipe suggestion.',
     );
   }
 
@@ -180,17 +232,20 @@ Rules:
       'message': message,
       'recipes': [
         {
-          'title': 'Simple Egg Fried Rice',
+          'title': 'Egg Fried Rice',
           'ingredientsUsed': ['Egg', 'Rice'],
           'missingIngredients': ['Salt', 'Cooking oil'],
           'steps': [
-            'Heat a pan with a little cooking oil.',
-            'Add cooked rice and stir for 2 minutes.',
-            'Crack in the egg and mix until fully cooked.',
-            'Season lightly with salt and serve warm.',
+            'Prepare cooked rice, egg, and any available cafe seasoning before starting.',
+            'Heat a pan over medium heat and add a small amount of cooking oil if available.',
+            'Crack the egg into the pan and stir until it begins to set.',
+            'Add the cooked rice and mix well so the egg coats the rice evenly.',
+            'Season lightly with salt or available seasoning, then continue stir-frying for 2 to 3 minutes.',
+            'Check that the rice is hot and the egg is fully cooked before serving.',
+            'Serve warm in a bowl or takeaway container for cafe service.',
           ],
           'whyRecommended':
-              'This fallback recipe is simple and helps use common basic ingredients safely.',
+              'This fallback recipe uses common cafe inventory items and helps reduce waste by using basic stock safely.',
         },
       ],
     };

@@ -523,56 +523,182 @@ class _HeroCard extends StatelessWidget {
 
   const _HeroCard({required this.title, required this.isSmall});
 
+  String get _imageUrl {
+    final lower = title.toLowerCase();
+
+    if (lower.contains('pizza')) {
+      return 'https://images.unsplash.com/photo-1513104890138-7c749659a591';
+    }
+
+    if (lower.contains('pasta')) {
+      return 'https://images.unsplash.com/photo-1521389508051-d7ffb5dc8f70';
+    }
+
+    if (lower.contains('omelette') || lower.contains('egg')) {
+      return 'https://images.unsplash.com/photo-1510693206972-df098062cb71';
+    }
+
+    if (lower.contains('sandwich')) {
+      return 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af';
+    }
+
+    if (lower.contains('toast')) {
+      return 'https://images.unsplash.com/photo-1509440159596-0249088772ff';
+    }
+
+    if (lower.contains('wrap')) {
+      return 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38';
+    }
+
+    if (lower.contains('pancake')) {
+      return 'https://images.unsplash.com/photo-1528207776546-365bb710ee93';
+    }
+
+    return 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.all(isSmall ? 18 : 22),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF7C3AED), Color(0xFFA855F7)],
-        ),
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(30),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7C3AED).withValues(alpha: 0.24),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+            color: Colors.black.withValues(alpha: 0.10),
+            blurRadius: 22,
+            offset: const Offset(0, 12),
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(30),
+        child: Stack(
+          children: [
+            SizedBox(
+              height: isSmall ? 260 : 300,
+              width: double.infinity,
+              child: Image.network(_imageUrl, fit: BoxFit.cover),
+            ),
+
+            Container(
+              height: isSmall ? 260 : 300,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.10),
+                    Colors.black.withValues(alpha: 0.72),
+                  ],
+                ),
+              ),
+            ),
+
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 20,
+              child: Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.38),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.12),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      height: 54,
+                      width: 54,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: const Icon(
+                        Icons.restaurant_menu_rounded,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    Text(
+                      title.isEmpty ? 'Cafe Recipe' : title,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: isSmall ? 24 : 28,
+                        fontWeight: FontWeight.w900,
+                        height: 1.15,
+                      ),
+                    ),
+
+                    const SizedBox(height: 10),
+
+                    Text(
+                      'AI-powered cafe recipe generated from your inventory ingredients.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.88),
+                        fontSize: 13,
+                        height: 1.4,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+
+                    const SizedBox(height: 14),
+
+                    Row(
+                      children: [
+                        _HeroBadge(
+                          icon: Icons.auto_awesome_rounded,
+                          text: 'AI Recipe',
+                        ),
+                        const SizedBox(width: 8),
+                        _HeroBadge(
+                          icon: Icons.inventory_2_rounded,
+                          text: 'Inventory Based',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroBadge extends StatelessWidget {
+  final IconData icon;
+  final String text;
+
+  const _HeroBadge({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            height: isSmall ? 58 : 66,
-            width: isSmall ? 58 : 66,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(22),
-            ),
-            child: const Icon(
-              Icons.auto_awesome_rounded,
-              color: Colors.white,
-              size: 32,
-            ),
-          ),
-          const SizedBox(height: 18),
+          Icon(icon, size: 14, color: Colors.white),
+          const SizedBox(width: 5),
           Text(
-            title.isEmpty ? 'Cafe Recipe' : title,
-            style: TextStyle(
+            text,
+            style: const TextStyle(
               color: Colors.white,
-              fontSize: isSmall ? 22 : 26,
-              fontWeight: FontWeight.w900,
-              height: 1.15,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Cafe recipe suggestion based on your inventory',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.86),
-              fontSize: isSmall ? 12 : 13,
-              fontWeight: FontWeight.w600,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],

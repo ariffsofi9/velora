@@ -1,110 +1,141 @@
-import '../../../models/inventory_item.dart';
-
 class RecipeParser {
   static String title(Map<String, String> recipe) {
-    return recipe['title']?.trim().isNotEmpty == true
-        ? recipe['title']!.trim()
-        : 'AI Recipe';
+    final raw =
+        recipe['title']?.trim() ?? recipe['name']?.trim() ?? 'Cafe Recipe';
+
+    return _cleanTitle(raw);
   }
 
   static String content(Map<String, String> recipe) {
-    return recipe['content'] ?? '';
-  }
-
-  static List<String> nearExpiryNames(List<InventoryItem> items) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-
-    return items
-        .where((item) {
-          final expiry = DateTime(
-            item.expiryDate.year,
-            item.expiryDate.month,
-            item.expiryDate.day,
-          );
-
-          final days = expiry.difference(today).inDays;
-          return days >= 0 && days <= 3;
-        })
-        .map((item) {
-          return item.name.trim();
-        })
-        .where((name) {
-          return name.isNotEmpty;
-        })
-        .toList();
+    return recipe['content']?.trim() ?? '';
   }
 
   static List<String> ingredients(String content) {
     final lines = content.split('\n');
-    final result = <String>[];
-    var reading = false;
 
-    for (final line in lines) {
-      final clean = line.trim();
-      final lower = clean.toLowerCase();
+    bool insideIngredients = false;
 
-      if (lower.startsWith('ingredients')) {
-        reading = true;
+    final ingredients = <String>[];
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+
+      final lower = line.toLowerCase();
+
+      if (lower.contains('ingredients used')) {
+        insideIngredients = true;
         continue;
       }
 
-      if (lower.startsWith('steps')) break;
+      if (lower.contains('missing ingredients') ||
+          lower.contains('steps') ||
+          lower.contains('instructions')) {
+        insideIngredients = false;
+      }
 
-      if (reading && clean.startsWith('-')) {
-        result.add(clean.replaceFirst('-', '').trim());
+      if (insideIngredients) {
+        if (line.startsWith('-')) {
+          ingredients.add(line.replaceFirst('-', '').trim());
+        }
       }
     }
 
-    return result.isEmpty ? ['Inventory ingredients'] : result;
+    return ingredients;
   }
 
   static List<String> steps(String content) {
     final lines = content.split('\n');
-    final result = <String>[];
-    var reading = false;
 
-    for (final line in lines) {
-      final clean = line.trim();
-      final lower = clean.toLowerCase();
+    bool insideSteps = false;
 
-      if (lower.startsWith('steps')) {
-        reading = true;
+    final steps = <String>[];
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+
+      final lower = line.toLowerCase();
+
+      if (lower == 'steps:' ||
+          lower == 'instructions:' ||
+          lower.contains('steps')) {
+        insideSteps = true;
         continue;
       }
 
-      if (lower.startsWith('why')) break;
+      if (lower.contains('why recommended')) {
+        insideSteps = false;
+      }
 
-      if (reading && RegExp(r'^\d+\.').hasMatch(clean)) {
-        result.add(clean.replaceFirst(RegExp(r'^\d+\.\s*'), '').trim());
+      if (insideSteps) {
+        final numberedStep = RegExp(r'^\d+\.\s*');
+
+        if (numberedStep.hasMatch(line)) {
+          steps.add(line.replaceFirst(numberedStep, '').trim());
+        }
       }
     }
 
-    return result.isEmpty
-        ? ['Follow the AI suggestion shown in the recipe card.']
-        : result;
+    return steps;
   }
 
   static String why(String content) {
     final lines = content.split('\n');
-    final result = <String>[];
-    var reading = false;
 
-    for (final line in lines) {
-      final clean = line.trim();
+    bool insideWhy = false;
 
-      if (clean.toLowerCase().startsWith('why')) {
-        reading = true;
-        final afterColon = clean.split(':').skip(1).join(':').trim();
-        if (afterColon.isNotEmpty) result.add(afterColon);
+    final buffer = StringBuffer();
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+
+      final lower = line.toLowerCase();
+
+      if (lower.contains('why recommended')) {
+        insideWhy = true;
         continue;
       }
 
-      if (reading && clean.isNotEmpty) result.add(clean);
+      if (insideWhy && line.isNotEmpty) {
+        buffer.writeln(line);
+      }
     }
 
-    return result.isEmpty
-        ? 'This recipe helps use available inventory items and reduce food waste.'
-        : result.join(' ');
+    final result = buffer.toString().trim();
+
+    if (result.isEmpty) {
+      return 'This recipe helps use available cafe inventory efficiently.';
+    }
+
+    return result;
+  }
+
+  static List<String> nearExpiryNames(List<dynamic> items) {
+    return items.map((e) => e.name.toString()).toList();
+  }
+
+  static String _cleanTitle(String value) {
+    String cleaned = value.trim();
+
+    cleaned = cleaned.replaceAll(
+      RegExp(r'^generated by groq ai\s*', caseSensitive: false),
+      '',
+    );
+
+    cleaned = cleaned.replaceAll(
+      RegExp(r'^recipe\s*\d+\s*:\s*', caseSensitive: false),
+      '',
+    );
+
+    cleaned = cleaned.replaceAll(RegExp(r'^\d+\.\s*'), '');
+
+    cleaned = cleaned.replaceAll(RegExp(r'^-\s*'), '');
+
+    cleaned = cleaned.trim();
+
+    if (cleaned.isEmpty) {
+      return 'Cafe Recipe';
+    }
+
+    return cleaned;
   }
 }

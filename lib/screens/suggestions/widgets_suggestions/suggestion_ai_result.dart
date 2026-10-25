@@ -186,7 +186,7 @@ class SuggestionAiResult extends StatelessWidget {
         return _buildSavedOrFallback(
           context,
           notice:
-              'Gemini quota limit reached. Showing demo-safe suggestions based on your inventory.',
+              'Groq quota limit reached. Showing demo-safe suggestions based on your inventory.',
         );
       }
 
