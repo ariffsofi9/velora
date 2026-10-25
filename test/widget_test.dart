@@ -1,30 +1,35 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:velora/main.dart';
+import 'package:velora/screens/inventory/widgets_inventory/inventory_empty_state.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const VeloraApp());
+  testWidgets('Empty inventory shows guidance and invokes Add Item action', (
+    WidgetTester tester,
+  ) async {
+    var addRequests = 0;
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Exercise the production widget without starting Firebase or auth routing.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: InventoryEmptyState(onAdd: () => addRequests++),
+        ),
+      ),
+    );
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    expect(find.text('Your inventory is empty'), findsOneWidget);
+    expect(
+      find.text('Add your first item to start tracking food expiry.'),
+      findsOneWidget,
+    );
+    final addButton = find.widgetWithText(ElevatedButton, 'Add Item');
+    expect(addButton, findsOneWidget);
+    expect(addRequests, 0);
+
+    await tester.tap(addButton);
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(addRequests, 1);
+    expect(tester.takeException(), isNull);
   });
 }
