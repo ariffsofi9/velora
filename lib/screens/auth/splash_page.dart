@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_tokens.dart';
+import '../../widgets/velora_logo.dart';
+
 import '../home/home_page.dart';
 import 'login_page.dart';
 
@@ -42,163 +45,145 @@ class _SplashPageState extends State<SplashPage> {
 
   @override
   Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
     return Scaffold(
-      body: Container(
-        width: double.infinity,
-        height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF7C3AED), Color(0xFF5B21B6)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Stack(
-          children: [
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      const Text(
-                        'V',
-                        style: TextStyle(
-                          fontSize: 110,
-                          height: 0.9,
-                          fontWeight: FontWeight.w900,
-                          color: Colors.white,
-                        ),
-                      ),
-                      Positioned(
-                        top: -8,
-                        right: -18,
-                        child: Transform.rotate(
-                          angle: 0.6,
-                          child: Container(
-                            width: 34,
-                            height: 52,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF22C55E),
-                              borderRadius: BorderRadius.only(
-                                topLeft: Radius.circular(28),
-                                bottomRight: Radius.circular(28),
-                              ),
+      backgroundColor: AppColors.background,
+      body: _BotanicalFrame(
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact =
+                  constraints.maxWidth < 375 || constraints.maxHeight < 650;
+              final logoSize = compact ? 196.0 : 216.0;
+              final sectionGap = compact ? AppSpacing.xl : AppSpacing.xxl;
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(AppSpacing.xl),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: (constraints.maxHeight - AppSpacing.xl * 2)
+                        .clamp(0.0, double.infinity),
+                  ),
+                  child: Center(
+                    child: SizedBox(
+                      width: 440,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          VeloraLogo(size: logoSize),
+                          const SizedBox(height: AppSpacing.sm),
+                          Text(
+                            'SMART CAFÉ INVENTORY',
+                            textAlign: TextAlign.center,
+                            style: text.labelSmall?.copyWith(
+                              letterSpacing: compact ? 2 : 3,
+                              color: AppColors.textSecondary,
                             ),
                           ),
-                        ),
+                          SizedBox(height: sectionGap),
+                          Container(
+                            width: 28,
+                            height: 1,
+                            color: AppColors.primaryDark,
+                          ),
+                          const SizedBox(height: AppSpacing.xl),
+                          Text(
+                            'Smarter Food,\nBetter Business',
+                            textAlign: TextAlign.center,
+                            style: text.bodyLarge?.copyWith(
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          SizedBox(height: sectionGap),
+                          const SizedBox(
+                            width: 38,
+                            height: 38,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 3,
+                              color: AppColors.primaryDark,
+                              semanticsLabel: 'Loading Velora',
+                            ),
+                          ),
+                          const SizedBox(height: AppSpacing.lg),
+                          Text(
+                            'Preparing your caf\u00e9 space...',
+                            style: text.bodySmall,
+                            textAlign: TextAlign.center,
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  const Text(
-                    'Velora',
-                    style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Smarter Food,\nBetter Business',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 13,
-                      height: 1.4,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white70,
-                    ),
-                  ),
-                  const SizedBox(height: 36),
-                  const SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 3,
-                      color: Colors.white,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Positioned(
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: 270,
-              child: CustomPaint(painter: FoodPatternPainter()),
-            ),
-          ],
+                ),
+              );
+            },
+          ),
         ),
       ),
     );
   }
 }
 
-class FoodPatternPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.35)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2;
+// Artwork is decorative, excluded from semantics, and never handles taps.
+class _BotanicalFrame extends StatelessWidget {
+  final Widget child;
 
-    void leaf(double x, double y, double w, double h) {
-      final path = Path()
-        ..moveTo(x, y + h)
-        ..quadraticBezierTo(x + w, y + h * 0.35, x + w * 0.35, y)
-        ..quadraticBezierTo(x - w * 0.25, y + h * 0.35, x, y + h);
+  const _BotanicalFrame({required this.child});
 
-      canvas.drawPath(path, paint);
-      canvas.drawLine(
-        Offset(x, y + h),
-        Offset(x + w * 0.25, y + h * 0.2),
-        paint,
-      );
-    }
-
-    void circleFruit(double x, double y, double r) {
-      canvas.drawCircle(Offset(x, y), r, paint);
-      leaf(x + r * 0.3, y - r * 1.5, 18, 28);
-    }
-
-    circleFruit(30, 150, 34);
-    circleFruit(110, 200, 24);
-    circleFruit(size.width - 20, 45, 40);
-
-    leaf(80, 95, 30, 48);
-    leaf(150, 65, 24, 38);
-    leaf(205, 120, 26, 44);
-    leaf(260, 80, 24, 40);
-    leaf(310, 145, 28, 46);
-
-    final banana = Path()
-      ..moveTo(210, 220)
-      ..quadraticBezierTo(280, 270, 330, 190)
-      ..quadraticBezierTo(270, 230, 220, 180);
-
-    canvas.drawPath(banana, paint);
-
-    final branch = Path()
-      ..moveTo(120, 170)
-      ..quadraticBezierTo(180, 140, 250, 160)
-      ..quadraticBezierTo(300, 175, 340, 145);
-
-    canvas.drawPath(branch, paint);
-
-    for (final p in [
-      const Offset(95, 130),
-      const Offset(150, 110),
-      const Offset(250, 135),
-      const Offset(285, 170),
-      const Offset(340, 105),
-    ]) {
-      canvas.drawCircle(p, 4, paint);
-    }
+  Widget _art(String filename, double width, double opacity) {
+    return IgnorePointer(
+      child: Opacity(
+        opacity: opacity,
+        child: Image.asset(
+          'assets/images/auth/$filename',
+          width: width,
+          fit: BoxFit.contain,
+          excludeFromSemantics: true,
+          // Omit unavailable or undecodable decoration without blocking the form.
+          errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+        ),
+      ),
+    );
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned(
+              top: -12,
+              left: -28,
+              child: _art(
+                'bg_top_left.png',
+                (width * .8).clamp(0.0, 420.0),
+                .85,
+              ),
+            ),
+            Positioned(
+              bottom: 0,
+              right: -12,
+              child: _art(
+                'bg_bottom_right.png',
+                (width * 1.05).clamp(0.0, 680.0),
+                .85,
+              ),
+            ),
+            Positioned(
+              bottom: 70,
+              left: -35,
+              child: _art(
+                'leaf_small_2.png',
+                (width * .4).clamp(0.0, 200.0),
+                .8,
+              ),
+            ),
+            child,
+          ],
+        );
+      },
+    );
+  }
 }

@@ -1,6 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/theme/app_tokens.dart';
+import '../../widgets/velora_logo.dart';
+
 import 'signup_page.dart';
 import 'forgot_password_page.dart';
 import '../home/home_page.dart';
@@ -75,9 +78,7 @@ class _LoginPageState extends State<LoginPage> {
   void showMessage(String message, bool isError) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor: isError
-            ? const Color(0xFFEF4444)
-            : const Color(0xFF10B981),
+        backgroundColor: isError ? AppColors.danger : AppColors.success,
         content: Text(
           message,
           style: const TextStyle(fontWeight: FontWeight.w700),
@@ -86,288 +87,402 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  InputDecoration inputDecoration({
-    required String hint,
-    required IconData icon,
-    Widget? suffix,
-  }) {
-    return InputDecoration(
-      hintText: hint,
-      hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
-      prefixIcon: Icon(icon, size: 18, color: const Color(0xFF6B7280)),
-      suffixIcon: suffix,
-      filled: true,
-      fillColor: const Color(0xFFFAFAFA),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFFBDBDBD)),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFFBDBDBD)),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(8),
-        borderSide: const BorderSide(color: Color(0xFF8B5CF6), width: 1.4),
-      ),
-    );
-  }
-
-  Widget socialButton() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xFFD1D5DB)),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Text(
-            'G',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-              color: Colors.red,
-            ),
+  Widget _brand() {
+    // Keyboard height must not change the brand's proportions.
+    final logoSize = MediaQuery.sizeOf(context).width < 375 ? 144.0 : 160.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        VeloraLogo(size: logoSize),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          'SMART CAFÉ INVENTORY',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            letterSpacing: 2.4,
+            color: AppColors.textSecondary,
           ),
-          SizedBox(width: 10),
-          Text(
-            'Sign in with Google',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF374151),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget veloraLogo() {
-    return Container(
-      width: 110,
-      height: 110,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF7C3AED), Color(0xFF5B21B6)],
         ),
-        borderRadius: BorderRadius.circular(28),
+      ],
+    );
+  }
+
+  Widget _field({
+    required String label,
+    required TextEditingController controller,
+    bool obscure = false,
+    Widget? suffix,
+    TextInputType? keyboardType,
+    bool enabled = true,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.md),
+      child: TextField(
+        controller: controller,
+        enabled: enabled,
+        obscureText: obscure,
+        keyboardType: keyboardType,
+        decoration: InputDecoration(
+          labelText: label,
+          floatingLabelBehavior: FloatingLabelBehavior.never,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.lg,
+            vertical: 18,
+          ),
+          prefixIcon: Icon(
+            keyboardType == TextInputType.emailAddress
+                ? Icons.mail_outline
+                : label == 'Full name'
+                ? Icons.person_outline
+                : Icons.lock_outline,
+            size: 20,
+            color: AppColors.textSecondary,
+          ),
+          suffixIcon: suffix,
+        ),
       ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          const Text(
-            'V',
-            style: TextStyle(
-              fontSize: 54,
-              fontWeight: FontWeight.w900,
-              color: Colors.white,
-            ),
+    );
+  }
+
+  Widget _submit(String label, VoidCallback action) {
+    return SizedBox(
+      width: double.infinity,
+      child: FilledButton(
+        onPressed: isLoading ? null : action,
+        style: FilledButton.styleFrom(
+          minimumSize: const Size.fromHeight(52),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadius.card),
           ),
-          Positioned(
-            top: 22,
-            right: 26,
-            child: Transform.rotate(
-              angle: 0.5,
-              child: Container(
-                width: 18,
-                height: 28,
-                decoration: const BoxDecoration(
-                  color: Color(0xFF22C55E),
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(20),
-                    bottomRight: Radius.circular(20),
-                  ),
+          textStyle: Theme.of(context).textTheme.titleMedium,
+        ),
+        child: isLoading
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: AppColors.primaryDark,
+                  semanticsLabel: 'Please wait',
                 ),
-              ),
-            ),
-          ),
-        ],
+              )
+            : Text('$label  →', textAlign: TextAlign.center),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 55),
-              const Center(
-                child: Text(
-                  'Welcome Back!',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF111827),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Center(
-                child: Text(
-                  'Login to continue',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Center(child: veloraLogo()),
-              const SizedBox(height: 26),
-              const Text(
-                'Email Address',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: inputDecoration(
-                  hint: 'Enter your email',
-                  icon: Icons.email_outlined,
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Text(
-                'Password',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: passwordController,
-                obscureText: hidePassword,
-                decoration: inputDecoration(
-                  hint: 'Enter your password',
-                  icon: Icons.lock_outline,
-                  suffix: IconButton(
-                    icon: Icon(
-                      hidePassword
-                          ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined,
-                      size: 18,
-                      color: const Color(0xFF6B7280),
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        hidePassword = !hidePassword;
-                      });
-                    },
-                  ),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: isLoading
-                      ? null
-                      : () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const ForgotPasswordPage(),
-                            ),
-                          );
-                        },
-                  child: const Text(
-                    'Forgot Password?',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Color(0xFF10B981),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: ElevatedButton(
-                  onPressed: isLoading ? null : loginUser,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF8B5CF6),
-                    disabledBackgroundColor: const Color(0xFFC4B5FD),
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: isLoading
-                      ? const SizedBox(
-                          height: 22,
-                          width: 22,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2.5,
-                          ),
-                        )
-                      : const Text(
-                          'Login',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                          ),
+    final text = Theme.of(context).textTheme;
+    final media = MediaQuery.of(context);
+    final compact =
+        media.size.width < 375 ||
+        media.size.height - media.viewInsets.bottom < 650;
+    final sectionGap = compact ? AppSpacing.xl : AppSpacing.xxl;
+    return ColoredBox(
+      color: AppColors.background,
+      child: _BotanicalFrame(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: SafeArea(
+            child: _FormViewport(
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 440),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(height: compact ? 40 : 72),
+                      _brand(),
+                      SizedBox(height: sectionGap),
+                      Text(
+                        'Welcome back',
+                        style: text.headlineMedium?.copyWith(
+                          fontSize: 34,
+                          fontFamily: 'Georgia',
+                          fontFamilyFallback: const [
+                            'Georgia',
+                            'Times New Roman',
+                            'serif',
+                          ],
+                          fontWeight: FontWeight.w400,
                         ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              const Center(
-                child: Text(
-                  'or continue with',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Center(
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 52,
-                  child: socialButton(),
-                ),
-              ),
-              const SizedBox(height: 14),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Text(
-                    "Don't have an account? ",
-                    style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-                  ),
-                  GestureDetector(
-                    onTap: isLoading
-                        ? null
-                        : () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const SignUpPage(),
-                              ),
-                            );
-                          },
-                    child: const Text(
-                      'Sign Up',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF10B981),
-                        fontWeight: FontWeight.w800,
+                        textAlign: TextAlign.left,
                       ),
-                    ),
+                      const SizedBox(height: AppSpacing.sm),
+                      Text(
+                        'A calmer day at your café starts here.',
+                        style: text.bodyMedium?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                        textAlign: TextAlign.left,
+                      ),
+                      SizedBox(height: sectionGap),
+                      _field(
+                        label: 'Email address',
+                        controller: emailController,
+                        keyboardType: TextInputType.emailAddress,
+                      ),
+                      _field(
+                        label: 'Password',
+                        controller: passwordController,
+                        obscure: hidePassword,
+                        suffix: IconButton(
+                          tooltip: hidePassword
+                              ? 'Show password'
+                              : 'Hide password',
+                          icon: Icon(
+                            hidePassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              hidePassword = !hidePassword;
+                            });
+                          },
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: isLoading
+                              ? null
+                              : () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) =>
+                                          const ForgotPasswordPage(),
+                                    ),
+                                  );
+                                },
+                          child: const Text('Forgot Password?'),
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      _submit('Sign In', loginUser),
+                      const SizedBox(height: AppSpacing.xl),
+                      Text(
+                        "Don't have an account?",
+                        textAlign: TextAlign.center,
+                        style: text.bodyMedium,
+                      ),
+                      TextButton(
+                        onPressed: isLoading
+                            ? null
+                            : () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const SignUpPage(),
+                                  ),
+                                );
+                              },
+                        child: const Text('Register'),
+                      ),
+                      const SizedBox(height: AppSpacing.lg),
+                      Text(
+                        'Google sign-in is currently unavailable.',
+                        textAlign: TextAlign.center,
+                        style: text.bodySmall?.copyWith(
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+// Size the viewport, not the text: system text scaling remains unchanged.
+class _FormViewport extends StatelessWidget {
+  final Widget child;
+  const _FormViewport({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact =
+            constraints.maxWidth < 375 || constraints.maxHeight < 650;
+        final padding = compact ? AppSpacing.lg : AppSpacing.xl;
+        return SingleChildScrollView(
+          padding: EdgeInsets.all(padding),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              minHeight: (constraints.maxHeight - padding * 2).clamp(
+                0.0,
+                double.infinity,
+              ),
+            ),
+            child: Align(alignment: Alignment.topCenter, child: child),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// Artwork is decorative, excluded from semantics, and never handles taps.
+class _BotanicalFrame extends StatelessWidget {
+  final Widget child;
+
+  const _BotanicalFrame({required this.child});
+
+  Widget _art(String filename, double width, double opacity) {
+    return IgnorePointer(
+      child: Opacity(
+        opacity: opacity,
+        child: Image.asset(
+          'assets/images/auth/$filename',
+          width: width,
+          fit: BoxFit.contain,
+          excludeFromSemantics: true,
+          // Omit unavailable or undecodable decoration without blocking the form.
+          errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        // The cup occupies only part of this transparent corner composition.
+        // Enlarge the sheet and crop its edge, rather than distorting the cup.
+        final coffeeWidth = (width * .92)
+            .clamp(0.0, 480.0)
+            .clamp(0.0, constraints.maxHeight * .52);
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            const Positioned(
+              top: 24,
+              left: 4,
+              child: IgnorePointer(
+                child: CustomPaint(
+                  size: Size(36, 60),
+                  painter: _CornerDetailPainter(),
+                ),
+              ),
+            ),
+            Positioned(
+              top: -coffeeWidth * .18,
+              right: -coffeeWidth * .17,
+              child: _art('bg_top_right.png', coffeeWidth, 1),
+            ),
+            if (MediaQuery.viewInsetsOf(context).bottom == 0)
+              Positioned(
+                bottom: -12,
+                right: -20,
+                child: IgnorePointer(
+                  child: CustomPaint(
+                    size: Size(
+                      (width * .8).clamp(0.0, 440.0),
+                      (constraints.maxHeight * .16).clamp(0.0, 150.0),
+                    ),
+                    painter: const _CornerDetailPainter(bottom: true),
+                  ),
+                ),
+              ),
+            if (MediaQuery.viewInsetsOf(context).bottom == 0)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                child: _art(
+                  'bg_bottom_left.png',
+                  (width * .65).clamp(0.0, 360.0),
+                  .24,
+                ),
+              ),
+            child,
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _CornerDetailPainter extends CustomPainter {
+  final bool bottom;
+  const _CornerDetailPainter({this.bottom = false});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    if (bottom) {
+      Path wave(double crest) => Path()
+        ..moveTo(0, size.height)
+        ..cubicTo(
+          size.width * .4,
+          size.height * .88,
+          size.width * .63,
+          size.height * crest,
+          size.width,
+          size.height * .08,
+        )
+        ..lineTo(size.width, size.height)
+        ..close();
+      canvas.drawPath(
+        wave(.62),
+        Paint()..color = AppColors.primary.withValues(alpha: .12),
+      );
+      canvas.drawPath(
+        wave(.92),
+        Paint()..color = AppColors.primary.withValues(alpha: .16),
+      );
+      canvas.drawPath(
+        Path()
+          ..moveTo(size.width * .08, size.height)
+          ..cubicTo(
+            size.width * .52,
+            size.height * .78,
+            size.width * .64,
+            size.height * .3,
+            size.width,
+            size.height * .02,
+          ),
+        Paint()
+          ..color = const Color(0xFFB7A276).withValues(alpha: .48)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = .8,
+      );
+    } else {
+      final dots = Paint()
+        ..color = AppColors.primaryDark.withValues(alpha: .45);
+      for (final point in const [
+        Offset(9, 5),
+        Offset(21, 17),
+        Offset(9, 30),
+        Offset(21, 43),
+        Offset(9, 55),
+      ]) {
+        canvas.drawCircle(point, 2.1, dots);
+      }
+      canvas.drawPath(
+        Path()
+          ..moveTo(0, 58)
+          ..quadraticBezierTo(34, 37, 30, 0),
+        Paint()
+          ..color = AppColors.primary.withValues(alpha: .16)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = .8,
+      );
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _CornerDetailPainter oldDelegate) =>
+      oldDelegate.bottom != bottom;
 }
