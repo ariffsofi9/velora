@@ -3,13 +3,16 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
 import '../../widgets/velora_logo.dart';
+import '../../services/auth_service.dart';
 
 import 'signup_page.dart';
 import 'forgot_password_page.dart';
 import '../home/home_page.dart';
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+  final String? message;
+  final AuthService? authService;
+  const LoginPage({super.key, this.message, this.authService});
 
   @override
   State<LoginPage> createState() => _LoginPageState();
@@ -23,6 +26,16 @@ class _LoginPageState extends State<LoginPage> {
   bool isLoading = false;
 
   @override
+  void initState() {
+    super.initState();
+    if (widget.message != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) showMessage(widget.message!, false);
+      });
+    }
+  }
+
+  @override
   void dispose() {
     emailController.dispose();
     passwordController.dispose();
@@ -30,6 +43,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> loginUser() async {
+    if (isLoading) return;
     final email = emailController.text.trim();
     final password = passwordController.text.trim();
 
@@ -41,7 +55,7 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => isLoading = true);
 
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      await (widget.authService ?? AuthService()).signIn(
         email: email,
         password: password,
       );
@@ -66,6 +80,8 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       showMessage(message, true);
+    } on AuthFlowException catch (error) {
+      showMessage(error.message, true);
     } catch (_) {
       showMessage('Something went wrong. Please try again.', true);
     }
@@ -76,6 +92,7 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   void showMessage(String message, bool isError) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: isError ? AppColors.danger : AppColors.success,

@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -6,10 +5,11 @@ import '../../core/theme/app_tokens.dart';
 import '../../widgets/velora_logo.dart';
 
 import 'login_page.dart';
-import 'verify_email_page.dart';
+import '../../services/auth_service.dart';
 
 class SignUpPage extends StatefulWidget {
-  const SignUpPage({super.key});
+  final AuthService? authService;
+  const SignUpPage({super.key, this.authService});
 
   @override
   State<SignUpPage> createState() => _SignUpPageState();
@@ -36,6 +36,7 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 
   Future<void> createAccount() async {
+    if (isLoading) return;
     final name = nameController.text.trim();
     final email = emailController.text.trim();
     final password = passwordController.text.trim();
@@ -72,33 +73,21 @@ class _SignUpPageState extends State<SignUpPage> {
     setState(() => isLoading = true);
 
     try {
-      final credential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(email: email, password: password);
-
-      final user = credential.user;
-
-      if (user == null) {
-        showMessage('Account creation failed. Please try again.', true);
-        return;
-      }
-
-      await user.updateDisplayName(name);
-      await user.sendEmailVerification();
-
-      await FirebaseFirestore.instance.collection('users').doc(user.uid).set({
-        'username': name,
-        'email': email,
-        'photoUrl': '',
-        'role': 'owner',
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-
+      await (widget.authService ?? AuthService()).register(
+        name: name,
+        email: email,
+        password: password,
+      );
       if (!mounted) return;
-
-      Navigator.pushReplacement(
+      Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const VerifyEmailPage()),
+        MaterialPageRoute(
+          builder: (_) => LoginPage(
+            authService: widget.authService,
+            message: 'Account created successfully! Please log in.',
+          ),
+        ),
+        (route) => false,
       );
     } on FirebaseAuthException catch (e) {
       String message = 'Sign up failed. Please try again.';
@@ -112,16 +101,17 @@ class _SignUpPageState extends State<SignUpPage> {
       }
 
       showMessage(message, true);
+    } on AuthFlowException catch (error) {
+      showMessage(error.message, true);
     } catch (_) {
       showMessage('Something went wrong. Please try again.', true);
-    }
-
-    if (mounted) {
-      setState(() => isLoading = false);
+    } finally {
+      if (mounted) setState(() => isLoading = false);
     }
   }
 
   void showMessage(String message, bool isError) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: isError ? AppColors.danger : AppColors.success,
@@ -369,7 +359,7 @@ class _SignUpPageState extends State<SignUpPage> {
                           borderRadius: BorderRadius.circular(AppRadius.card),
                         ),
                         child: Text(
-                          'We’ll email you a verification link after you sign up.',
+                          'Create your account, then log in to get started.',
                           style: text.bodyMedium,
                         ),
                       ),

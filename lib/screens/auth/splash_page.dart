@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/auth_service.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
@@ -10,7 +10,8 @@ import '../home/home_page.dart';
 import 'login_page.dart';
 
 class SplashPage extends StatefulWidget {
-  const SplashPage({super.key});
+  final AuthService? authService;
+  const SplashPage({super.key, this.authService});
 
   @override
   State<SplashPage> createState() => _SplashPageState();
@@ -28,9 +29,15 @@ class _SplashPageState extends State<SplashPage> {
 
     if (!mounted) return;
 
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (user != null) {
+    var restoreSession = false;
+    try {
+      restoreSession = await (widget.authService ?? AuthService())
+          .canRestoreSession();
+    } catch (_) {
+      // Storage/auth recovery failures must never grant automatic access.
+    }
+    if (!mounted) return;
+    if (restoreSession) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const HomePage()),
