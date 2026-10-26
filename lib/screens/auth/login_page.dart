@@ -269,8 +269,11 @@ class _LoginPageState extends State<LoginPage> {
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (_) =>
-                                          const ForgotPasswordPage(),
+                                      builder: (_) => ForgotPasswordPage(
+                                        initialEmail: emailController.text
+                                            .trim(),
+                                        authService: widget.authService,
+                                      ),
                                     ),
                                   );
                                 },

@@ -23,6 +23,26 @@ class AuthService {
   FirebaseAuth get _auth => _firebaseAuth ?? FirebaseAuth.instance;
   UserProfileService get _profiles => _profileService ?? UserProfileService();
 
+  static bool isValidResetEmail(String email) =>
+      email.trim().length <= 254 &&
+      RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email.trim());
+
+  Future<void> sendPasswordResetEmail({required String email}) async {
+    final address = email.trim();
+    if (!isValidResetEmail(address)) {
+      throw FirebaseAuthException(code: 'invalid-email');
+    }
+    try {
+      // No custom action URL: keep Firebase's configured hosted reset flow.
+      await _auth.sendPasswordResetEmail(email: address);
+    } on FirebaseAuthException catch (error) {
+      // Do not disclose account existence on projects with legacy error behavior.
+      if (error.code != 'user-not-found' && error.code != 'user-disabled') {
+        rethrow;
+      }
+    }
+  }
+
   Future<void> register({
     required String name,
     required String email,

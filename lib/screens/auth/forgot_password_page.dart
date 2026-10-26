@@ -1,247 +1,297 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'login_page.dart';
+
 import '../../core/theme/app_tokens.dart';
+import '../../services/auth_service.dart';
+import 'login_page.dart';
+
+const _ivory = Color(0xFFFAF9F6);
+const _sage = Color(0xFF55745B);
+const _forest = Color(0xFF203B30);
 
 class ForgotPasswordPage extends StatefulWidget {
-  const ForgotPasswordPage({super.key});
+  static const confirmationMessage =
+      'If an account exists for this email, a password reset link will be sent.';
+  final String initialEmail;
+  final AuthService? authService;
+
+  const ForgotPasswordPage({
+    super.key,
+    this.initialEmail = '',
+    this.authService,
+  });
 
   @override
   State<ForgotPasswordPage> createState() => _ForgotPasswordPageState();
 }
 
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
-  final emailController = TextEditingController();
+  final _form = GlobalKey<FormState>();
+  late final TextEditingController _email;
+  bool _loading = false;
+  bool _feedbackError = false;
+  String? _feedback;
+  int _cooldown = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _email = TextEditingController(text: widget.initialEmail.trim());
+  }
 
   @override
   void dispose() {
-    emailController.dispose();
+    _timer?.cancel();
+    _email.dispose();
     super.dispose();
+  }
+
+  void _showFeedback(String message, {bool error = false}) {
+    if (!mounted) return;
+    setState(() {
+      _feedback = message;
+      _feedbackError = error;
+    });
+  }
+
+  Future<void> _send() async {
+    if (_loading || _cooldown > 0 || !_form.currentState!.validate()) return;
+    final address = _email.text.trim();
+    setState(() {
+      _loading = true;
+      _feedback = null;
+    });
+    try {
+      await (widget.authService ?? AuthService()).sendPasswordResetEmail(
+        email: address,
+      );
+      if (!mounted) return;
+      setState(() => _cooldown = 60);
+      _timer?.cancel();
+      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
+        setState(() => _cooldown = (60 - timer.tick).clamp(0, 60));
+        if (_cooldown == 0) timer.cancel();
+      });
+      _showFeedback(ForgotPasswordPage.confirmationMessage);
+    } on FirebaseAuthException catch (error) {
+      _showFeedback(switch (error.code) {
+        'invalid-email' => 'Please enter a valid email address.',
+        'network-request-failed' =>
+          'Check your internet connection and try again.',
+        'too-many-requests' =>
+          'Too many requests. Please wait a while before trying again.',
+        _ =>
+          'Unable to request a reset link right now. Please try again later.',
+      }, error: true);
+    } catch (_) {
+      _showFeedback(
+        'Unable to request a reset link right now. Please try again later.',
+        error: true,
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _backToLogin() {
+    if (_loading) return;
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    } else {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => LoginPage(authService: widget.authService),
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    return ColoredBox(
-      color: AppColors.background,
-      child: CustomPaint(
-        painter: _BotanicalPainter(),
-        child: Scaffold(
-          backgroundColor: Colors.transparent,
-          body: SafeArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(AppSpacing.xl),
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(16),
+      borderSide: const BorderSide(color: AppColors.border),
+    );
+    return Scaffold(
+      backgroundColor: _ivory,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: EdgeInsets.all(constraints.maxWidth < 360 ? 16 : 24),
               child: Center(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 440),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: IconButton(
-                          tooltip: 'Back to login',
-                          icon: const Icon(Icons.arrow_back),
-                          onPressed: () {
-                            Navigator.pushReplacement(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => const LoginPage(),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.xl),
-                      Center(
-                        child: Container(
-                          width: 96,
-                          height: 96,
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: .2),
-                            borderRadius: BorderRadius.circular(AppRadius.card),
+                  constraints: const BoxConstraints(maxWidth: 420),
+                  child: Form(
+                    key: _form,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: IconButton(
+                            tooltip: 'Back to Login',
+                            onPressed: _loading ? null : _backToLogin,
+                            constraints: const BoxConstraints(
+                              minWidth: 48,
+                              minHeight: 48,
+                            ),
+                            icon: const Icon(Icons.arrow_back, color: _forest),
                           ),
-                          child: const Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              Icon(
-                                Icons.lock_outline,
-                                size: 40,
-                                color: AppColors.primaryDark,
+                        ),
+                        const SizedBox(height: 32),
+                        const Icon(Icons.lock_outline, size: 36, color: _sage),
+                        const SizedBox(height: 24),
+                        Semantics(
+                          header: true,
+                          child: Text(
+                            'Forgot password?',
+                            textAlign: TextAlign.center,
+                            style: text.headlineSmall?.copyWith(
+                              color: _forest,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          "Enter your email and we'll send you a password reset link.",
+                          textAlign: TextAlign.center,
+                          style: text.bodyMedium?.copyWith(
+                            color: const Color(0xFF6B7280),
+                            height: 1.5,
+                          ),
+                        ),
+                        const SizedBox(height: 32),
+                        TextFormField(
+                          controller: _email,
+                          enabled: !_loading,
+                          keyboardType: TextInputType.emailAddress,
+                          textInputAction: TextInputAction.done,
+                          autofillHints: const [AutofillHints.email],
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          validator: (value) =>
+                              AuthService.isValidResetEmail(value ?? '')
+                              ? null
+                              : 'Please enter a valid email address.',
+                          onFieldSubmitted: (_) {
+                            _send();
+                          },
+                          onChanged: (_) {
+                            if (_feedback != null) {
+                              setState(() => _feedback = null);
+                            }
+                          },
+                          decoration: InputDecoration(
+                            labelText: 'Email address',
+                            filled: true,
+                            fillColor: Colors.white,
+                            contentPadding: const EdgeInsets.all(16),
+                            constraints: const BoxConstraints(minHeight: 52),
+                            prefixIcon: const Icon(
+                              Icons.mail_outline,
+                              color: _sage,
+                            ),
+                            border: border,
+                            enabledBorder: border,
+                            focusedBorder: border.copyWith(
+                              borderSide: const BorderSide(
+                                color: _sage,
+                                width: 2,
                               ),
-                              Positioned(
-                                top: 8,
-                                right: 8,
-                                child: Icon(
-                                  Icons.eco_outlined,
-                                  size: 24,
-                                  color: AppColors.primaryDark,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: _sage,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor: AppColors.border,
+                            disabledForegroundColor: _forest,
+                            minimumSize: const Size.fromHeight(52),
+                            padding: const EdgeInsets.all(16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                          ),
+                          onPressed: _loading || _cooldown > 0 ? null : _send,
+                          child: Wrap(
+                            alignment: WrapAlignment.center,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              if (_loading)
+                                const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: _sage,
+                                  ),
                                 ),
+                              Text(
+                                _loading
+                                    ? 'Sending Reset Link'
+                                    : _cooldown > 0
+                                    ? 'Send again in ${_cooldown}s'
+                                    : 'Send Reset Link',
+                                textAlign: TextAlign.center,
                               ),
                             ],
                           ),
                         ),
-                      ),
-                      const SizedBox(height: AppSpacing.xl),
-                      Text(
-                        'Velora',
-                        textAlign: TextAlign.center,
-                        style: text.headlineLarge?.copyWith(
-                          fontFamily: 'Georgia',
-                          fontFamilyFallback: const [
-                            'Georgia',
-                            'Times New Roman',
-                            'serif',
-                          ],
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
-                      Text(
-                        'SMART CAFÉ INVENTORY',
-                        textAlign: TextAlign.center,
-                        style: text.labelSmall?.copyWith(letterSpacing: 3),
-                      ),
-                      const SizedBox(height: AppSpacing.xxl),
-                      Text(
-                        'Forgot password?',
-                        textAlign: TextAlign.center,
-                        style: text.headlineMedium?.copyWith(
-                          fontFamily: 'Georgia',
-                          fontFamilyFallback: const [
-                            'Georgia',
-                            'Times New Roman',
-                            'serif',
-                          ],
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.md),
-                      Text(
-                        "No worries, we'll send reset instructions to your email.",
-                        textAlign: TextAlign.center,
-                        style: text.bodyMedium?.copyWith(
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                      const SizedBox(height: AppSpacing.xxl),
-                      TextField(
-                        controller: emailController,
-                        keyboardType: TextInputType.emailAddress,
-                        decoration: const InputDecoration(
-                          labelText: 'Email address',
-                          prefixIcon: Icon(
-                            Icons.mail_outline,
-                            color: AppColors.textSecondary,
+                        if (_feedback != null) ...[
+                          const SizedBox(height: 16),
+                          Semantics(
+                            liveRegion: true,
+                            child: Text(
+                              _feedback!,
+                              textAlign: TextAlign.center,
+                              style: text.bodyMedium?.copyWith(
+                                color: _feedbackError
+                                    ? AppColors.danger
+                                    : _forest,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Text(
+                          'Check your inbox and spam folder.',
+                          textAlign: TextAlign.center,
+                          style: text.bodySmall?.copyWith(
+                            color: const Color(0xFF6B7280),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: AppSpacing.xl),
-                      FilledButton(
-                        onPressed: () {},
-                        child: const Text('Send Reset Link'),
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.pushReplacement(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const LoginPage(),
-                            ),
-                          );
-                        },
-                        child: const Text('Back to Login'),
-                      ),
-                    ],
+                        const SizedBox(height: 16),
+                        TextButton(
+                          onPressed: _loading ? null : _backToLogin,
+                          style: TextButton.styleFrom(
+                            foregroundColor: _sage,
+                            minimumSize: const Size(48, 48),
+                          ),
+                          child: const Text('Back to Login'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         ),
       ),
     );
   }
-}
-
-// Decorative painting stays behind content and has no hit-testing widgets.
-class _BotanicalPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    canvas.save();
-    canvas.clipRect(Offset.zero & size);
-    final wash = Paint()..color = AppColors.primary.withValues(alpha: .13);
-    canvas.drawOval(Rect.fromLTWH(-90, -100, size.width * .55, 190), wash);
-    canvas.drawOval(
-      Rect.fromLTWH(size.width * .65, size.height - 75, size.width * .6, 170),
-      wash,
-    );
-    final curve = Paint()
-      ..color = AppColors.primaryDark.withValues(alpha: .18)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    canvas.drawPath(
-      Path()
-        ..moveTo(0, 160)
-        ..cubicTo(
-          size.width * .1,
-          110,
-          size.width * .35,
-          100,
-          size.width * .38,
-          0,
-        ),
-      curve,
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(size.width * .35, size.height)
-        ..cubicTo(
-          size.width * .6,
-          size.height - 95,
-          size.width * .85,
-          size.height - 10,
-          size.width,
-          size.height - 130,
-        ),
-      curve,
-    );
-    void sprig(double x, double y, double rotation) {
-      canvas.save();
-      canvas.translate(x, y);
-      canvas.rotate(rotation);
-      final stem = Paint()
-        ..color = AppColors.primaryDark.withValues(alpha: .55)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1;
-      canvas.drawPath(
-        Path()
-          ..moveTo(0, 0)
-          ..quadraticBezierTo(12, 45, 0, 100),
-        stem,
-      );
-      for (var i = 0; i < 4; i++) {
-        final y = 15.0 + i * 20;
-        final side = i.isEven ? 1.0 : -1.0;
-        final leaf = Path()
-          ..moveTo(5, y)
-          ..quadraticBezierTo(side * 36, y - 28, side * 32, y - 3)
-          ..quadraticBezierTo(side * 22, y + 12, 5, y);
-        canvas.drawPath(
-          leaf,
-          Paint()
-            ..color = AppColors.primaryDark.withValues(alpha: .24 + i * .04),
-        );
-        canvas.drawLine(Offset(5, y), Offset(side * 29, y - 3), stem);
-      }
-      canvas.restore();
-    }
-
-    sprig(size.width - 8, -10, .35);
-    sprig(8, size.height - 10, 3.4);
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _BotanicalPainter oldDelegate) => false;
 }
