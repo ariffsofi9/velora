@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import '../../../widgets/dashboard/dashboard_style.dart';
 
 class RecentActivityCard extends StatelessWidget {
-  const RecentActivityCard({super.key});
+  final FirebaseFirestore? firestore;
+  const RecentActivityCard({super.key, this.firestore});
 
   String _formatType(String type) {
     switch (type) {
@@ -33,11 +35,11 @@ class RecentActivityCard extends StatelessWidget {
     switch (type) {
       case 'stock_in':
       case 'add_item':
-        return const Color(0xFF10B981);
+        return DashboardStyle.primary;
       case 'stock_out':
-        return const Color(0xFFEF4444);
+        return DashboardStyle.danger;
       default:
-        return const Color(0xFF7C3AED);
+        return DashboardStyle.secondary;
     }
   }
 
@@ -49,8 +51,10 @@ class RecentActivityCard extends StatelessWidget {
 
     if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
-    if (diff.inHours < 24) return '${diff.inHours} hour ago';
-    return '${diff.inDays} day ago';
+    if (diff.inHours < 24) {
+      return '${diff.inHours} ${diff.inHours == 1 ? 'hour' : 'hours'} ago';
+    }
+    return '${diff.inDays} ${diff.inDays == 1 ? 'day' : 'days'} ago';
   }
 
   String _message(Map<String, dynamic> data) {
@@ -71,185 +75,100 @@ class RecentActivityCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(8),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('inventory_records')
-            .orderBy('createdAt', descending: true)
-            .limit(4)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
-            return const _RecentActivityError();
-          }
-
-          if (!snapshot.hasData) {
-            return const SizedBox(
-              height: 90,
-              child: Center(child: CircularProgressIndicator()),
-            );
-          }
-
-          final docs = snapshot.data!.docs;
-
-          if (docs.isEmpty) {
-            return const _RecentActivityEmpty();
-          }
-
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Recent Activity',
-                style: TextStyle(
-                  color: Color(0xFF111827),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(height: 14),
-              ...docs.map((doc) {
-                final data = doc.data() as Map<String, dynamic>;
-                final type = (data['type'] ?? '').toString();
-
-                return _ActivityTile(
-                  icon: _icon(type),
-                  color: _color(type),
-                  title: _formatType(type),
-                  message: _message(data),
-                  time: _timeAgo(data['createdAt']),
-                );
-              }),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _ActivityTile extends StatelessWidget {
-  final IconData icon;
-  final Color color;
-  final String title;
-  final String message;
-  final String time;
-
-  const _ActivityTile({
-    required this.icon,
-    required this.color,
-    required this.title,
-    required this.message,
-    required this.time,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 13),
-      child: Row(
+      padding: const EdgeInsets.all(20),
+      decoration: DashboardStyle.card,
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: color.withAlpha(25),
-            child: Icon(icon, color: color, size: 19),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Color(0xFF111827),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  message,
-                  style: const TextStyle(
-                    color: Color(0xFF6B7280),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
           Text(
-            time,
-            style: const TextStyle(
-              color: Color(0xFF9CA3AF),
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
+            'Recent Activity',
+            style: text.titleLarge?.copyWith(color: DashboardStyle.forest),
+          ),
+          const SizedBox(height: 16),
+          StreamBuilder<QuerySnapshot>(
+            stream: (firestore ?? FirebaseFirestore.instance)
+                .collection('inventory_records')
+                .orderBy('createdAt', descending: true)
+                .limit(4)
+                .snapshots(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return const Text(
+                  'Recent activity cannot load right now.',
+                  style: TextStyle(color: DashboardStyle.danger),
+                );
+              }
+              if (!snapshot.hasData) {
+                return const SizedBox(
+                  height: 90,
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      color: DashboardStyle.primary,
+                    ),
+                  ),
+                );
+              }
+              final docs = snapshot.data!.docs;
+              if (docs.isEmpty) {
+                return const Text(
+                  'No stock activity yet.',
+                  style: TextStyle(color: DashboardStyle.secondary),
+                );
+              }
+              return Column(
+                children: docs.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final type = (data['type'] ?? '').toString();
+                  final color = _color(type);
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        CircleAvatar(
+                          radius: 18,
+                          backgroundColor: color.withAlpha(20),
+                          child: Icon(_icon(type), color: color, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _formatType(type),
+                                style: text.titleSmall?.copyWith(
+                                  color: DashboardStyle.forest,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _message(data),
+                                style: text.bodyMedium?.copyWith(
+                                  color: DashboardStyle.secondary,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _timeAgo(data['createdAt']),
+                                style: text.bodySmall?.copyWith(
+                                  color: DashboardStyle.secondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              );
+            },
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _RecentActivityEmpty extends StatelessWidget {
-  const _RecentActivityEmpty();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Recent Activity',
-          style: TextStyle(
-            color: Color(0xFF111827),
-            fontSize: 16,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-        SizedBox(height: 12),
-        Text(
-          'No stock activity yet.',
-          style: TextStyle(
-            color: Color(0xFF6B7280),
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _RecentActivityError extends StatelessWidget {
-  const _RecentActivityError();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Text(
-      'Recent activity cannot load right now.',
-      style: TextStyle(
-        color: Color(0xFFEF4444),
-        fontSize: 13,
-        fontWeight: FontWeight.w700,
       ),
     );
   }

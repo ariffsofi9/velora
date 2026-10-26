@@ -2,9 +2,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../notifications/notification_page.dart';
+import '../../../widgets/dashboard/dashboard_style.dart';
 
 class NotificationBell extends StatelessWidget {
-  const NotificationBell({super.key});
+  final FirebaseFirestore? firestore;
+  const NotificationBell({super.key, this.firestore});
 
   int _unreadCount(QuerySnapshot snapshot) {
     int count = 0;
@@ -26,7 +28,7 @@ class NotificationBell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance
+      stream: (firestore ?? FirebaseFirestore.instance)
           .collection('notifications')
           .snapshots(),
       builder: (context, snapshot) {
@@ -44,16 +46,16 @@ class NotificationBell extends StatelessWidget {
             clipBehavior: Clip.none,
             children: [
               Container(
-                height: 46,
-                width: 46,
+                height: 48,
+                width: 48,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                  border: Border.all(color: DashboardStyle.border),
                 ),
                 child: const Icon(
                   Icons.notifications_rounded,
-                  color: Color(0xFF7C3AED),
+                  color: DashboardStyle.primary,
                 ),
               ),
               if (count > 0)
@@ -61,11 +63,10 @@ class NotificationBell extends StatelessWidget {
                   top: -4,
                   right: -4,
                   child: Container(
-                    height: 19,
                     constraints: const BoxConstraints(minWidth: 19),
                     padding: const EdgeInsets.symmetric(horizontal: 5),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFEF4444),
+                      color: DashboardStyle.danger,
                       borderRadius: BorderRadius.circular(999),
                       border: Border.all(color: Colors.white, width: 2),
                     ),
