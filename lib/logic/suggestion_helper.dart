@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/inventory_item.dart';
+import '../screens/suggestions/utils_suggestions/recipe_parser.dart';
 
 class SuggestionHelper {
   List<InventoryItem> convertDocs(List<QueryDocumentSnapshot> docs) {
@@ -38,22 +39,44 @@ class SuggestionHelper {
   List<Map<String, String>> parseRecipes(String text) {
     final recipes = <Map<String, String>>[];
     final cleanedText = cleanAiText(text);
-    final parts = cleanedText.split('###');
+    // Accept both current headings and earlier cached recipe formats.
+    final headings =
+        RegExp(
+              r'^[ \t]*(?:#{1,6}[ \t]+|Recipe[ \t]*(?:\d+)?[ \t]*:[ \t]*)([^\r\n]+?)[ \t]*$',
+              multiLine: true,
+              caseSensitive: false,
+            )
+            .allMatches(cleanedText)
+            .where(
+              (match) => !RegExp(
+                r'^(?:ingredients(?: used)?|missing.*ingredients|steps|instructions|method|directions|why(?: recommended)?):?$',
+                caseSensitive: false,
+              ).hasMatch(match.group(1)!.trim()),
+            )
+            .toList();
 
-    for (final part in parts) {
-      final clean = part.trim();
-      if (clean.isEmpty) continue;
+    for (var i = 0; i < headings.length; i++) {
+      final heading = headings[i];
+      final end = i + 1 < headings.length
+          ? headings[i + 1].start
+          : cleanedText.length;
+      final content = cleanedText
+          .substring(heading.end, end)
+          .replaceAll(RegExp(r'^\s*---\s*$', multiLine: true), '')
+          .trim();
+      final title = heading.group(1)!.trim();
+      recipes.add({
+        'title': RecipeParser.title({'title': title}),
+        'content': content,
+      });
+    }
 
-      final lines = clean.split('\n');
-
+    if (recipes.isEmpty && RecipeParser.ingredients(cleanedText).isNotEmpty) {
+      final lines = cleanedText.split('\n');
       recipes.add({
         'title': lines.first.trim(),
         'content': lines.skip(1).join('\n').trim(),
       });
-    }
-
-    if (recipes.isEmpty && cleanedText.trim().isNotEmpty) {
-      recipes.add({'title': 'AI Suggestion', 'content': cleanedText.trim()});
     }
 
     return recipes;

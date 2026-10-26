@@ -4,7 +4,19 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class GroqService {
-  static const String _apiKey = '';
+  final String _apiKey;
+  final http.Client? _client;
+  final Duration _timeout;
+
+  // No credential is bundled in the app. Direct API injection supports tests
+  // and trusted callers; production requests need an authenticated backend.
+  GroqService({
+    String apiKey = '',
+    http.Client? client,
+    Duration timeout = const Duration(seconds: 25),
+  }) : _apiKey = apiKey,
+       _client = client,
+       _timeout = timeout;
 
   static const String _baseUrl =
       'https://api.groq.com/openai/v1/chat/completions';
@@ -20,45 +32,153 @@ class GroqService {
       return _fallbackNoSafeRecipe();
     }
 
+    if (_apiKey.trim().isEmpty) {
+      return _error('Groq service is not configured. Please try again later.');
+    }
+
     try {
-      final response = await http
-          .post(
-            Uri.parse(_baseUrl),
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $_apiKey',
-            },
-            body: jsonEncode({
-              'model': _model,
-              'messages': [
-                {'role': 'system', 'content': _systemPrompt()},
-                {'role': 'user', 'content': _buildRecipePrompt(usableItems)},
-              ],
-              'temperature': 0.25,
-              'max_tokens': 1600,
-              'response_format': {'type': 'json_object'},
-            }),
-          )
-          .timeout(const Duration(seconds: 25));
+      final send = _client?.post ?? http.post;
+      final response = await send(
+        Uri.parse(_baseUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $_apiKey',
+        },
+        body: jsonEncode({
+          'model': _model,
+          'messages': [
+            {'role': 'system', 'content': _systemPrompt()},
+            {'role': 'user', 'content': _buildRecipePrompt(usableItems)},
+          ],
+          'temperature': 0.25,
+          'max_tokens': 1600,
+          'response_format': {'type': 'json_object'},
+        }),
+      ).timeout(_timeout);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final content = data['choices'][0]['message']['content'];
+        if (data is! Map<String, dynamic> ||
+            data['choices'] is! List ||
+            (data['choices'] as List).isEmpty) {
+          throw const FormatException('Missing completion');
+        }
+        final choice = data['choices'][0];
+        if (choice is! Map ||
+            choice['message'] is! Map ||
+            choice['message']['content'] is! String) {
+          throw const FormatException('Invalid completion');
+        }
+        final content = choice['message']['content'] as String;
 
-        return jsonDecode(content);
+        return _validateResult(
+          jsonDecode(content),
+          _getUsableItems(inventoryItems),
+        );
       }
 
-      return _fallbackApiFailed(response.statusCode);
+      if (response.statusCode == 429) {
+        final seconds =
+            (int.tryParse(response.headers['retry-after'] ?? '') ?? 60).clamp(
+              1,
+              3600,
+            );
+        return _error(
+          'Groq rate limit reached. Please wait $seconds seconds before generating again.',
+        );
+      }
+      if (response.statusCode == 401 || response.statusCode == 403) {
+        return _error('Groq API key error. Please try again later.');
+      }
+      return _error(
+        'Groq failed to generate recipes (HTTP ${response.statusCode}). Please try again later.',
+      );
     } on TimeoutException {
-      return _fallbackMessage(
-        'Groq request timeout. Showing safe cafe recipe suggestion.',
+      return _error('Groq request timed out. Please try again later.');
+    } on FormatException {
+      return _error(
+        'Groq returned an invalid recipe response. Please try again.',
       );
     } catch (_) {
-      return _fallbackMessage(
-        'Groq failed. Showing safe cafe recipe suggestion.',
-      );
+      return _error('Groq network request failed. Please try again later.');
     }
   }
+
+  Map<String, dynamic> _error(String message) => {
+    'status': 'error',
+    'message': message,
+    'recipes': <Map<String, dynamic>>[],
+  };
+
+  Map<String, dynamic> _validateResult(
+    dynamic value,
+    List<Map<String, dynamic>> usableItems,
+  ) {
+    if (value is! Map<String, dynamic> || value['recipes'] is! List) {
+      throw const FormatException('Invalid recipe envelope');
+    }
+    final usableNames = {
+      for (final item in usableItems)
+        _ingredientName(item['name'].toString()): item['name']
+            .toString()
+            .trim(),
+    };
+    final recipes = <Map<String, dynamic>>[];
+    for (final recipe in (value['recipes'] as List).take(3)) {
+      if (recipe is! Map<String, dynamic>) {
+        throw const FormatException('Invalid recipe');
+      }
+      String text(String key) {
+        final value = recipe[key];
+        if (value is! String || value.trim().isEmpty) {
+          throw const FormatException('Missing recipe text');
+        }
+        return value.trim();
+      }
+
+      List<String> list(String key, {bool optional = false}) {
+        final value = recipe[key];
+        if (value == null && optional) return [];
+        if (value is! List ||
+            value.any((item) => item is! String || item.trim().isEmpty)) {
+          throw const FormatException('Invalid recipe list');
+        }
+        if (!optional && value.isEmpty) {
+          throw const FormatException('Empty recipe list');
+        }
+        return value.cast<String>().map((item) => item.trim()).toList();
+      }
+
+      final claimedIngredients = list('ingredientsUsed');
+      if (claimedIngredients.any(
+        (name) => !usableNames.containsKey(_ingredientName(name)),
+      )) {
+        throw const FormatException('Recipe claims unavailable inventory');
+      }
+      recipes.add({
+        'title': text('title'),
+        'ingredientsUsed': claimedIngredients
+            .map((name) => usableNames[_ingredientName(name)]!)
+            .toSet()
+            .toList(),
+        'missingIngredients': list('missingIngredients', optional: true),
+        'steps': list('steps'),
+        'whyRecommended': text('whyRecommended'),
+      });
+    }
+    return {
+      'status': recipes.isEmpty ? 'restock_needed' : 'success',
+      'message': value['message'] is String
+          ? value['message']
+          : recipes.isEmpty
+          ? 'Not enough usable ingredients for a recipe.'
+          : 'Generated cafe recipe suggestions.',
+      'recipes': recipes,
+    };
+  }
+
+  String _ingredientName(String name) =>
+      name.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
   List<Map<String, dynamic>> _getUsableItems(
     List<Map<String, dynamic>> inventoryItems,
@@ -72,7 +192,7 @@ class GroqService {
 
       if (name.isEmpty) return false;
       if (quantity <= 0) return false;
-      if (expiryDate == null) return true;
+      if (expiryDate == null) return false;
 
       final expiryOnly = DateTime(
         expiryDate.year,
@@ -215,39 +335,8 @@ Strict rules:
   Map<String, dynamic> _fallbackNoSafeRecipe() {
     return {
       'status': 'empty',
-      'message': 'No safe usable ingredients available.',
+      'message': 'No AI suggestion available: no safe usable ingredients.',
       'recipes': [],
-    };
-  }
-
-  Map<String, dynamic> _fallbackApiFailed(int statusCode) {
-    return _fallbackMessage(
-      'Groq API error $statusCode. Showing safe cafe recipe suggestion.',
-    );
-  }
-
-  Map<String, dynamic> _fallbackMessage(String message) {
-    return {
-      'status': 'fallback',
-      'message': message,
-      'recipes': [
-        {
-          'title': 'Egg Fried Rice',
-          'ingredientsUsed': ['Egg', 'Rice'],
-          'missingIngredients': ['Salt', 'Cooking oil'],
-          'steps': [
-            'Prepare cooked rice, egg, and any available cafe seasoning before starting.',
-            'Heat a pan over medium heat and add a small amount of cooking oil if available.',
-            'Crack the egg into the pan and stir until it begins to set.',
-            'Add the cooked rice and mix well so the egg coats the rice evenly.',
-            'Season lightly with salt or available seasoning, then continue stir-frying for 2 to 3 minutes.',
-            'Check that the rice is hot and the egg is fully cooked before serving.',
-            'Serve warm in a bowl or takeaway container for cafe service.',
-          ],
-          'whyRecommended':
-              'This fallback recipe uses common cafe inventory items and helps reduce waste by using basic stock safely.',
-        },
-      ],
     };
   }
 

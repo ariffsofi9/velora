@@ -77,6 +77,7 @@ class AiCacheService {
     final lower = text.toLowerCase();
 
     return lower.contains('failed') ||
+        lower.contains('rate limit') ||
         lower.contains('quota') ||
         lower.contains('api key') ||
         lower.contains('try again');

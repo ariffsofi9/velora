@@ -84,7 +84,7 @@ class _PremiumLoadingCardState extends State<PremiumLoadingCard>
           ),
           const SizedBox(height: 8),
           Text(
-            'Gemini is checking your inventory and preparing smart ideas.',
+            'Groq is checking your inventory and preparing smart ideas.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.88),
@@ -104,7 +104,7 @@ class _PremiumLoadingCardState extends State<PremiumLoadingCard>
           ),
           const SizedBox(height: 14),
           Text(
-            'This may use your Gemini API quota.',
+            'This may use your Groq API quota.',
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Colors.white.withValues(alpha: 0.72),

@@ -18,7 +18,7 @@ class LoadingCard extends StatelessWidget {
           CircularProgressIndicator(color: Color(0xFF7C3AED)),
           SizedBox(height: 14),
           Text(
-            'Gemini is thinking...',
+            'Groq is thinking...',
             style: TextStyle(
               color: Color(0xFF6B7280),
               fontWeight: FontWeight.w600,

@@ -7,7 +7,7 @@ class QuotaStatusCard extends StatelessWidget {
   final int cooldownSeconds;
   final String resetCountdown;
   final String resetTimeText;
-  final String geminiStatus;
+  final String groqStatus;
 
   const QuotaStatusCard({
     super.key,
@@ -17,15 +17,15 @@ class QuotaStatusCard extends StatelessWidget {
     required this.cooldownSeconds,
     required this.resetCountdown,
     required this.resetTimeText,
-    required this.geminiStatus,
+    required this.groqStatus,
   });
 
   bool get _isQuotaLimited {
-    return geminiStatus.toLowerCase().contains('quota');
+    return groqStatus.toLowerCase().contains('quota');
   }
 
   Color get _statusColor {
-    final status = geminiStatus.toLowerCase();
+    final status = groqStatus.toLowerCase();
 
     if (_isQuotaLimited) return const Color(0xFFEF4444);
 
@@ -41,7 +41,7 @@ class QuotaStatusCard extends StatelessWidget {
   }
 
   IconData get _statusIcon {
-    final status = geminiStatus.toLowerCase();
+    final status = groqStatus.toLowerCase();
 
     if (_isQuotaLimited) {
       return Icons.warning_amber_rounded;
@@ -63,7 +63,7 @@ class QuotaStatusCard extends StatelessWidget {
   }
 
   String get _statusMessage {
-    final status = geminiStatus.toLowerCase();
+    final status = groqStatus.toLowerCase();
 
     if (_isQuotaLimited) {
       return 'Fallback mode is ready';
@@ -147,7 +147,7 @@ class QuotaStatusCard extends StatelessWidget {
 
                 _GroqStatusCard(
                   color: _statusColor,
-                  status: geminiStatus,
+                  status: groqStatus,
                   message: _statusMessage,
                 ),
               ],
