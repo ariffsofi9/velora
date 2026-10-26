@@ -44,7 +44,7 @@ class FallbackRecipeBuilder {
     final expired = _expiredNames(items);
 
     return '''
-Gemini quota limit reached. Showing demo-safe restock suggestions based on your inventory.
+Groq quota limit reached. Showing demo-safe restock suggestions based on your inventory.
 
 Restock Suggestions:
 - Review usable stock: ${usable.isEmpty ? 'No usable stock available' : usable.take(5).join(', ')}.

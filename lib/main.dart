@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options.dart';
+import 'core/theme/app_theme.dart';
 
 // SERVICES
 import 'services/local_notification_service.dart';
@@ -40,11 +41,7 @@ class VeloraApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Velora',
-      theme: ThemeData(
-        fontFamily: 'Poppins',
-        primarySwatch: Colors.deepPurple,
-        scaffoldBackgroundColor: const Color(0xFFF8FAFC),
-      ),
+      theme: AppTheme.light,
       home: const SplashPage(),
       routes: {
         '/login': (context) => const LoginPage(),

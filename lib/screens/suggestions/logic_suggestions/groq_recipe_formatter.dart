@@ -1,7 +1,16 @@
 class GroqRecipeFormatter {
+  static const emptyHeading = 'No recipe suggestions available.';
+
+  static bool isEmptyResult(String text) =>
+      text.trimLeft().startsWith(emptyHeading);
+
   String format(Map<String, dynamic> result) {
     final recipes = result['recipes'];
 
+    if (recipes is List && recipes.isEmpty && result['status'] != 'error') {
+      final message = result['message']?.toString().trim() ?? '';
+      return message.isEmpty ? emptyHeading : '$emptyHeading\n\n$message';
+    }
     if (recipes is! List || recipes.isEmpty) {
       return result['message']?.toString() ??
           'No AI suggestion available from Groq.';
@@ -24,7 +33,7 @@ class GroqRecipeFormatter {
           recipe['whyRecommended']?.toString() ??
           'Recommended to reduce waste and make better use of available cafe inventory.';
 
-      buffer.writeln('Recipe: $title');
+      buffer.writeln('### $title');
       buffer.writeln('');
 
       buffer.writeln('Ingredients Used:');

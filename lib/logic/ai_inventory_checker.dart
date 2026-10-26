@@ -14,6 +14,7 @@ class AiInventoryChecker {
     final lower = resultText.toLowerCase();
 
     if (lower.contains('failed') ||
+        lower.contains('rate limit') ||
         lower.contains('quota') ||
         lower.contains('error')) {
       return false;

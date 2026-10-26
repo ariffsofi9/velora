@@ -1,10 +1,8 @@
 import '../models/inventory_item.dart';
 import 'ai_cache_service.dart';
 import 'ai_quota_service.dart';
-import 'gemini_service.dart';
 
 class AiGenerateService {
-  final GeminiService _gemini = GeminiService();
   final AiCacheService _cache = AiCacheService();
   final AiQuotaService _quota = AiQuotaService();
 
@@ -44,6 +42,8 @@ class AiGenerateService {
     final lower = text.toLowerCase();
 
     return lower.contains('failed') ||
+        lower.contains('rate limit') ||
+        lower.contains('no ai suggestion') ||
         lower.contains('quota') ||
         lower.contains('api key') ||
         lower.contains('try again');
