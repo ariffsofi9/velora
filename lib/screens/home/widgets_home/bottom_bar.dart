@@ -49,10 +49,19 @@ class VeloraBottomBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-    color: Colors.white,
+    color: DashboardStyle.background,
     child: DecoratedBox(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: DashboardStyle.border)),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        border: Border.all(color: DashboardStyle.border),
+        boxShadow: [
+          BoxShadow(
+            color: DashboardStyle.forest.withValues(alpha: .06),
+            blurRadius: 16,
+            offset: const Offset(0, -3),
+          ),
+        ],
       ),
       child: SafeArea(
         top: false,
@@ -70,8 +79,8 @@ class VeloraBottomBar extends StatelessWidget {
                     child: Center(
                       heightFactor: 1,
                       child: SizedBox(
-                        width: 54,
-                        height: 54,
+                        width: 58,
+                        height: 58,
                         child: Material(
                           color: DashboardStyle.primary,
                           shape: const CircleBorder(),

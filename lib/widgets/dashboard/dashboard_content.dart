@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'dashboard_quick_action_card.dart';
 import 'dashboard_style.dart';
 import 'dashboard_summary_cards.dart';
+import 'dashboard_header.dart';
+import 'inventory_health_card.dart';
 
 /// Presentation only; live values, streams and navigation stay with the page.
 class DashboardContent extends StatelessWidget {
+  final String? firstName;
   final int totalItems;
   final int nearExpiry;
   final int lowStock;
@@ -17,6 +20,7 @@ class DashboardContent extends StatelessWidget {
   final VoidCallback onAlertTap;
   const DashboardContent({
     super.key,
+    this.firstName,
     required this.totalItems,
     required this.nearExpiry,
     required this.lowStock,
@@ -42,45 +46,28 @@ class DashboardContent extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final padding = constraints.maxWidth < 375 ? 16.0 : 24.0;
+        final padding = constraints.maxWidth < 375 ? 16.0 : 18.0;
         return Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 960),
             child: ListView(
               padding: EdgeInsets.all(padding),
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Welcome back \u{1F44B}',
-                            style: text.headlineSmall?.copyWith(
-                              color: DashboardStyle.forest,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Your inventory at a glance.',
-                            style: text.bodyMedium?.copyWith(
-                              color: DashboardStyle.secondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    notificationBell,
-                  ],
+                DashboardHeader(
+                  notificationBell: notificationBell,
+                  firstName: firstName,
                 ),
                 const SizedBox(height: 24),
-                InventoryTotalCard(count: totalItems),
+                InventoryTotalCard(count: totalItems, onTap: onInventoryTap),
                 const SizedBox(height: 16),
                 InventoryStatusCards(
+                  nearExpiry: nearExpiry,
+                  lowStock: lowStock,
+                  onTap: onInventoryTap,
+                ),
+                const SizedBox(height: 16),
+                InventoryHealthCard(
+                  total: totalItems,
                   nearExpiry: nearExpiry,
                   lowStock: lowStock,
                 ),
@@ -92,38 +79,50 @@ class DashboardContent extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
+                LayoutBuilder(
+                  builder: (context, size) {
+                    final four =
+                        size.maxWidth >= 350 &&
+                        MediaQuery.textScalerOf(context).scale(12) <= 16;
+                    final actions = [
                       _action('Add Item', Icons.add_rounded, onAddTap),
-                      const SizedBox(width: 12),
                       _action(
                         'Inventory',
                         Icons.inventory_2_outlined,
                         onInventoryTap,
                       ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
                       _action(
                         'AI Suggestions',
                         Icons.auto_awesome_outlined,
                         onSuggestionTap,
                       ),
-                      const SizedBox(width: 12),
                       _action(
                         'Alerts',
                         Icons.notifications_outlined,
                         onAlertTap,
                       ),
-                    ],
-                  ),
+                    ];
+                    Widget row(List<Widget> items) => IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (var i = 0; i < items.length; i++) ...[
+                            if (i > 0) const SizedBox(width: 8),
+                            items[i],
+                          ],
+                        ],
+                      ),
+                    );
+                    return four
+                        ? row(actions)
+                        : Column(
+                            children: [
+                              row(actions.sublist(0, 2)),
+                              const SizedBox(height: 10),
+                              row(actions.sublist(2)),
+                            ],
+                          );
+                  },
                 ),
                 const SizedBox(height: 24),
                 recentActivity,

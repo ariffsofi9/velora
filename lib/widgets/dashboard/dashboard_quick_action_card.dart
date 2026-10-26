@@ -30,16 +30,21 @@ class DashboardQuickActionCard extends StatelessWidget {
         child: ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 96, minWidth: 48),
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, color: color, size: 24),
-                const SizedBox(height: 12),
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: const Color(0xFFE6EFE7),
+                  child: Icon(icon, color: color, size: 27),
+                ),
+                const SizedBox(height: 10),
                 Text(
                   title,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
                     color: DashboardStyle.forest,
                     fontWeight: FontWeight.w600,
                   ),

@@ -41,7 +41,7 @@ class NotificationBell extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const NotificationPage()),
             );
           },
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(999),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -50,7 +50,7 @@ class NotificationBell extends StatelessWidget {
                 width: 48,
                 decoration: BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.circular(18),
+                  borderRadius: BorderRadius.circular(999),
                   border: Border.all(color: DashboardStyle.border),
                 ),
                 child: const Icon(

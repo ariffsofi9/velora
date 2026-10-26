@@ -1,10 +1,16 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../../../widgets/dashboard/dashboard_style.dart';
+import '../../../widgets/dashboard/activity_thumbnail.dart';
 
 class RecentActivityCard extends StatelessWidget {
   final FirebaseFirestore? firestore;
-  const RecentActivityCard({super.key, this.firestore});
+  final Map<String, Map<String, dynamic>> inventoryItems;
+  const RecentActivityCard({
+    super.key,
+    this.firestore,
+    this.inventoryItems = const {},
+  });
 
   String _formatType(String type) {
     switch (type) {
@@ -123,8 +129,20 @@ class RecentActivityCard extends StatelessWidget {
                   final data = doc.data() as Map<String, dynamic>;
                   final type = (data['type'] ?? '').toString();
                   final color = _color(type);
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  final item =
+                      inventoryItems[data['itemId']?.toString()] ??
+                      const <String, dynamic>{};
+                  final image = (data['imageUrl'] ?? item['imageUrl'] ?? '')
+                      .toString();
+                  return Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      border: doc == docs.last
+                          ? null
+                          : const Border(
+                              bottom: BorderSide(color: DashboardStyle.border),
+                            ),
+                    ),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -133,7 +151,9 @@ class RecentActivityCard extends StatelessWidget {
                           backgroundColor: color.withAlpha(20),
                           child: Icon(_icon(type), color: color, size: 20),
                         ),
-                        const SizedBox(width: 12),
+                        const SizedBox(width: 8),
+                        ActivityThumbnail(imageUrl: image),
+                        const SizedBox(width: 8),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -142,6 +162,7 @@ class RecentActivityCard extends StatelessWidget {
                                 _formatType(type),
                                 style: text.titleSmall?.copyWith(
                                   color: DashboardStyle.forest,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
                               const SizedBox(height: 4),
@@ -151,16 +172,30 @@ class RecentActivityCard extends StatelessWidget {
                                   color: DashboardStyle.secondary,
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _timeAgo(data['createdAt']),
-                                style: text.bodySmall?.copyWith(
-                                  color: DashboardStyle.secondary,
+                              if (MediaQuery.textScalerOf(context).scale(12) >
+                                      16 ||
+                                  MediaQuery.sizeOf(context).width < 375) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  _timeAgo(data['createdAt']),
+                                  style: text.bodySmall?.copyWith(
+                                    color: DashboardStyle.secondary,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
+                        if (MediaQuery.textScalerOf(context).scale(12) <= 16 &&
+                            MediaQuery.sizeOf(context).width >= 375) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            _timeAgo(data['createdAt']),
+                            style: text.bodySmall?.copyWith(
+                              color: DashboardStyle.secondary,
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   );

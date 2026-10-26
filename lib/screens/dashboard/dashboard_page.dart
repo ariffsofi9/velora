@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../widgets/dashboard/inventory_health_card.dart';
 
 import '../../services/auto_notification_trigger_service.dart';
 import '../../widgets/dashboard/dashboard_content.dart';
@@ -81,6 +83,14 @@ class DashboardPage extends StatelessWidget {
         child: StreamBuilder<QuerySnapshot>(
           stream: _firestore.collection('inventory').snapshots(),
           builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: InventoryHealthCard(unavailable: true),
+                ),
+              );
+            }
             if (!snapshot.hasData) {
               return const Center(child: CircularProgressIndicator());
             }
@@ -93,11 +103,20 @@ class DashboardPage extends StatelessWidget {
             _triggerAutoNotification();
 
             return DashboardContent(
+              firstName: firestore == null
+                  ? FirebaseAuth.instance.currentUser?.displayName
+                  : null,
               totalItems: totalItems,
               nearExpiry: nearExpiry,
               lowStock: lowStock,
               notificationBell: NotificationBell(firestore: firestore),
-              recentActivity: RecentActivityCard(firestore: firestore),
+              recentActivity: RecentActivityCard(
+                firestore: firestore,
+                inventoryItems: {
+                  for (final doc in docs)
+                    doc.id: doc.data() as Map<String, dynamic>,
+                },
+              ),
               onAddTap: () => _goTo(context, const AddItemPage()),
               onInventoryTap: () => _goTo(context, const InventoryPage()),
               onSuggestionTap: () => _goTo(context, const SuggestionsPage()),

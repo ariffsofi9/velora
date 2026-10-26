@@ -10,6 +10,8 @@ class DashboardDocument extends Fake
   DashboardDocument(this.value);
   @override
   Map<String, dynamic> data() => value;
+  @override
+  String get id => (value['id'] ?? identityHashCode(this)).toString();
 }
 
 class DashboardSnapshot extends Fake
