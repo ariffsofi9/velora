@@ -1,3 +1,4 @@
+import '../../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class AddItemSaveButton extends StatelessWidget {
@@ -19,14 +20,12 @@ class AddItemSaveButton extends StatelessWidget {
         width: double.infinity,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          gradient: const LinearGradient(
-            colors: [Color(0xFF7C3AED), Color(0xFFA855F7)],
-          ),
+          color: AppColors.primary,
           boxShadow: [
             BoxShadow(
-              color: const Color(0xFF7C3AED).withValues(alpha: 0.28),
+              color: AppColors.primary.withValues(alpha: .03),
               blurRadius: 16,
-              offset: const Offset(0, 8),
+              offset: const Offset(0, 2),
             ),
           ],
         ),
@@ -45,7 +44,7 @@ class AddItemSaveButton extends StatelessWidget {
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 15,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
         ),

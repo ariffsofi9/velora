@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 
 import 'dashboard_quick_action_card.dart';
 import 'dashboard_style.dart';
-import 'dashboard_summary_cards.dart';
+import 'inventory_overview.dart';
 import 'dashboard_header.dart';
 import 'inventory_health_card.dart';
 
 /// Presentation only; live values, streams and navigation stay with the page.
 class DashboardContent extends StatelessWidget {
   final String? firstName;
+  final String? photoUrl;
+  final int expired;
   final int totalItems;
   final int nearExpiry;
   final int lowStock;
@@ -21,6 +23,8 @@ class DashboardContent extends StatelessWidget {
   const DashboardContent({
     super.key,
     this.firstName,
+    this.photoUrl,
+    this.expired = 0,
     required this.totalItems,
     required this.nearExpiry,
     required this.lowStock,
@@ -49,20 +53,21 @@ class DashboardContent extends StatelessWidget {
         final padding = constraints.maxWidth < 375 ? 16.0 : 18.0;
         return Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 960),
+            constraints: const BoxConstraints(maxWidth: 760),
             child: ListView(
               padding: EdgeInsets.all(padding),
               children: [
                 DashboardHeader(
                   notificationBell: notificationBell,
                   firstName: firstName,
+                  photoUrl: photoUrl,
                 ),
-                const SizedBox(height: 24),
-                InventoryTotalCard(count: totalItems, onTap: onInventoryTap),
-                const SizedBox(height: 16),
-                InventoryStatusCards(
+                const SizedBox(height: 20),
+                InventoryOverview(
+                  total: totalItems,
                   nearExpiry: nearExpiry,
                   lowStock: lowStock,
+                  expired: expired,
                   onTap: onInventoryTap,
                 ),
                 const SizedBox(height: 16),
@@ -74,8 +79,9 @@ class DashboardContent extends StatelessWidget {
                 const SizedBox(height: 24),
                 Text(
                   'Quick Actions',
-                  style: text.titleLarge?.copyWith(
+                  style: text.titleMedium?.copyWith(
                     color: DashboardStyle.forest,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 12),

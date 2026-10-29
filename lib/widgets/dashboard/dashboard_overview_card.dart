@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class DashboardOverviewCard extends StatelessWidget {
@@ -20,15 +21,11 @@ class DashboardOverviewCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        gradient: const LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: [Color(0xFF7C3AED), Color(0xFF4C1D95)],
-        ),
+        color: AppColors.primary,
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7C3AED).withValues(alpha: 0.24),
-            blurRadius: 24,
+            color: AppColors.primary.withValues(alpha: 0.24),
+            blurRadius: 8,
             offset: const Offset(0, 14),
           ),
         ],
@@ -59,7 +56,7 @@ class DashboardOverviewCard extends StatelessWidget {
               width: 84,
               height: 84,
               fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) {
+              errorBuilder: (context, error, stack) {
                 return const Icon(
                   Icons.smart_toy_rounded,
                   color: Colors.white,
@@ -76,7 +73,7 @@ class DashboardOverviewCard extends StatelessWidget {
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 19,
-                  fontWeight: FontWeight.w900,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
               const SizedBox(height: 8),
@@ -106,7 +103,7 @@ class DashboardOverviewCard extends StatelessWidget {
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: 13,
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   SizedBox(width: 5),
@@ -135,7 +132,7 @@ class DashboardOverviewCard extends StatelessWidget {
             style: const TextStyle(
               color: Colors.white,
               fontSize: 22,
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 4),

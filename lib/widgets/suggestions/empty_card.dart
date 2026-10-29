@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class EmptyCard extends StatelessWidget {
@@ -12,13 +13,13 @@ class EmptyCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
       ),
       child: Text(
         text,
         style: const TextStyle(
-          color: Color(0xFF6B7280),
+          color: AppColors.textSecondary,
           fontSize: 14,
           height: 1.4,
         ),

@@ -1,3 +1,4 @@
+import '../../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class AddItemDropdown extends StatelessWidget {
@@ -20,7 +21,7 @@ class AddItemDropdown extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(color: AppColors.border),
       ),
       child: DropdownButtonHideUnderline(
         child: DropdownButton<String>(

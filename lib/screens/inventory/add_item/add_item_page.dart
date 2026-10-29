@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -126,17 +127,24 @@ class _AddItemPageState extends State<AddItemPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          padding: EdgeInsets.symmetric(
+            horizontal: ((MediaQuery.sizeOf(context).width - 640) / 2).clamp(
+              20.0,
+              double.infinity,
+            ),
+            vertical: 16,
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const AddItemHeader(),
-              const SizedBox(height: 22),
+              const SizedBox(height: 16),
               AddItemImageBox(selectedImage: selectedImage, onTap: _pickImage),
-              const SizedBox(height: 22),
+              const SizedBox(height: 20),
               const AddItemTextFieldLabel(text: 'Item Name'),
               AddItemTextField(
                 controller: itemNameController,
@@ -189,8 +197,9 @@ class _AddItemPageState extends State<AddItemPage> {
                 hint: '0.00',
                 keyboardType: TextInputType.number,
               ),
-              const SizedBox(height: 28),
+              const SizedBox(height: 24),
               AddItemSaveButton(isSaving: isSaving, onTap: _saveItem),
+              const SizedBox(height: 12),
             ],
           ),
         ),

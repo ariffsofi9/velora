@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/theme/app_tokens.dart';
 
 import 'dashboard_style.dart';
 
@@ -20,27 +21,27 @@ class DashboardQuickActionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: Colors.white,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: DashboardStyle.border),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 96, minWidth: 48),
+          constraints: const BoxConstraints(minHeight: 84, minWidth: 48),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               mainAxisSize: MainAxisSize.min,
               children: [
-                CircleAvatar(
-                  radius: 24,
-                  backgroundColor: const Color(0xFFE6EFE7),
-                  child: Icon(icon, color: color, size: 27),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.nude,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon, color: color, size: 20),
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 8),
                 Text(
                   title,
                   textAlign: TextAlign.center,

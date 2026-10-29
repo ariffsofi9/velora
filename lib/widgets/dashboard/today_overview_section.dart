@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../logic/firestore_service.dart';
@@ -5,9 +6,9 @@ import '../../logic/firestore_service.dart';
 class TodayOverviewSection extends StatelessWidget {
   const TodayOverviewSection({super.key});
 
-  static const Color textDark = Color(0xFF111827);
-  static const Color textGrey = Color(0xFF6B7280);
-  static const Color borderGrey = Color(0xFFE5E7EB);
+  static const Color textDark = AppColors.textPrimary;
+  static const Color textGrey = AppColors.textSecondary;
+  static const Color borderGrey = AppColors.border;
   static const Color green = Color(0xFF10B981);
   static const Color orange = Color(0xFFF97316);
 
@@ -102,7 +103,7 @@ class TodayOverviewSection extends StatelessWidget {
                     style: const TextStyle(
                       color: textDark,
                       fontSize: 22,
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 3),

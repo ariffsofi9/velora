@@ -13,13 +13,7 @@ class InventoryTotalCard extends StatelessWidget {
       borderRadius: BorderRadius.circular(20),
       clipBehavior: Clip.antiAlias,
       child: Ink(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF183F30), Color(0xFF285543), Color(0xFF183F30)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+        decoration: const BoxDecoration(color: Colors.white),
         child: InkWell(
           onTap: onTap,
           child: Padding(
@@ -28,10 +22,10 @@ class InventoryTotalCard extends StatelessWidget {
               children: [
                 CircleAvatar(
                   radius: 28,
-                  backgroundColor: Colors.white.withValues(alpha: .14),
+                  backgroundColor: DashboardStyle.background,
                   child: const Icon(
                     Icons.inventory_2_outlined,
-                    color: Colors.white,
+                    color: DashboardStyle.forest,
                     size: 30,
                   ),
                 ),
@@ -42,19 +36,23 @@ class InventoryTotalCard extends StatelessWidget {
                     children: [
                       Text(
                         'Total Inventory',
-                        style: text.bodyMedium?.copyWith(color: Colors.white),
+                        style: text.bodyMedium?.copyWith(
+                          color: DashboardStyle.forest,
+                        ),
                       ),
                       Text(
                         '$count',
                         key: const ValueKey('total-count'),
                         style: text.displayMedium?.copyWith(
-                          color: Colors.white,
+                          color: DashboardStyle.forest,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Text(
                         'items currently in inventory',
-                        style: text.bodySmall?.copyWith(color: Colors.white),
+                        style: text.bodySmall?.copyWith(
+                          color: DashboardStyle.forest,
+                        ),
                       ),
                     ],
                   ),
@@ -63,10 +61,10 @@ class InventoryTotalCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   CircleAvatar(
                     radius: 16,
-                    backgroundColor: Colors.white.withValues(alpha: .14),
+                    backgroundColor: DashboardStyle.background,
                     child: const Icon(
                       Icons.chevron_right,
-                      color: Colors.white,
+                      color: DashboardStyle.forest,
                       size: 25,
                     ),
                   ),
@@ -192,7 +190,7 @@ class _StatusCard extends StatelessWidget {
       ],
     );
     return Material(
-      color: Colors.white,
+      color: DashboardStyle.forest,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: const BorderSide(color: DashboardStyle.border),

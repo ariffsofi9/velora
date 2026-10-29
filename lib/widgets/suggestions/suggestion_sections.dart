@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
@@ -20,8 +21,8 @@ class SuggestionPageTitle extends StatelessWidget {
                 'AI Suggestions',
                 style: TextStyle(
                   fontSize: 25,
-                  fontWeight: FontWeight.w900,
-                  color: Color(0xFF111827),
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textPrimary,
                 ),
               ),
               SizedBox(height: 5),
@@ -29,8 +30,8 @@ class SuggestionPageTitle extends StatelessWidget {
                 'Smart ideas to manage your inventory',
                 style: TextStyle(
                   fontSize: 14,
-                  color: Color(0xFF6B7280),
-                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                  fontWeight: FontWeight.w400,
                 ),
               ),
             ],
@@ -40,12 +41,12 @@ class SuggestionPageTitle extends StatelessWidget {
           width: 46,
           height: 46,
           decoration: BoxDecoration(
-            color: const Color(0xFFF3E8FF),
+            color: AppColors.nude,
             borderRadius: BorderRadius.circular(16),
           ),
           child: const Icon(
             Icons.auto_awesome_rounded,
-            color: Color(0xFF7C3AED),
+            color: AppColors.primary,
           ),
         ),
       ],
@@ -112,7 +113,7 @@ class NearExpirySection extends StatelessWidget {
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: nearExpiry.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 12),
+        separatorBuilder: (context, index) => const SizedBox(width: 12),
         itemBuilder: (context, index) {
           final item = nearExpiry[index];
 
@@ -137,8 +138,8 @@ class SuggestionSectionTitle extends StatelessWidget {
       title,
       style: const TextStyle(
         fontSize: 19,
-        fontWeight: FontWeight.w900,
-        color: Color(0xFF111827),
+        fontWeight: FontWeight.w600,
+        color: AppColors.textPrimary,
       ),
     );
   }

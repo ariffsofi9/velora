@@ -34,6 +34,33 @@ Widget app(Widget child, {double scale = 1, NavigatorObserver? observer}) =>
 
 void main() {
   testWidgets(
+    'Loading and failed inventory stay readable at compact size and 2x text',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final stream = StreamController<QuerySnapshot<Map<String, dynamic>>>();
+      final db = DashboardFirestore({
+        'inventory': DashboardCollection(stream.stream),
+      });
+      await tester.pumpWidget(
+        app(
+          DashboardPage(firestore: db, onCheckNotifications: () {}),
+          scale: 2,
+        ),
+      );
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      stream.addError(StateError('offline'));
+      await tester.pump();
+      expect(find.text('Inventory health unavailable'), findsOneWidget);
+      expect(find.byKey(const ValueKey('total-count')), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      unawaited(stream.close());
+    },
+  );
+  testWidgets(
     'Live inventory thresholds, unread alerts and activity query are preserved',
     (tester) async {
       final db = dashboardFirestore();
@@ -54,6 +81,10 @@ void main() {
       expect(
         tester.widget<Text>(find.byKey(const ValueKey('low-stock-count'))).data,
         '4',
+      );
+      expect(
+        tester.widget<Text>(find.byKey(const ValueKey('expired-count'))).data,
+        '1',
       );
       expect(find.text('2'), findsOneWidget);
       await tester.scrollUntilVisible(find.text('Recent Activity'), 250);

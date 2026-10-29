@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class ItemDetailInfoCard extends StatelessWidget {
@@ -11,8 +12,8 @@ class ItemDetailInfoCard extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(children: rows),
     );
@@ -34,23 +35,23 @@ class ItemDetailInfoRow extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 15),
       decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Color(0xFFE5E7EB))),
+        border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
       child: Row(
         children: [
           Text(
             label,
             style: const TextStyle(
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF6B7280),
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
             ),
           ),
           const Spacer(),
           Text(
             value,
             style: const TextStyle(
-              fontWeight: FontWeight.w900,
-              color: Color(0xFF111827),
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
             ),
           ),
         ],

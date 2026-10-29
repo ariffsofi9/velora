@@ -35,7 +35,7 @@ class VeloraBottomBar extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 11,
                       color: color,
-                      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                     ),
                   ),
                 ],
@@ -53,13 +53,12 @@ class VeloraBottomBar extends StatelessWidget {
     child: DecoratedBox(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-        border: Border.all(color: DashboardStyle.border),
+        border: const Border(top: BorderSide(color: DashboardStyle.border)),
         boxShadow: [
           BoxShadow(
-            color: DashboardStyle.forest.withValues(alpha: .06),
-            blurRadius: 16,
-            offset: const Offset(0, -3),
+            color: DashboardStyle.forest.withValues(alpha: .02),
+            blurRadius: 8,
+            offset: const Offset(0, -1),
           ),
         ],
       ),
@@ -79,8 +78,8 @@ class VeloraBottomBar extends StatelessWidget {
                     child: Center(
                       heightFactor: 1,
                       child: SizedBox(
-                        width: 58,
-                        height: 58,
+                        width: 52,
+                        height: 52,
                         child: Material(
                           color: DashboardStyle.primary,
                           shape: const CircleBorder(),

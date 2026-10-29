@@ -36,7 +36,7 @@ class InventoryHealthCard extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: DashboardStyle.primary.withValues(alpha: .08),
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: DashboardStyle.border),
       ),
       child: Row(
@@ -51,8 +51,9 @@ class InventoryHealthCard extends StatelessWidget {
                 ? Icons.inventory_2_outlined
                 : Icons.check_circle_outline,
             color: DashboardStyle.primary,
+            size: 18,
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 8),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -61,6 +62,7 @@ class InventoryHealthCard extends StatelessWidget {
                   title,
                   style: text.titleSmall?.copyWith(
                     color: DashboardStyle.forest,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -68,6 +70,7 @@ class InventoryHealthCard extends StatelessWidget {
                   message,
                   style: text.bodySmall?.copyWith(
                     color: DashboardStyle.secondary,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
               ],

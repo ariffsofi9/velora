@@ -23,7 +23,7 @@ class CacheNotice extends StatelessWidget {
               'Showing cached Groq AI result to save requests.',
               style: TextStyle(
                 color: Color(0xFF047857),
-                fontWeight: FontWeight.w800,
+                fontWeight: FontWeight.w600,
                 fontSize: 13,
               ),
             ),

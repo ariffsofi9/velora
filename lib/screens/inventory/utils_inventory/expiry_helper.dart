@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/theme/app_tokens.dart';
 
 class ExpiryHelper {
   static int daysLeft(DateTime expiryDate) {
@@ -34,7 +35,7 @@ class ExpiryHelper {
     if (days < 0) return const Color(0xFFEF4444);
     if (days <= 1) return const Color(0xFFEF4444);
     if (days <= 3) return const Color(0xFFF59E0B);
-    if (days <= 7) return const Color(0xFF7C3AED);
+    if (days <= 7) return AppColors.primary;
 
     return const Color(0xFF10B981);
   }
@@ -45,7 +46,7 @@ class ExpiryHelper {
     if (days < 0) return const Color(0xFFFFE4E6);
     if (days <= 1) return const Color(0xFFFFE4E6);
     if (days <= 3) return const Color(0xFFFFF3E0);
-    if (days <= 7) return const Color(0xFFF3E8FF);
+    if (days <= 7) return AppColors.nude;
 
     return const Color(0xFFDCFCE7);
   }

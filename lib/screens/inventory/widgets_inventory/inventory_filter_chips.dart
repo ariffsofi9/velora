@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class InventoryFilterChips extends StatelessWidget {
@@ -15,7 +16,8 @@ class InventoryFilterChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Wrap(
-      spacing: 10,
+      spacing: 8,
+      runSpacing: 8,
       children: filters.map((filter) {
         final isSelected = selectedFilter == filter;
 
@@ -23,16 +25,14 @@ class InventoryFilterChips extends StatelessWidget {
           label: Text(filter),
           selected: isSelected,
           onSelected: (_) => onSelected(filter),
-          selectedColor: const Color(0xFF7C3AED),
+          selectedColor: AppColors.primary,
           backgroundColor: Colors.white,
           labelStyle: TextStyle(
-            color: isSelected ? Colors.white : const Color(0xFF475569),
-            fontWeight: FontWeight.w700,
+            color: isSelected ? Colors.white : AppColors.textSecondary,
+            fontWeight: FontWeight.w600,
           ),
           side: BorderSide(
-            color: isSelected
-                ? const Color(0xFF7C3AED)
-                : const Color(0xFFE2E8F0),
+            color: isSelected ? AppColors.primary : AppColors.border,
           ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(18),

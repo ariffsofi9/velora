@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import 'app_notification.dart';
@@ -71,18 +72,18 @@ class _NotificationHistoryPageState extends State<NotificationHistoryPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
         title: const Text(
           'Notifications',
           style: TextStyle(
-            color: Color(0xFF111827),
-            fontWeight: FontWeight.w900,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w600,
           ),
         ),
-        iconTheme: const IconThemeData(color: Color(0xFF111827)),
+        iconTheme: const IconThemeData(color: AppColors.textPrimary),
         actions: [
           if (_notifications.isNotEmpty)
             TextButton(
@@ -90,8 +91,8 @@ class _NotificationHistoryPageState extends State<NotificationHistoryPage> {
               child: const Text(
                 'Read all',
                 style: TextStyle(
-                  color: Color(0xFF7C3AED),
-                  fontWeight: FontWeight.w900,
+                  color: AppColors.primary,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
             ),
@@ -135,15 +136,13 @@ class _HeaderCard extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(18, 16, 18, 14),
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF7C3AED), Color(0xFFA855F7)],
-        ),
-        borderRadius: BorderRadius.circular(24),
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7C3AED).withAlpha(64),
-            blurRadius: 18,
-            offset: const Offset(0, 10),
+            color: AppColors.primary.withAlpha(64),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -164,7 +163,7 @@ class _HeaderCard extends StatelessWidget {
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 18,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 4),
@@ -199,7 +198,7 @@ class _EmptyNotificationView extends StatelessWidget {
           'No notifications yet.\nYour smart alerts will appear here.',
           textAlign: TextAlign.center,
           style: TextStyle(
-            color: Color(0xFF6B7280),
+            color: AppColors.textSecondary,
             fontSize: 14,
             height: 1.5,
             fontWeight: FontWeight.w600,

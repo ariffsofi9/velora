@@ -1,9 +1,12 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/user_profile_service.dart';
 import '../auth/login_page.dart';
+import '../team/team_management_page.dart';
+import 'appearance_page.dart';
 import 'widgets_settings/app_info_card.dart';
 import 'widgets_settings/edit_profile_dialog.dart';
 import 'widgets_settings/logout_card.dart';
@@ -82,92 +85,125 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  void _openTeamManagement() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const TeamManagementPage()),
+    );
+  }
+
+  void _openAppearance() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AppearancePage(
+          initialDarkModePreference: darkModePrep,
+          onPreferenceChanged: (value) {
+            setState(() => darkModePrep = value);
+            _saveBool('darkModePrep', value);
+          },
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
-          children: [
-            const Text(
-              'Profile',
-              style: TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF111827),
-              ),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Manage your Velora account and app preferences.',
-              style: TextStyle(fontSize: 14, color: Color(0xFF6B7280)),
-            ),
-            const SizedBox(height: 18),
-
-            ProfileHeaderCard(
-              user: user,
-              onEdit: user == null ? null : () => _openEditProfile(user),
-            ),
-
-            const SizedBox(height: 18),
-
-            const SettingsSectionCard(
-              title: 'Account',
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 680),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(18, 16, 18, 24),
               children: [
-                _AccountTile(
-                  icon: Icons.person_outline_rounded,
-                  title: 'Edit Profile',
-                  subtitle: 'Tap profile card to update name and photo',
+                const Text(
+                  'Profile',
+                  style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
                 ),
-                _AccountTile(
-                  icon: Icons.admin_panel_settings_outlined,
-                  title: 'Account Role',
-                  subtitle: 'Current user is prepared as Owner by default',
+                const SizedBox(height: 4),
+                const Text(
+                  'Manage your Velora account and app preferences.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
+                const SizedBox(height: 18),
+
+                ProfileHeaderCard(
+                  user: user,
+                  onEdit: user == null ? null : () => _openEditProfile(user),
+                ),
+
+                const SizedBox(height: 18),
+
+                SettingsSectionCard(
+                  title: 'Account',
+                  children: [
+                    const _AccountTile(
+                      icon: Icons.person_outline_rounded,
+                      title: 'Edit Profile',
+                      subtitle: 'Tap profile card to update name and photo',
+                    ),
+                    const _AccountTile(
+                      icon: Icons.admin_panel_settings_outlined,
+                      title: 'Account Role',
+                      subtitle: 'Current user is prepared as Owner by default',
+                    ),
+                    _AccountTile(
+                      icon: Icons.groups_2_outlined,
+                      title: 'Team Management',
+                      subtitle: 'View verified café membership',
+                      onTap: _openTeamManagement,
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 16),
+
+                NotificationSettingsCard(
+                  nearExpiryAlerts: nearExpiryAlerts,
+                  lowStockAlerts: lowStockAlerts,
+                  activityUpdates: activityUpdates,
+                  onNearExpiryChanged: (value) {
+                    setState(() => nearExpiryAlerts = value);
+                    _saveBool('nearExpiryAlerts', value);
+                  },
+                  onLowStockChanged: (value) {
+                    setState(() => lowStockAlerts = value);
+                    _saveBool('lowStockAlerts', value);
+                  },
+                  onActivityChanged: (value) {
+                    setState(() => activityUpdates = value);
+                    _saveBool('activityUpdates', value);
+                  },
+                ),
+
+                const SizedBox(height: 16),
+
+                PreferencesSettingsCard(
+                  darkModePrep: darkModePrep,
+                  onOpenAppearance: _openAppearance,
+                ),
+
+                const SizedBox(height: 16),
+
+                const AppInfoCard(),
+
+                const SizedBox(height: 16),
+
+                LogoutCard(onLogout: _handleLogout),
               ],
             ),
-
-            const SizedBox(height: 16),
-
-            NotificationSettingsCard(
-              nearExpiryAlerts: nearExpiryAlerts,
-              lowStockAlerts: lowStockAlerts,
-              activityUpdates: activityUpdates,
-              onNearExpiryChanged: (value) {
-                setState(() => nearExpiryAlerts = value);
-                _saveBool('nearExpiryAlerts', value);
-              },
-              onLowStockChanged: (value) {
-                setState(() => lowStockAlerts = value);
-                _saveBool('lowStockAlerts', value);
-              },
-              onActivityChanged: (value) {
-                setState(() => activityUpdates = value);
-                _saveBool('activityUpdates', value);
-              },
-            ),
-
-            const SizedBox(height: 16),
-
-            PreferencesSettingsCard(
-              darkModePrep: darkModePrep,
-              onDarkModeChanged: (value) {
-                setState(() => darkModePrep = value);
-                _saveBool('darkModePrep', value);
-              },
-            ),
-
-            const SizedBox(height: 16),
-
-            const AppInfoCard(),
-
-            const SizedBox(height: 16),
-
-            LogoutCard(onLogout: _handleLogout),
-          ],
+          ),
         ),
       ),
     );
@@ -178,37 +214,41 @@ class _AccountTile extends StatelessWidget {
   final IconData icon;
   final String title;
   final String subtitle;
+  final VoidCallback? onTap;
 
   const _AccountTile({
     required this.icon,
     required this.title,
     required this.subtitle,
+    this.onTap,
   });
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
+      onTap: onTap,
       contentPadding: EdgeInsets.zero,
       leading: Container(
         height: 42,
         width: 42,
         decoration: BoxDecoration(
-          color: const Color(0xFFF3E8FF),
+          color: AppColors.nude,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: Icon(icon, color: const Color(0xFF7C3AED)),
+        child: Icon(icon, color: AppColors.primary),
       ),
       title: Text(
         title,
         style: const TextStyle(
           fontWeight: FontWeight.w700,
-          color: Color(0xFF111827),
+          color: AppColors.textPrimary,
         ),
       ),
       subtitle: Text(
         subtitle,
-        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
       ),
+      trailing: onTap == null ? null : const Icon(Icons.chevron_right_rounded),
     );
   }
 }

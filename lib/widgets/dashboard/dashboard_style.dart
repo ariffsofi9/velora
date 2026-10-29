@@ -3,10 +3,10 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 
 abstract final class DashboardStyle {
-  static const background = Color(0xFFFAF9F6);
-  static const primary = Color(0xFF183F30);
-  static const forest = Color(0xFF102F29);
-  static const border = Color(0xFFE1E7DF);
+  static const background = AppColors.background;
+  static const primary = AppColors.primary;
+  static const forest = AppColors.textPrimary;
+  static const border = AppColors.border;
   static const secondary = AppColors.textSecondary;
   static const warning = Color(0xFFE99A18);
   static const danger = Color(0xFFE5534B);

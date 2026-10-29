@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class LoadingCard extends StatelessWidget {
@@ -10,17 +11,17 @@ class LoadingCard extends StatelessWidget {
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
       ),
       child: const Column(
         children: [
-          CircularProgressIndicator(color: Color(0xFF7C3AED)),
+          CircularProgressIndicator(color: AppColors.primary),
           SizedBox(height: 14),
           Text(
             'Groq is thinking...',
             style: TextStyle(
-              color: Color(0xFF6B7280),
+              color: AppColors.textSecondary,
               fontWeight: FontWeight.w600,
             ),
           ),

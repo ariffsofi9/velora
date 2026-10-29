@@ -7,9 +7,9 @@ import '../../core/theme/app_tokens.dart';
 import '../../services/auth_service.dart';
 import 'login_page.dart';
 
-const _ivory = Color(0xFFFAF9F6);
-const _sage = Color(0xFF55745B);
-const _forest = Color(0xFF203B30);
+const _ivory = AppColors.background;
+const _sage = AppColors.primary;
+const _forest = AppColors.textPrimary;
 
 class ForgotPasswordPage extends StatefulWidget {
   static const confirmationMessage =
@@ -167,7 +167,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                           "Enter your email and we'll send you a password reset link.",
                           textAlign: TextAlign.center,
                           style: text.bodyMedium?.copyWith(
-                            color: const Color(0xFF6B7280),
+                            color: AppColors.textSecondary,
                             height: 1.5,
                           ),
                         ),
@@ -271,7 +271,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                           'Check your inbox and spam folder.',
                           textAlign: TextAlign.center,
                           style: text.bodySmall?.copyWith(
-                            color: const Color(0xFF6B7280),
+                            color: AppColors.textSecondary,
                           ),
                         ),
                         const SizedBox(height: 16),

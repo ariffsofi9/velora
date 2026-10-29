@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class PremiumLoadingCard extends StatefulWidget {
@@ -39,17 +40,13 @@ class _PremiumLoadingCardState extends State<PremiumLoadingCard>
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(22, 24, 22, 22),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF6D28D9), Color(0xFF7C3AED), Color(0xFFA855F7)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(28),
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7C3AED).withValues(alpha: 0.28),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
+            color: AppColors.primary.withValues(alpha: .03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -79,7 +76,7 @@ class _PremiumLoadingCardState extends State<PremiumLoadingCard>
             style: TextStyle(
               color: Colors.white,
               fontSize: 21,
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w600,
             ),
           ),
           const SizedBox(height: 8),

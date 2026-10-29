@@ -1,3 +1,4 @@
+import '../../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class AddItemTextFieldLabel extends StatelessWidget {
@@ -13,7 +14,7 @@ class AddItemTextFieldLabel extends StatelessWidget {
         text,
         style: const TextStyle(
           fontSize: 13,
-          fontWeight: FontWeight.w700,
+          fontWeight: FontWeight.w600,
           color: Color(0xFF374151),
         ),
       ),
@@ -55,7 +56,7 @@ class AddItemTextField extends StatelessWidget {
     return BoxDecoration(
       color: Colors.white,
       borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: const Color(0xFFE5E7EB)),
+      border: Border.all(color: AppColors.border),
     );
   }
 }

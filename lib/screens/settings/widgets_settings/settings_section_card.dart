@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class SettingsSectionCard extends StatelessWidget {
@@ -17,13 +18,13 @@ class SettingsSectionCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -34,8 +35,8 @@ class SettingsSectionCard extends StatelessWidget {
             title,
             style: const TextStyle(
               fontSize: 15,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF111827),
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
             ),
           ),
 

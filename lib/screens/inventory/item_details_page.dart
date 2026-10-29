@@ -1,7 +1,7 @@
-import 'dart:io';
+import 'widgets_inventory/item_detail_hero.dart';
+import '../../core/theme/app_tokens.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
@@ -34,25 +34,25 @@ class ItemDetailsPage extends StatelessWidget {
   Color _iconBg(String category) {
     final value = category.toLowerCase();
 
-    if (value.contains('dairy')) return const Color(0xFFE0F2FE);
-    if (value.contains('meat')) return const Color(0xFFFFEDD5);
-    if (value.contains('vegetable')) return const Color(0xFFDCFCE7);
-    if (value.contains('fruit')) return const Color(0xFFFEF3C7);
-    if (value.contains('grain')) return const Color(0xFFF5F3FF);
+    if (value.contains('dairy')) return AppColors.nude;
+    if (value.contains('meat')) return AppColors.nude;
+    if (value.contains('vegetable')) return AppColors.nude;
+    if (value.contains('fruit')) return AppColors.nude;
+    if (value.contains('grain')) return AppColors.nude;
 
-    return const Color(0xFFF3E8FF);
+    return AppColors.nude;
   }
 
   Color _iconColor(String category) {
     final value = category.toLowerCase();
 
-    if (value.contains('dairy')) return const Color(0xFF0284C7);
-    if (value.contains('meat')) return const Color(0xFFF97316);
-    if (value.contains('vegetable')) return const Color(0xFF16A34A);
-    if (value.contains('fruit')) return const Color(0xFFF59E0B);
-    if (value.contains('grain')) return const Color(0xFF7C3AED);
+    if (value.contains('dairy')) return AppColors.primary;
+    if (value.contains('meat')) return AppColors.primary;
+    if (value.contains('vegetable')) return AppColors.primary;
+    if (value.contains('fruit')) return AppColors.primary;
+    if (value.contains('grain')) return AppColors.primary;
 
-    return const Color(0xFF7C3AED);
+    return AppColors.primary;
   }
 
   String _dateText(DateTime date) {
@@ -156,251 +156,110 @@ class ItemDetailsPage extends StatelessWidget {
     final expiryBg = ExpiryHelper.statusBgColor(item.expiryDate);
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF8FAFC),
+        backgroundColor: AppColors.background,
         elevation: 0,
         title: const Text(
           'Item Details',
           style: TextStyle(
-            color: Color(0xFF111827),
-            fontWeight: FontWeight.w900,
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
           ),
         ),
-        iconTheme: const IconThemeData(color: Color(0xFF111827)),
+        iconTheme: const IconThemeData(color: AppColors.textPrimary),
       ),
-      body: ListView(
-        padding: EdgeInsets.fromLTRB(
-          isSmall ? 16 : 22,
-          8,
-          isSmall ? 16 : 22,
-          130,
-        ),
-        children: [
-          _HeroSection(
-            item: item,
-            hasImage: hasImage,
-            icon: _icon(item.category),
-            iconBg: _iconBg(item.category),
-            iconColor: _iconColor(item.category),
-            expiryText: expiryText,
-            expiryColor: expiryColor,
-            expiryBg: expiryBg,
-            isSmall: isSmall,
-          ),
-          const SizedBox(height: 18),
-          ItemDetailInfoCard(
-            rows: [
-              ItemDetailInfoRow(
-                label: 'Quantity',
-                value: item.quantity.toString(),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720),
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(
+              isSmall ? 16 : 22,
+              8,
+              isSmall ? 16 : 22,
+              130,
+            ),
+            children: [
+              ItemDetailHero(
+                item: item,
+                hasImage: hasImage,
+                icon: _icon(item.category),
+                iconBg: _iconBg(item.category),
+                iconColor: _iconColor(item.category),
+                expiryText: expiryText,
+                expiryColor: expiryColor,
+                expiryBg: expiryBg,
+                isSmall: isSmall,
               ),
-              ItemDetailInfoRow(label: 'Category', value: item.category),
-              ItemDetailInfoRow(
-                label: 'Expiry Date',
-                value: _dateText(item.expiryDate),
+              const SizedBox(height: 18),
+              ItemDetailInfoCard(
+                rows: [
+                  ItemDetailInfoRow(
+                    label: 'Quantity',
+                    value: item.quantity.toString(),
+                  ),
+                  ItemDetailInfoRow(label: 'Category', value: item.category),
+                  ItemDetailInfoRow(
+                    label: 'Expiry Date',
+                    value: _dateText(item.expiryDate),
+                  ),
+                  ItemDetailInfoRow(
+                    label: 'Stored On',
+                    value: _dateText(item.createdAt),
+                  ),
+                ],
               ),
-              ItemDetailInfoRow(
-                label: 'Stored On',
-                value: _dateText(item.createdAt),
+              const SizedBox(height: 18),
+              ItemDetailTipsCard(
+                expiryText: expiryText,
+                expiryColor: expiryColor,
               ),
             ],
           ),
-          const SizedBox(height: 18),
-          _TipsCard(expiryText: expiryText, expiryColor: expiryColor),
-        ],
+        ),
       ),
       bottomNavigationBar: SafeArea(
-        minimum: EdgeInsets.fromLTRB(
-          isSmall ? 16 : 22,
-          8,
-          isSmall ? 16 : 22,
-          14,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ItemDetailActionButton(
-              label: 'Edit Item',
-              icon: Icons.edit_rounded,
-              color: const Color(0xFF7C3AED),
-              onTap: () => _goToEdit(context),
-            ),
-            const SizedBox(height: 10),
-            ItemDetailActionButton(
-              label: 'Mark as Used',
-              icon: Icons.check_circle_rounded,
-              color: const Color(0xFF10B981),
-              onTap: () => _markAsUsed(context),
-            ),
-            const SizedBox(height: 10),
-            ItemDetailActionButton(
-              label: 'Delete Item',
-              icon: Icons.delete_rounded,
-              color: const Color(0xFFEF4444),
-              onTap: () => _deleteItem(context),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _HeroSection extends StatelessWidget {
-  final InventoryItem item;
-  final bool hasImage;
-  final IconData icon;
-  final Color iconBg;
-  final Color iconColor;
-  final String expiryText;
-  final Color expiryColor;
-  final Color expiryBg;
-  final bool isSmall;
-
-  const _HeroSection({
-    required this.item,
-    required this.hasImage,
-    required this.icon,
-    required this.iconBg,
-    required this.iconColor,
-    required this.expiryText,
-    required this.expiryColor,
-    required this.expiryBg,
-    required this.isSmall,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.all(isSmall ? 18 : 22),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(
-        children: [
-          _ImageBox(
-            item: item,
-            hasImage: hasImage,
-            icon: icon,
-            iconBg: iconBg,
-            iconColor: iconColor,
-            isSmall: isSmall,
-          ),
-          const SizedBox(height: 18),
-          Text(
-            item.name,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: isSmall ? 22 : 25,
-              fontWeight: FontWeight.w900,
-              color: const Color(0xFF111827),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            item.category,
-            style: const TextStyle(
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF6B7280),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            decoration: BoxDecoration(
-              color: expiryBg,
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              expiryText,
-              style: TextStyle(fontWeight: FontWeight.w900, color: expiryColor),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ImageBox extends StatelessWidget {
-  final InventoryItem item;
-  final bool hasImage;
-  final IconData icon;
-  final Color iconBg;
-  final Color iconColor;
-  final bool isSmall;
-
-  const _ImageBox({
-    required this.item,
-    required this.hasImage,
-    required this.icon,
-    required this.iconBg,
-    required this.iconColor,
-    required this.isSmall,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final height = isSmall ? 150.0 : 180.0;
-
-    return Container(
-      height: height,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: iconBg,
-        borderRadius: BorderRadius.circular(28),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(28),
-        child: hasImage && !kIsWeb
-            ? Image.file(
-                File(item.imageUrl),
-                fit: BoxFit.cover,
-                errorBuilder: (_, __, ___) => _fallbackIcon(),
-              )
-            : _fallbackIcon(),
-      ),
-    );
-  }
-
-  Widget _fallbackIcon() {
-    return Icon(icon, size: isSmall ? 58 : 70, color: iconColor);
-  }
-}
-
-class _TipsCard extends StatelessWidget {
-  final String expiryText;
-  final Color expiryColor;
-
-  const _TipsCard({required this.expiryText, required this.expiryColor});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFBEB),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFFDE68A)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.lightbulb_rounded, color: Color(0xFFF59E0B)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'Tip: This item status is $expiryText. Use near-expiry items first to reduce food waste.',
-              style: TextStyle(
-                height: 1.4,
-                fontWeight: FontWeight.w700,
-                color: expiryColor,
+        minimum: const EdgeInsets.only(top: 8, bottom: 14),
+        child: Center(
+          heightFactor: 1,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 720),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: isSmall ? 16 : 22),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: ItemDetailActionButton(
+                      label: 'Edit Item',
+                      icon: Icons.edit_outlined,
+                      color: AppColors.primary,
+                      onTap: () => _goToEdit(context),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ItemDetailActionButton(
+                      label: 'Mark as Used',
+                      icon: Icons.check_circle_outline,
+                      color: AppColors.success,
+                      onTap: () => _markAsUsed(context),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ItemDetailActionButton(
+                      label: 'Delete Item',
+                      icon: Icons.delete_outline,
+                      color: AppColors.danger,
+                      onTap: () => _deleteItem(context),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-        ],
+        ),
       ),
     );
   }

@@ -34,55 +34,64 @@ class NotificationBell extends StatelessWidget {
       builder: (context, snapshot) {
         final count = snapshot.hasData ? _unreadCount(snapshot.data!) : 0;
 
-        return InkWell(
-          onTap: () {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const NotificationPage()),
-            );
-          },
-          borderRadius: BorderRadius.circular(999),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              Container(
-                height: 48,
-                width: 48,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: DashboardStyle.border),
-                ),
-                child: const Icon(
-                  Icons.notifications_rounded,
-                  color: DashboardStyle.primary,
-                ),
-              ),
-              if (count > 0)
-                Positioned(
-                  top: -4,
-                  right: -4,
-                  child: Container(
-                    constraints: const BoxConstraints(minWidth: 19),
-                    padding: const EdgeInsets.symmetric(horizontal: 5),
+        return Tooltip(
+          message: 'Notifications',
+          child: Semantics(
+            button: true,
+            label: count == 0
+                ? 'Notifications'
+                : 'Notifications, $count unread',
+            child: InkWell(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const NotificationPage()),
+                );
+              },
+              borderRadius: BorderRadius.circular(999),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    height: 48,
+                    width: 48,
                     decoration: BoxDecoration(
-                      color: DashboardStyle.danger,
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: Colors.white, width: 2),
+                      border: Border.all(color: DashboardStyle.border),
                     ),
-                    child: Center(
-                      child: Text(
-                        count > 9 ? '9+' : count.toString(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                          fontWeight: FontWeight.w900,
+                    child: const Icon(
+                      Icons.notifications_rounded,
+                      color: DashboardStyle.primary,
+                    ),
+                  ),
+                  if (count > 0)
+                    Positioned(
+                      top: -4,
+                      right: -4,
+                      child: Container(
+                        constraints: const BoxConstraints(minWidth: 19),
+                        padding: const EdgeInsets.symmetric(horizontal: 5),
+                        decoration: BoxDecoration(
+                          color: DashboardStyle.danger,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Center(
+                          child: Text(
+                            count > 9 ? '9+' : count.toString(),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ),
-            ],
+                ],
+              ),
+            ),
           ),
         );
       },

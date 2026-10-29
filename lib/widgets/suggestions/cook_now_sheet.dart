@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
@@ -32,8 +33,8 @@ class CookNowSheet extends StatelessWidget {
             'Cook this recipe?',
             style: TextStyle(
               fontSize: 20,
-              fontWeight: FontWeight.w900,
-              color: Color(0xFF111827),
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
             ),
           ),
           const SizedBox(height: 6),
@@ -41,7 +42,7 @@ class CookNowSheet extends StatelessWidget {
             recipeTitle,
             style: const TextStyle(
               fontSize: 14,
-              color: Color(0xFF6B7280),
+              color: AppColors.textSecondary,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -50,8 +51,8 @@ class CookNowSheet extends StatelessWidget {
             'Ingredients that will be used:',
             style: TextStyle(
               fontSize: 14,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF111827),
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
             ),
           ),
           const SizedBox(height: 10),
@@ -79,7 +80,7 @@ class CookNowSheet extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: matchedItems.isEmpty ? null : onConfirm,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF7C3AED),
+                    backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
                     elevation: 0,
                   ),
@@ -101,7 +102,7 @@ class _DragHandle extends StatelessWidget {
       width: 44,
       height: 5,
       decoration: BoxDecoration(
-        color: const Color(0xFFE5E7EB),
+        color: AppColors.border,
         borderRadius: BorderRadius.circular(99),
       ),
     );
@@ -127,7 +128,7 @@ class _IngredientRow extends StatelessWidget {
               style: const TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFF374151),
+                color: AppColors.textPrimary,
               ),
             ),
           ),

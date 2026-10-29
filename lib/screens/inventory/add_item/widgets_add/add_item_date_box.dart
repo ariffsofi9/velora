@@ -1,3 +1,4 @@
+import '../../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class AddItemDateBox extends StatelessWidget {
@@ -25,7 +26,7 @@ class AddItemDateBox extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
+          border: Border.all(color: AppColors.border),
         ),
         child: Row(
           children: [
@@ -37,14 +38,14 @@ class AddItemDateBox extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                   color: isEmpty
                       ? const Color(0xFF9CA3AF)
-                      : const Color(0xFF111827),
+                      : AppColors.textPrimary,
                 ),
               ),
             ),
             const Icon(
               Icons.calendar_month_outlined,
               size: 20,
-              color: Color(0xFF6B7280),
+              color: AppColors.textSecondary,
             ),
           ],
         ),

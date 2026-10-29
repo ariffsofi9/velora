@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../settings/widgets_settings/settings_section_card.dart';
@@ -73,26 +74,26 @@ class _NotificationSwitchTile extends StatelessWidget {
       contentPadding: EdgeInsets.zero,
       value: value,
       onChanged: onChanged,
-      activeThumbColor: const Color(0xFF7C3AED),
+      activeThumbColor: AppColors.primary,
       secondary: Container(
         height: 42,
         width: 42,
         decoration: BoxDecoration(
-          color: const Color(0xFFF3E8FF),
+          color: AppColors.nude,
           borderRadius: BorderRadius.circular(14),
         ),
-        child: Icon(icon, color: const Color(0xFF7C3AED)),
+        child: Icon(icon, color: AppColors.primary),
       ),
       title: Text(
         title,
         style: const TextStyle(
           fontWeight: FontWeight.w700,
-          color: Color(0xFF111827),
+          color: AppColors.textPrimary,
         ),
       ),
       subtitle: Text(
         subtitle,
-        style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
       ),
     );
   }

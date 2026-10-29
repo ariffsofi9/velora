@@ -25,6 +25,43 @@ Widget _app(Widget child, {NavigatorObserver? observer}) => MaterialApp(
 
 void main() {
   testWidgets(
+    'Header uses only an existing HTTPS profile image and handles its failure',
+    (tester) async {
+      await tester.pumpWidget(
+        _app(
+          const DashboardHeader(
+            notificationBell: SizedBox(),
+            firstName: 'Alex Taylor',
+            photoUrl: 'https://example.invalid/profile.png',
+          ),
+        ),
+      );
+      final avatar = tester.widget<CircleAvatar>(find.byType(CircleAvatar));
+      expect(
+        (avatar.foregroundImage as NetworkImage).url,
+        'https://example.invalid/profile.png',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Alex'), findsOneWidget);
+      expect(find.byIcon(Icons.person_outline), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Missing profile metadata displays an honest neutral fallback', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(const DashboardHeader(notificationBell: SizedBox())),
+    );
+    expect(find.text('Welcome back'), findsOneWidget);
+    expect(find.byIcon(Icons.person_outline), findsOneWidget);
+    expect(
+      tester.widget<CircleAvatar>(find.byType(CircleAvatar)).foregroundImage,
+      isNull,
+    );
+  });
+  testWidgets(
     'Missing and device-local ingredient images show a neutral fallback',
     (tester) async {
       await tester.pumpWidget(
@@ -165,7 +202,8 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Welcome back, Alex \u{1F44B}'), findsOneWidget);
+      expect(find.text('Alex'), findsOneWidget);
+      expect(find.textContaining('Taylor'), findsNothing);
       final context = tester.element(find.byType(DashboardHeader));
       expect(
         find.text(
@@ -190,6 +228,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.text('2'), findsOneWidget);
+    expect(find.byTooltip('Notifications'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.notifications_rounded));
     final route = observer.route! as MaterialPageRoute<dynamic>;
     expect(

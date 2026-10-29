@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -62,10 +63,13 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       title: const Text(
         'Edit Profile',
-        style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF111827)),
+        style: TextStyle(
+          fontWeight: FontWeight.w600,
+          color: AppColors.textPrimary,
+        ),
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -84,7 +88,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
           const SizedBox(height: 8),
           const Text(
             'For now, paste image URL. Firebase Storage upload can be added later.',
-            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+            style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
           ),
         ],
       ),
@@ -96,7 +100,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
         ElevatedButton(
           onPressed: isSaving ? null : _saveProfile,
           style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF7C3AED),
+            backgroundColor: AppColors.primary,
             foregroundColor: Colors.white,
           ),
           child: Text(isSaving ? 'Saving...' : 'Save'),
@@ -122,13 +126,13 @@ class _InputField extends StatelessWidget {
     return TextField(
       controller: controller,
       decoration: InputDecoration(
-        prefixIcon: Icon(icon, color: const Color(0xFF7C3AED)),
+        prefixIcon: Icon(icon, color: AppColors.primary),
         labelText: label,
         filled: true,
-        fillColor: const Color(0xFFF8FAFC),
+        fillColor: AppColors.background,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+          borderSide: const BorderSide(color: AppColors.border),
         ),
       ),
     );

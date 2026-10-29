@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class RecipeResultTile extends StatelessWidget {
@@ -15,20 +16,20 @@ class RecipeResultTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      borderRadius: BorderRadius.circular(24),
+      borderRadius: BorderRadius.circular(18),
       onTap: onTap,
       child: Container(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: AppColors.border),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.03),
               blurRadius: 14,
-              offset: const Offset(0, 8),
+              offset: const Offset(0, 2),
             ),
           ],
         ),
@@ -38,14 +39,12 @@ class RecipeResultTile extends StatelessWidget {
               width: 62,
               height: 62,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFF3E8FF), Color(0xFFEDE9FE)],
-                ),
+                color: AppColors.primary,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: const Icon(
                 Icons.restaurant_menu_rounded,
-                color: Color(0xFF7C3AED),
+                color: AppColors.primary,
                 size: 30,
               ),
             ),
@@ -60,8 +59,8 @@ class RecipeResultTile extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontSize: 16,
-                      fontWeight: FontWeight.w900,
-                      color: Color(0xFF111827),
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
                     ),
                   ),
                   const SizedBox(height: 5),
@@ -72,7 +71,7 @@ class RecipeResultTile extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 12,
                       height: 1.3,
-                      color: Color(0xFF6B7280),
+                      color: AppColors.textSecondary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -82,8 +81,8 @@ class RecipeResultTile extends StatelessWidget {
                       _MiniBadge(
                         text: 'AI Pick',
                         icon: Icons.auto_awesome_rounded,
-                        color: Color(0xFF7C3AED),
-                        bgColor: Color(0xFFF3E8FF),
+                        color: AppColors.primary,
+                        bgColor: AppColors.nude,
                       ),
                       SizedBox(width: 6),
                       _MiniBadge(
@@ -99,7 +98,7 @@ class RecipeResultTile extends StatelessWidget {
             ),
             const Icon(
               Icons.chevron_right_rounded,
-              color: Color(0xFF7C3AED),
+              color: AppColors.primary,
               size: 30,
             ),
           ],
@@ -139,7 +138,7 @@ class _MiniBadge extends StatelessWidget {
             text,
             style: TextStyle(
               fontSize: 10,
-              fontWeight: FontWeight.w800,
+              fontWeight: FontWeight.w600,
               color: color,
             ),
           ),

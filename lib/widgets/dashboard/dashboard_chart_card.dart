@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../logic/firestore_service.dart';
@@ -65,13 +66,13 @@ class _ChartContent extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -88,7 +89,7 @@ class _ChartContent extends StatelessWidget {
                   left: 0,
                   right: 0,
                   bottom: 34,
-                  child: Container(height: 1, color: const Color(0xFFE5E7EB)),
+                  child: Container(height: 1, color: AppColors.border),
                 ),
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
@@ -132,8 +133,8 @@ class _ChartContent extends StatelessWidget {
                 'Inventory Activity',
                 style: TextStyle(
                   fontSize: 17,
-                  fontWeight: FontWeight.w900,
-                  color: Color(0xFF111827),
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
                 ),
               ),
               SizedBox(height: 5),
@@ -141,7 +142,7 @@ class _ChartContent extends StatelessWidget {
                 'Real stock in and stock out this week',
                 style: TextStyle(
                   fontSize: 12,
-                  color: Color(0xFF6B7280),
+                  color: AppColors.textSecondary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -151,19 +152,19 @@ class _ChartContent extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
           decoration: BoxDecoration(
-            color: const Color(0xFFF3E8FF),
-            borderRadius: BorderRadius.circular(24),
+            color: AppColors.nude,
+            borderRadius: BorderRadius.circular(18),
           ),
           child: const Row(
             children: [
-              Icon(Icons.circle, size: 8, color: Color(0xFF7C3AED)),
+              Icon(Icons.circle, size: 8, color: AppColors.primary),
               SizedBox(width: 7),
               Text(
                 'Live Weekly',
                 style: TextStyle(
                   fontSize: 11,
-                  fontWeight: FontWeight.w900,
-                  color: Color(0xFF7C3AED),
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
                 ),
               ),
             ],
@@ -191,8 +192,8 @@ class _ChartContent extends StatelessWidget {
           item.total.toString(),
           style: TextStyle(
             fontSize: active ? 13 : 11,
-            fontWeight: FontWeight.w900,
-            color: active ? const Color(0xFF7C3AED) : const Color(0xFF6B7280),
+            fontWeight: FontWeight.w600,
+            color: active ? AppColors.primary : AppColors.textSecondary,
           ),
         ),
         const SizedBox(height: 6),
@@ -204,7 +205,7 @@ class _ChartContent extends StatelessWidget {
             children: [
               _smallBar(
                 height: stockInHeight,
-                color: const Color(0xFF7C3AED),
+                color: AppColors.primary,
                 isEmpty: item.stockIn == 0,
               ),
               const SizedBox(width: 4),
@@ -223,15 +224,15 @@ class _ChartContent extends StatelessWidget {
             vertical: active ? 4 : 0,
           ),
           decoration: BoxDecoration(
-            color: active ? const Color(0xFFF3E8FF) : Colors.transparent,
+            color: active ? AppColors.nude : Colors.transparent,
             borderRadius: BorderRadius.circular(18),
           ),
           child: Text(
             item.day,
             style: TextStyle(
               fontSize: 11,
-              fontWeight: FontWeight.w900,
-              color: active ? const Color(0xFF7C3AED) : const Color(0xFF6B7280),
+              fontWeight: FontWeight.w600,
+              color: active ? AppColors.primary : AppColors.textSecondary,
             ),
           ),
         ),
@@ -249,8 +250,8 @@ class _ChartContent extends StatelessWidget {
       width: 9,
       height: height,
       decoration: BoxDecoration(
-        color: isEmpty ? const Color(0xFFEDE9FE) : color,
-        borderRadius: BorderRadius.circular(24),
+        color: isEmpty ? AppColors.nude : color,
+        borderRadius: BorderRadius.circular(18),
       ),
     );
   }
@@ -259,7 +260,7 @@ class _ChartContent extends StatelessWidget {
     return const Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        _LegendItem(color: Color(0xFF7C3AED), label: 'Stock In'),
+        _LegendItem(color: AppColors.primary, label: 'Stock In'),
         SizedBox(width: 18),
         _LegendItem(color: Color(0xFFF97316), label: 'Stock Out'),
       ],
@@ -271,7 +272,7 @@ class _ChartContent extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: AppColors.background,
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: const Color(0xFFE9D5FF)),
       ),
@@ -281,12 +282,12 @@ class _ChartContent extends StatelessWidget {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: const Color(0xFFF3E8FF),
+              color: AppColors.nude,
               borderRadius: BorderRadius.circular(16),
             ),
             child: const Icon(
               Icons.auto_graph_rounded,
-              color: Color(0xFF7C3AED),
+              color: AppColors.primary,
               size: 22,
             ),
           ),
@@ -296,8 +297,8 @@ class _ChartContent extends StatelessWidget {
               '$_totalThisWeek total activity this week • $_totalStockIn in • $_totalStockOut out',
               style: const TextStyle(
                 fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFF6B7280),
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary,
               ),
             ),
           ),
@@ -327,8 +328,8 @@ class _LegendItem extends StatelessWidget {
           label,
           style: const TextStyle(
             fontSize: 11,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF6B7280),
+            fontWeight: FontWeight.w600,
+            color: AppColors.textSecondary,
           ),
         ),
       ],

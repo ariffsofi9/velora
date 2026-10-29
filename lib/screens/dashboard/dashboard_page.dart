@@ -101,14 +101,20 @@ class DashboardPage extends StatelessWidget {
             final lowStock = _lowStockCount(docs);
 
             _triggerAutoNotification();
+            final user = firestore == null
+                ? FirebaseAuth.instance.currentUser
+                : null;
 
             return DashboardContent(
-              firstName: firestore == null
-                  ? FirebaseAuth.instance.currentUser?.displayName
-                  : null,
+              firstName: user?.displayName,
+              photoUrl: user?.photoURL,
               totalItems: totalItems,
               nearExpiry: nearExpiry,
               lowStock: lowStock,
+              expired: docs.where((doc) {
+                final raw = (doc.data() as Map<String, dynamic>)['expiryDate'];
+                return raw is Timestamp && _daysLeft(raw.toDate()) < 0;
+              }).length,
               notificationBell: NotificationBell(firestore: firestore),
               recentActivity: RecentActivityCard(
                 firestore: firestore,

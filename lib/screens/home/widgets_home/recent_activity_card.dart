@@ -84,16 +84,19 @@ class RecentActivityCard extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(12),
       decoration: DashboardStyle.card,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
             'Recent Activity',
-            style: text.titleLarge?.copyWith(color: DashboardStyle.forest),
+            style: text.titleMedium?.copyWith(
+              color: DashboardStyle.forest,
+              fontWeight: FontWeight.w600,
+            ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           StreamBuilder<QuerySnapshot>(
             stream: (firestore ?? FirebaseFirestore.instance)
                 .collection('inventory_records')
@@ -147,9 +150,9 @@ class RecentActivityCard extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         CircleAvatar(
-                          radius: 18,
+                          radius: 14,
                           backgroundColor: color.withAlpha(20),
-                          child: Icon(_icon(type), color: color, size: 20),
+                          child: Icon(_icon(type), color: color, size: 18),
                         ),
                         const SizedBox(width: 8),
                         ActivityThumbnail(imageUrl: image),
@@ -162,14 +165,15 @@ class RecentActivityCard extends StatelessWidget {
                                 _formatType(type),
                                 style: text.titleSmall?.copyWith(
                                   color: DashboardStyle.forest,
-                                  fontWeight: FontWeight.w700,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                               const SizedBox(height: 4),
                               Text(
                                 _message(data),
-                                style: text.bodyMedium?.copyWith(
+                                style: text.bodySmall?.copyWith(
                                   color: DashboardStyle.secondary,
+                                  fontWeight: FontWeight.w400,
                                 ),
                               ),
                               if (MediaQuery.textScalerOf(context).scale(12) >

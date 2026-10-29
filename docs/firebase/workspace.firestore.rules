@@ -1,0 +1,57 @@
+// DRAFT ONLY. Not referenced by firebase.json; never deploy as a replacement.
+// Admin SDK bypasses these rules: trusted provisioning must validate every write.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function link(data, uid, cafeId) {
+      return data.uid == uid && data.cafeId == cafeId &&
+        data.status == 'active' && data.schemaVersion == 1;
+    }
+    function member(cafeId) {
+      let uid = request.auth.uid;
+      let mapping = get(/databases/$(database)/documents/user_cafe_memberships/$(uid)).data;
+      let membership = get(/databases/$(database)/documents/cafes/$(cafeId)/members/$(uid)).data;
+      let cafe = get(/databases/$(database)/documents/cafes/$(cafeId)).data;
+      let owner = cafe.ownerUid;
+      let ownerMember = get(/databases/$(database)/documents/cafes/$(cafeId)/members/$(owner)).data;
+      let ownerMapping = get(/databases/$(database)/documents/user_cafe_memberships/$(owner)).data;
+      return link(mapping, uid, cafeId) && link(membership, uid, cafeId) &&
+        cafe.status == 'active' && cafe.schemaVersion == 1 && owner is string &&
+        membership.role in ['owner', 'staff'] &&
+        ((membership.role == 'owner' && uid == owner) ||
+         (membership.role == 'staff' && uid != owner)) &&
+        link(ownerMember, owner, cafeId) && ownerMember.role == 'owner' &&
+        link(ownerMapping, owner, cafeId);
+    }
+    function isMember(cafeId) { return signedIn() && member(cafeId); }
+    function isOwner(cafeId) {
+      return isMember(cafeId) &&
+        get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == request.auth.uid;
+    }
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, write: if false;
+    }
+    match /user_cafe_memberships/{uid} {
+      // Same-cafe staff can read the owner's mapping for resolver consistency.
+      allow get: if signedIn() && (request.auth.uid == uid ||
+        (isMember(resource.data.cafeId) &&
+         get(/databases/$(database)/documents/cafes/$(resource.data.cafeId)).data.ownerUid == uid));
+      allow list, write: if false;
+    }
+    match /cafes/{cafeId} {
+      allow get: if isMember(cafeId);
+      allow list, write: if false;
+      match /members/{uid} {
+        allow get: if isMember(cafeId) && (request.auth.uid == uid ||
+          isOwner(cafeId) ||
+          get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == uid);
+        allow list: if isOwner(cafeId);
+        allow write: if false;
+      }
+      // Future inventory/activity/AI paths intentionally have no grants yet.
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

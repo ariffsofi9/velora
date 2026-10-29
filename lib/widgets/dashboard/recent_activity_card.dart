@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -6,9 +7,9 @@ import '../../models/activity_model.dart';
 class RecentActivityCard extends StatelessWidget {
   const RecentActivityCard({super.key});
 
-  static const Color purple = Color(0xFF7C3AED);
-  static const Color textDark = Color(0xFF111827);
-  static const Color textGrey = Color(0xFF6B7280);
+  static const Color purple = AppColors.primary;
+  static const Color textDark = AppColors.textPrimary;
+  static const Color textGrey = AppColors.textSecondary;
 
   IconData _getIcon(String type) {
     switch (type) {
@@ -42,7 +43,7 @@ class RecentActivityCard extends StatelessWidget {
       case 'recipe_skipped':
         return const Color(0xFFEF4444);
       case 'item_updated':
-        return const Color(0xFF3B82F6);
+        return AppColors.primary;
       case 'item_deleted':
         return const Color(0xFFEF4444);
       case 'low_stock':
@@ -67,13 +68,13 @@ class RecentActivityCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 16,
-            offset: const Offset(0, 8),
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -123,7 +124,7 @@ class RecentActivityCard extends StatelessWidget {
           'Recent Activity',
           style: TextStyle(
             fontSize: 17,
-            fontWeight: FontWeight.w800,
+            fontWeight: FontWeight.w600,
             color: textDark,
           ),
         ),
@@ -143,7 +144,7 @@ class RecentActivityCard extends StatelessWidget {
             height: 38,
             width: 38,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12),
+              color: color.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(14),
             ),
             child: Icon(_getIcon(activity.type), color: color, size: 21),
@@ -194,7 +195,7 @@ class RecentActivityCard extends StatelessWidget {
           width: double.infinity,
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: const Color(0xFFF8FAFC),
+            color: AppColors.background,
             borderRadius: BorderRadius.circular(18),
           ),
           child: const Text(

@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import 'settings_section_card.dart';
@@ -54,7 +55,7 @@ class _InfoRow extends StatelessWidget {
         title,
         style: const TextStyle(
           fontWeight: FontWeight.w700,
-          color: Color(0xFF111827),
+          color: AppColors.textPrimary,
         ),
       ),
       trailing: Text(
@@ -62,7 +63,7 @@ class _InfoRow extends StatelessWidget {
         style: const TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w700,
-          color: Color(0xFF6B7280),
+          color: AppColors.textSecondary,
         ),
       ),
     );

@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import 'app_notification.dart';
@@ -49,7 +50,7 @@ class NotificationCard extends StatelessWidget {
         alignment: Alignment.centerRight,
         decoration: BoxDecoration(
           color: const Color(0xFFEF4444),
-          borderRadius: BorderRadius.circular(22),
+          borderRadius: BorderRadius.circular(18),
         ),
         child: const Icon(Icons.delete_rounded, color: Colors.white),
       ),
@@ -57,16 +58,16 @@ class NotificationCard extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isRead ? Colors.white : const Color(0xFFF5F3FF),
-          borderRadius: BorderRadius.circular(22),
+          color: isRead ? Colors.white : AppColors.nude,
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: isRead ? const Color(0xFFE5E7EB) : const Color(0xFFC4B5FD),
+            color: isRead ? AppColors.border : AppColors.border,
           ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withAlpha(10),
               blurRadius: 16,
-              offset: const Offset(0, 8),
+              offset: const Offset(0, 2),
             ),
           ],
         ),
@@ -75,8 +76,8 @@ class NotificationCard extends StatelessWidget {
           children: [
             CircleAvatar(
               radius: 22,
-              backgroundColor: const Color(0xFF7C3AED).withAlpha(31),
-              child: Icon(icon, color: const Color(0xFF7C3AED), size: 22),
+              backgroundColor: AppColors.primary.withAlpha(31),
+              child: Icon(icon, color: AppColors.primary, size: 22),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -89,9 +90,9 @@ class NotificationCard extends StatelessWidget {
                         child: Text(
                           notification.title,
                           style: const TextStyle(
-                            color: Color(0xFF111827),
+                            color: AppColors.textPrimary,
                             fontSize: 15,
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -102,7 +103,7 @@ class NotificationCard extends StatelessWidget {
                   Text(
                     notification.message,
                     style: const TextStyle(
-                      color: Color(0xFF6B7280),
+                      color: AppColors.textSecondary,
                       fontSize: 13,
                       height: 1.35,
                       fontWeight: FontWeight.w500,
@@ -125,9 +126,9 @@ class NotificationCard extends StatelessWidget {
                         child: Text(
                           isRead ? 'Mark unread' : 'Mark read',
                           style: const TextStyle(
-                            color: Color(0xFF7C3AED),
+                            color: AppColors.primary,
                             fontSize: 12,
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),

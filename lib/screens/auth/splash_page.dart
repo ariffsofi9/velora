@@ -4,10 +4,9 @@ import '../../services/auth_service.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
-import '../../widgets/velora_logo.dart';
 
 import '../home/home_page.dart';
-import 'login_page.dart';
+import 'welcome_page.dart';
 
 class SplashPage extends StatefulWidget {
   final AuthService? authService;
@@ -45,152 +44,135 @@ class _SplashPageState extends State<SplashPage> {
     } else {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const LoginPage()),
+        MaterialPageRoute(builder: (_) => const WelcomePage()),
       );
     }
   }
 
   @override
-  Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: _BotanicalFrame(
-        child: SafeArea(
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: AppColors.background,
+    body: Stack(
+      children: [
+        const Positioned.fill(
+          child: IgnorePointer(child: CustomPaint(painter: _EntryCurves())),
+        ),
+        SafeArea(
           child: LayoutBuilder(
-            builder: (context, constraints) {
-              final compact =
-                  constraints.maxWidth < 375 || constraints.maxHeight < 650;
-              final logoSize = compact ? 196.0 : 216.0;
-              final sectionGap = compact ? AppSpacing.xl : AppSpacing.xxl;
-              return SingleChildScrollView(
-                padding: const EdgeInsets.all(AppSpacing.xl),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    minHeight: (constraints.maxHeight - AppSpacing.xl * 2)
-                        .clamp(0.0, double.infinity),
-                  ),
-                  child: Center(
-                    child: SizedBox(
-                      width: 440,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          VeloraLogo(size: logoSize),
-                          const SizedBox(height: AppSpacing.sm),
-                          Text(
-                            'SMART CAFÉ INVENTORY',
-                            textAlign: TextAlign.center,
-                            style: text.labelSmall?.copyWith(
-                              letterSpacing: compact ? 2 : 3,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          SizedBox(height: sectionGap),
-                          Container(
-                            width: 28,
-                            height: 1,
-                            color: AppColors.primaryDark,
-                          ),
-                          const SizedBox(height: AppSpacing.xl),
-                          Text(
-                            'Smarter Food,\nBetter Business',
-                            textAlign: TextAlign.center,
-                            style: text.bodyLarge?.copyWith(
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
-                          SizedBox(height: sectionGap),
-                          const SizedBox(
-                            width: 38,
-                            height: 38,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 3,
-                              color: AppColors.primaryDark,
-                              semanticsLabel: 'Loading Velora',
-                            ),
-                          ),
-                          const SizedBox(height: AppSpacing.lg),
-                          Text(
-                            'Preparing your caf\u00e9 space...',
-                            style: text.bodySmall,
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+            builder: (context, size) => SingleChildScrollView(
+              padding: const EdgeInsets.all(28),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: (size.maxHeight - 56).clamp(0, double.infinity),
                 ),
-              );
-            },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    SizedBox(height: (size.maxHeight * .08).clamp(24, 72)),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                'Velora',
+                                style: Theme.of(context).textTheme.displayLarge
+                                    ?.copyWith(
+                                      fontFamily: 'Georgia',
+                                      color: AppColors.textPrimary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                              const SizedBox(width: 8),
+                              Image.asset(
+                                'assets/images/auth/logo_mark.png',
+                                width: 48,
+                                height: 48,
+                                fit: BoxFit.contain,
+                                semanticLabel: 'Velora leaf logo',
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'AI Smart Inventory\nfor F&B Businesses',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w400),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 48),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Manage ingredients.\nReduce waste.\nCreate more possibilities.',
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w400),
+                        ),
+                        const SizedBox(height: 24),
+                        const LinearProgressIndicator(
+                          color: AppColors.primary,
+                          backgroundColor: AppColors.nude,
+                          minHeight: 2,
+                          semanticsLabel: 'Loading Velora',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
         ),
-      ),
-    );
-  }
+      ],
+    ),
+  );
 }
 
-// Artwork is decorative, excluded from semantics, and never handles taps.
-class _BotanicalFrame extends StatelessWidget {
-  final Widget child;
-
-  const _BotanicalFrame({required this.child});
-
-  Widget _art(String filename, double width, double opacity) {
-    return IgnorePointer(
-      child: Opacity(
-        opacity: opacity,
-        child: Image.asset(
-          'assets/images/auth/$filename',
-          width: width,
-          fit: BoxFit.contain,
-          excludeFromSemantics: true,
-          // Omit unavailable or undecodable decoration without blocking the form.
-          errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
-        ),
-      ),
+class _EntryCurves extends CustomPainter {
+  const _EntryCurves();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final wash = Paint()..color = AppColors.nude.withValues(alpha: .38);
+    final top = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width * .68, 0)
+      ..quadraticBezierTo(
+        size.width * .34,
+        size.height * .20,
+        0,
+        size.height * .18,
+      )
+      ..close();
+    canvas.drawPath(top, wash);
+    final bottom = Path()
+      ..moveTo(0, size.height * .66)
+      ..quadraticBezierTo(
+        size.width * .25,
+        size.height * .80,
+        size.width,
+        size.height * .68,
+      )
+      ..quadraticBezierTo(
+        size.width * .45,
+        size.height * .98,
+        0,
+        size.height * .82,
+      )
+      ..close();
+    canvas.drawPath(
+      bottom,
+      Paint()..color = AppColors.nude.withValues(alpha: .20),
     );
   }
 
   @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        return Stack(
-          fit: StackFit.expand,
-          children: [
-            Positioned(
-              top: -12,
-              left: -28,
-              child: _art(
-                'bg_top_left.png',
-                (width * .8).clamp(0.0, 420.0),
-                .85,
-              ),
-            ),
-            Positioned(
-              bottom: 0,
-              right: -12,
-              child: _art(
-                'bg_bottom_right.png',
-                (width * 1.05).clamp(0.0, 680.0),
-                .85,
-              ),
-            ),
-            Positioned(
-              bottom: 70,
-              left: -35,
-              child: _art(
-                'leaf_small_2.png',
-                (width * .4).clamp(0.0, 200.0),
-                .8,
-              ),
-            ),
-            child,
-          ],
-        );
-      },
-    );
-  }
+  bool shouldRepaint(covariant _EntryCurves oldDelegate) => false;
 }

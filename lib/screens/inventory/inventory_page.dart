@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
@@ -75,18 +76,18 @@ class _InventoryPageState extends State<InventoryPage> {
     final horizontalPadding = isSmallPhone ? 16.0 : 20.0;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
-        backgroundColor: const Color(0xFFF8FAFC),
+        backgroundColor: AppColors.background,
         elevation: 0,
         centerTitle: false,
         automaticallyImplyLeading: false,
         title: Text(
           'Inventory',
           style: TextStyle(
-            color: const Color(0xFF111827),
+            color: AppColors.textPrimary,
             fontSize: isSmallPhone ? 20 : 22,
-            fontWeight: FontWeight.w900,
+            fontWeight: FontWeight.w700,
           ),
         ),
       ),
@@ -99,88 +100,93 @@ class _InventoryPageState extends State<InventoryPage> {
 
           if (!snapshot.hasData) {
             return const Center(
-              child: CircularProgressIndicator(color: Color(0xFF7C3AED)),
+              child: CircularProgressIndicator(color: AppColors.primary),
             );
           }
 
           final items = snapshot.data!.docs.map(_itemFromDoc).toList();
           final visibleItems = _applySearchFilterSort(items);
 
-          return Column(
-            children: [
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  horizontalPadding,
-                  6,
-                  horizontalPadding,
-                  12,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    InventoryHeaderSummary(
-                      totalItems: items.length,
-                      visibleItems: visibleItems.length,
-                      isSmallPhone: isSmallPhone,
+          return Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPadding,
+                      6,
+                      horizontalPadding,
+                      12,
                     ),
-                    const SizedBox(height: 14),
-                    InventorySearchBar(
-                      controller: _searchController,
-                      onChanged: (value) {
-                        setState(() => _searchQuery = value);
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    InventoryFilterChips(
-                      selectedFilter: _selectedFilter,
-                      onSelected: (value) {
-                        setState(() => _selectedFilter = value);
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: items.isEmpty
-                    ? InventoryEmptyState(onAdd: _goToAddItem)
-                    : visibleItems.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'No matching items found.',
-                          style: TextStyle(
-                            color: Color(0xFF6B7280),
-                            fontWeight: FontWeight.w700,
-                          ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        InventoryHeaderSummary(
+                          totalItems: items.length,
+                          visibleItems: visibleItems.length,
+                          isSmallPhone: isSmallPhone,
                         ),
-                      )
-                    : ListView.builder(
-                        padding: EdgeInsets.fromLTRB(
-                          horizontalPadding,
-                          4,
-                          horizontalPadding,
-                          110,
+                        const SizedBox(height: 14),
+                        InventorySearchBar(
+                          controller: _searchController,
+                          onChanged: (value) {
+                            setState(() => _searchQuery = value);
+                          },
                         ),
-                        itemCount: visibleItems.length,
-                        itemBuilder: (context, index) {
-                          final item = visibleItems[index];
+                        const SizedBox(height: 14),
+                        InventoryFilterChips(
+                          selectedFilter: _selectedFilter,
+                          onSelected: (value) {
+                            setState(() => _selectedFilter = value);
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: items.isEmpty
+                        ? InventoryEmptyState(onAdd: _goToAddItem)
+                        : visibleItems.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No matching items found.',
+                              style: TextStyle(
+                                color: AppColors.textSecondary,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: EdgeInsets.fromLTRB(
+                              horizontalPadding,
+                              4,
+                              horizontalPadding,
+                              110,
+                            ),
+                            itemCount: visibleItems.length,
+                            itemBuilder: (context, index) {
+                              final item = visibleItems[index];
 
-                          return InventoryCard(
-                            item: item,
-                            onTap: () => _goToDetails(item),
-                          );
-                        },
-                      ),
+                              return InventoryCard(
+                                item: item,
+                                onTap: () => _goToDetails(item),
+                              );
+                            },
+                          ),
+                  ),
+                ],
               ),
-            ],
+            ),
           );
         },
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _goToAddItem,
-        backgroundColor: const Color(0xFF7C3AED),
+        backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
         elevation: 4,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         child: const Icon(Icons.add_rounded, size: 30),
       ),
     );

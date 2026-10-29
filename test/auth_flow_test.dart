@@ -8,6 +8,7 @@ import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/screens/auth/login_page.dart';
 import 'package:velora/screens/auth/signup_page.dart';
 import 'package:velora/screens/auth/splash_page.dart';
+import 'package:velora/screens/auth/welcome_page.dart';
 import 'package:velora/services/auth_service.dart';
 import 'package:velora/services/user_profile_service.dart';
 
@@ -336,8 +337,12 @@ void main() {
       );
       await tester.pump(const Duration(seconds: 3));
       await tester.pumpAndSettle();
-      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.byType(WelcomePage), findsOneWidget);
       expect(find.byType(SplashPage), findsNothing);
+      await tester.ensureVisible(find.text('Get Started'));
+      await tester.tap(find.text('Get Started'));
+      await tester.pumpAndSettle();
+      expect(find.byType(LoginPage), findsOneWidget);
     },
   );
 }

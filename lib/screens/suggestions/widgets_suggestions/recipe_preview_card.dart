@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class RecipePreviewCard extends StatelessWidget {
@@ -31,20 +32,14 @@ class RecipePreviewCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 14),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(18),
         child: Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: const Color(0xFFE5E7EB)),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.04),
-                blurRadius: 16,
-                offset: const Offset(0, 7),
-              ),
-            ],
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: AppColors.border),
+            boxShadow: const [],
           ),
           child: Row(
             children: [
@@ -52,12 +47,12 @@ class RecipePreviewCard extends StatelessWidget {
                 height: 54,
                 width: 54,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF3E8FF),
+                  color: AppColors.nude,
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: const Icon(
                   Icons.restaurant_menu_rounded,
-                  color: Color(0xFF7C3AED),
+                  color: AppColors.primary,
                 ),
               ),
               const SizedBox(width: 14),
@@ -70,9 +65,9 @@ class RecipePreviewCard extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Color(0xFF111827),
+                        color: AppColors.textPrimary,
                         fontSize: 15,
-                        fontWeight: FontWeight.w900,
+                        fontWeight: FontWeight.w400,
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -81,7 +76,7 @@ class RecipePreviewCard extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Color(0xFF6B7280),
+                        color: AppColors.textSecondary,
                         fontSize: 12,
                         height: 1.35,
                         fontWeight: FontWeight.w600,
@@ -103,7 +98,7 @@ class RecipePreviewCard extends StatelessWidget {
                           style: const TextStyle(
                             color: Color(0xFF059669),
                             fontSize: 11,
-                            fontWeight: FontWeight.w900,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
@@ -116,7 +111,7 @@ class RecipePreviewCard extends StatelessWidget {
                 height: 38,
                 width: 38,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF7C3AED),
+                  color: AppColors.primary,
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: const Icon(

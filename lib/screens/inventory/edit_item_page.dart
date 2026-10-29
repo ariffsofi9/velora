@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../logic/firestore_service.dart';
@@ -20,11 +21,11 @@ class _EditItemPageState extends State<EditItemPage> {
   DateTime? _expiryDate;
   bool _isSaving = false;
 
-  static const Color primaryPurple = Color(0xFF7C3AED);
-  static const Color lightPurple = Color(0xFFF4ECFF);
-  static const Color textDark = Color(0xFF111827);
-  static const Color textGrey = Color(0xFF6B7280);
-  static const Color borderGrey = Color(0xFFE5E7EB);
+  static const Color primaryPurple = AppColors.primary;
+  static const Color lightPurple = AppColors.background;
+  static const Color textDark = AppColors.textPrimary;
+  static const Color textGrey = AppColors.textSecondary;
+  static const Color borderGrey = AppColors.border;
 
   @override
   void initState() {
@@ -123,12 +124,18 @@ class _EditItemPageState extends State<EditItemPage> {
         iconTheme: const IconThemeData(color: textDark),
         title: const Text(
           'Edit Item',
-          style: TextStyle(color: textDark, fontWeight: FontWeight.w800),
+          style: TextStyle(color: textDark, fontWeight: FontWeight.w600),
         ),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(18),
+          padding: EdgeInsets.symmetric(
+            horizontal: ((MediaQuery.sizeOf(context).width - 640) / 2).clamp(
+              20.0,
+              double.infinity,
+            ),
+            vertical: 24,
+          ),
           child: Column(
             children: [
               _buildHeaderCard(),
@@ -141,45 +148,20 @@ class _EditItemPageState extends State<EditItemPage> {
     );
   }
 
-  Widget _buildHeaderCard() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [primaryPurple, Color(0xFFA855F7)],
-        ),
-        borderRadius: BorderRadius.circular(28),
-      ),
-      child: const Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.edit_note_rounded, color: Colors.white, size: 34),
-          SizedBox(height: 12),
-          Text(
-            'Update Item',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 24,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          SizedBox(height: 6),
-          Text(
-            'Quantity changes will save stock movement automatically.',
-            style: TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _buildHeaderCard() => const Padding(
+    padding: EdgeInsets.symmetric(vertical: 8),
+    child: Text(
+      'Quantity changes will save stock movement automatically.',
+      style: TextStyle(color: AppColors.textSecondary),
+    ),
+  );
 
   Widget _buildFormCard() {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: borderGrey),
       ),
       child: Column(
@@ -207,7 +189,7 @@ class _EditItemPageState extends State<EditItemPage> {
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
-            height: 54,
+
             child: ElevatedButton(
               onPressed: _isSaving ? null : _saveItem,
               style: ElevatedButton.styleFrom(
@@ -223,7 +205,7 @@ class _EditItemPageState extends State<EditItemPage> {
                       'Save Changes',
                       style: TextStyle(
                         color: Colors.white,
-                        fontWeight: FontWeight.w800,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
             ),
@@ -246,7 +228,7 @@ class _EditItemPageState extends State<EditItemPage> {
         labelText: label,
         prefixIcon: Icon(icon, color: primaryPurple),
         filled: true,
-        fillColor: const Color(0xFFF9FAFB),
+        fillColor: AppColors.surface,
         border: _inputBorder(borderGrey),
         enabledBorder: _inputBorder(borderGrey),
         focusedBorder: _inputBorder(primaryPurple),
@@ -268,7 +250,7 @@ class _EditItemPageState extends State<EditItemPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
         decoration: BoxDecoration(
-          color: const Color(0xFFF9FAFB),
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: borderGrey),
         ),

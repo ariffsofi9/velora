@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class HeaderCard extends StatelessWidget {
@@ -16,15 +17,13 @@ class HeaderCard extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF7C3AED), Color(0xFFA855F7)],
-        ),
-        borderRadius: BorderRadius.circular(24),
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(18),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF7C3AED).withOpacity(0.25),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+            color: AppColors.primary.withValues(alpha: .03),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -38,7 +37,7 @@ class HeaderCard extends StatelessWidget {
             style: TextStyle(
               color: Colors.white,
               fontSize: 22,
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w600,
             ),
           ),
           SizedBox(height: 6),

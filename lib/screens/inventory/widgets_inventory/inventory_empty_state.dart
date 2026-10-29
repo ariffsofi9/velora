@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class InventoryEmptyState extends StatelessWidget {
@@ -17,13 +18,13 @@ class InventoryEmptyState extends StatelessWidget {
               height: 110,
               width: 110,
               decoration: BoxDecoration(
-                color: const Color(0xFFF3E8FF),
+                color: AppColors.nude,
                 borderRadius: BorderRadius.circular(32),
               ),
               child: const Icon(
                 Icons.inventory_2_rounded,
                 size: 52,
-                color: Color(0xFF7C3AED),
+                color: AppColors.primary,
               ),
             ),
             const SizedBox(height: 20),
@@ -31,15 +32,15 @@ class InventoryEmptyState extends StatelessWidget {
               'Your inventory is empty',
               style: TextStyle(
                 fontSize: 20,
-                fontWeight: FontWeight.w900,
-                color: Color(0xFF111827),
+                fontWeight: FontWeight.w700,
+                color: AppColors.textPrimary,
               ),
             ),
             const SizedBox(height: 8),
             const Text(
               'Add your first item to start tracking food expiry.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xFF6B7280)),
+              style: TextStyle(color: AppColors.textSecondary),
             ),
             const SizedBox(height: 22),
             ElevatedButton.icon(
@@ -47,7 +48,7 @@ class InventoryEmptyState extends StatelessWidget {
               icon: const Icon(Icons.add_rounded),
               label: const Text('Add Item'),
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF7C3AED),
+                backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(
                   horizontal: 22,

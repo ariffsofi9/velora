@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class ActionCard extends StatelessWidget {
@@ -23,29 +24,24 @@ class ActionCard extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          gradient: isPrimary
-              ? const LinearGradient(
-                  colors: [Color(0xFF7C3AED), Color(0xFFA855F7)],
-                )
-              : null,
-          color: isPrimary ? null : Colors.white,
+          color: isPrimary ? AppColors.primary : Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
+          border: Border.all(color: AppColors.border),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
               icon,
-              color: isPrimary ? Colors.white : const Color(0xFF7C3AED),
+              color: isPrimary ? Colors.white : AppColors.primary,
               size: 26,
             ),
             const SizedBox(height: 10),
             Text(
               title,
               style: TextStyle(
-                color: isPrimary ? Colors.white : const Color(0xFF111827),
-                fontWeight: FontWeight.w900,
+                color: isPrimary ? Colors.white : AppColors.textPrimary,
+                fontWeight: FontWeight.w600,
                 fontSize: 14,
               ),
             ),
@@ -54,10 +50,10 @@ class ActionCard extends StatelessWidget {
               subtitle,
               style: TextStyle(
                 color: isPrimary
-                    ? Colors.white.withOpacity(0.85)
-                    : const Color(0xFF6B7280),
+                    ? Colors.white.withValues(alpha: 0.85)
+                    : AppColors.textSecondary,
                 fontSize: 12,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w400,
               ),
             ),
           ],

@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 import '../../models/inventory_item.dart';
 
@@ -47,8 +48,8 @@ class NearExpiryCard extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -62,14 +63,14 @@ class NearExpiryCard extends StatelessWidget {
                 child: Text(
                   item.name,
                   style: const TextStyle(
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                     fontSize: 14,
                   ),
                 ),
               ),
               Text(
                 '$days d',
-                style: TextStyle(color: color, fontWeight: FontWeight.w900),
+                style: TextStyle(color: color, fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -78,12 +79,18 @@ class NearExpiryCard extends StatelessWidget {
 
           Text(
             item.category,
-            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.textSecondary,
+            ),
           ),
 
           Text(
             'Qty: ${item.quantity}',
-            style: const TextStyle(fontSize: 11, color: Color(0xFF6B7280)),
+            style: const TextStyle(
+              fontSize: 11,
+              color: AppColors.textSecondary,
+            ),
           ),
 
           const SizedBox(height: 8),
@@ -113,7 +120,7 @@ class NearExpiryCard extends StatelessWidget {
             child: LinearProgressIndicator(
               value: progress,
               minHeight: 6,
-              backgroundColor: const Color(0xFFE5E7EB),
+              backgroundColor: AppColors.border,
               valueColor: AlwaysStoppedAnimation(color),
             ),
           ),

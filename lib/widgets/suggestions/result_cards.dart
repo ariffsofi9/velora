@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
@@ -74,8 +75,8 @@ class _ResultCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.04),
@@ -93,19 +94,19 @@ class _ResultCard extends StatelessWidget {
                 height: 44,
                 width: 44,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFF3E8FF),
+                  color: AppColors.nude,
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: Icon(icon, color: const Color(0xFF7C3AED)),
+                child: Icon(icon, color: AppColors.primary),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   title,
                   style: const TextStyle(
-                    color: Color(0xFF111827),
+                    color: AppColors.textPrimary,
                     fontSize: 16,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -115,15 +116,15 @@ class _ResultCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
             decoration: BoxDecoration(
-              color: const Color(0xFFF3E8FF),
+              color: AppColors.nude,
               borderRadius: BorderRadius.circular(999),
             ),
             child: Text(
               label,
               style: const TextStyle(
-                color: Color(0xFF7C3AED),
+                color: AppColors.primary,
                 fontSize: 11,
-                fontWeight: FontWeight.w900,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
@@ -131,7 +132,7 @@ class _ResultCard extends StatelessWidget {
           Text(
             content,
             style: const TextStyle(
-              color: Color(0xFF374151),
+              color: AppColors.textPrimary,
               fontSize: 13,
               height: 1.45,
               fontWeight: FontWeight.w600,
@@ -153,12 +154,15 @@ class _EmptyResultCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
       ),
       child: const Text(
         'No result found.',
-        style: TextStyle(color: Color(0xFF6B7280), fontWeight: FontWeight.w700),
+        style: TextStyle(
+          color: AppColors.textSecondary,
+          fontWeight: FontWeight.w700,
+        ),
       ),
     );
   }

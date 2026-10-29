@@ -10,8 +10,8 @@ abstract final class AppTheme {
           brightness: Brightness.light,
         ).copyWith(
           primary: AppColors.primary,
-          onPrimary: AppColors.textPrimary,
-          primaryContainer: AppColors.primary,
+          onPrimary: AppColors.surface,
+          primaryContainer: AppColors.nude,
           onPrimaryContainer: AppColors.textPrimary,
           secondary: AppColors.primaryDark,
           onSecondary: AppColors.surface,
@@ -68,6 +68,11 @@ abstract final class AppTheme {
             fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
+        )
+        .apply(
+          fontFamily: base.textTheme.bodyMedium?.fontFamily,
+          bodyColor: AppColors.textPrimary,
+          displayColor: AppColors.textPrimary,
         );
     final controlShape = RoundedRectangleBorder(
       borderRadius: BorderRadius.circular(AppRadius.control),
@@ -97,7 +102,7 @@ abstract final class AppTheme {
           return AppColors.textSecondary;
         }
         if (states.contains(WidgetState.pressed)) return AppColors.surface;
-        return AppColors.textPrimary;
+        return AppColors.surface;
       }),
       elevation: const WidgetStatePropertyAll(0),
     );

@@ -1,3 +1,4 @@
+import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 class QuotaStatusCard extends StatelessWidget {
@@ -37,7 +38,7 @@ class QuotaStatusCard extends StatelessWidget {
       return const Color(0xFFF97316);
     }
 
-    return const Color(0xFF7C3AED);
+    return AppColors.primary;
   }
 
   IconData get _statusIcon {
@@ -91,13 +92,13 @@ class QuotaStatusCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.035),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -115,9 +116,9 @@ class QuotaStatusCard extends StatelessWidget {
                 Text(
                   _mainText,
                   style: const TextStyle(
-                    color: Color(0xFF111827),
+                    color: AppColors.textPrimary,
                     fontSize: 15,
-                    fontWeight: FontWeight.w900,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
 
@@ -126,9 +127,9 @@ class QuotaStatusCard extends StatelessWidget {
                 Text(
                   'Reset estimate: $resetCountdown',
                   style: const TextStyle(
-                    color: Color(0xFF6B7280),
+                    color: AppColors.textSecondary,
                     fontSize: 13,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
 
@@ -216,7 +217,7 @@ class _GroqStatusCard extends StatelessWidget {
               style: TextStyle(
                 color: color,
                 fontSize: 11.5,
-                fontWeight: FontWeight.w900,
+                fontWeight: FontWeight.w600,
                 height: 1.25,
               ),
             ),

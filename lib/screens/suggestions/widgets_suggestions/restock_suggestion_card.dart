@@ -1,3 +1,4 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../restock_suggestion_service.dart';
@@ -38,13 +39,13 @@ class RestockSuggestionCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: color.withAlpha(45)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withAlpha(8),
             blurRadius: 16,
-            offset: const Offset(0, 8),
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -66,7 +67,7 @@ class RestockSuggestionCard extends StatelessWidget {
                 Text(
                   suggestion.reason,
                   style: const TextStyle(
-                    color: Color(0xFF6B7280),
+                    color: AppColors.textSecondary,
                     fontSize: 13,
                     height: 1.4,
                     fontWeight: FontWeight.w600,
@@ -79,7 +80,7 @@ class RestockSuggestionCard extends StatelessWidget {
                     color: color,
                     fontSize: 13,
                     height: 1.4,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 10),
@@ -133,9 +134,9 @@ class _TopRow extends StatelessWidget {
           child: Text(
             suggestion.itemName,
             style: const TextStyle(
-              color: Color(0xFF111827),
+              color: AppColors.textPrimary,
               fontSize: 15,
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
@@ -150,7 +151,7 @@ class _TopRow extends StatelessWidget {
             style: TextStyle(
               color: color,
               fontSize: 11,
-              fontWeight: FontWeight.w900,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),
@@ -170,19 +171,19 @@ class _InfoChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: AppColors.background,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        border: Border.all(color: AppColors.border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 13, color: const Color(0xFF6B7280)),
+          Icon(icon, size: 13, color: AppColors.textSecondary),
           const SizedBox(width: 5),
           Text(
             text,
             style: const TextStyle(
-              color: Color(0xFF6B7280),
+              color: AppColors.textSecondary,
               fontSize: 11,
               fontWeight: FontWeight.w700,
             ),

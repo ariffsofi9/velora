@@ -22,6 +22,7 @@ import 'screens/suggestions/suggestions_page.dart';
 
 // ALERTS
 import 'screens/alerts/alerts_page.dart';
+import 'screens/business_setup/business_setup_page.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,6 +50,7 @@ class VeloraApp extends StatelessWidget {
         '/add-item': (context) => const AddItemPage(),
         '/suggestions': (context) => const SuggestionsPage(),
         '/alerts': (context) => const AlertsPage(),
+        '/business-setup': (context) => const BusinessSetupPage(),
       },
     );
   }

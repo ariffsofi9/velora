@@ -1,50 +1,52 @@
+import '../../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../settings/widgets_settings/settings_section_card.dart';
 
 class PreferencesSettingsCard extends StatelessWidget {
   final bool darkModePrep;
-  final ValueChanged<bool> onDarkModeChanged;
+  final VoidCallback onOpenAppearance;
 
   const PreferencesSettingsCard({
     super.key,
     required this.darkModePrep,
-    required this.onDarkModeChanged,
+    required this.onOpenAppearance,
   });
 
   @override
   Widget build(BuildContext context) {
     return SettingsSectionCard(
-      title: 'Preferences',
+      title: 'Appearance',
       children: [
-        SwitchListTile(
+        ListTile(
           contentPadding: EdgeInsets.zero,
-          value: darkModePrep,
-          onChanged: onDarkModeChanged,
-          activeThumbColor: const Color(0xFF7C3AED),
-          secondary: Container(
+          onTap: onOpenAppearance,
+          leading: Container(
             height: 42,
             width: 42,
             decoration: BoxDecoration(
-              color: const Color(0xFFF3E8FF),
+              color: AppColors.nude,
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Icon(
-              Icons.dark_mode_outlined,
-              color: Color(0xFF7C3AED),
-            ),
+            child: const Icon(Icons.palette_outlined, color: AppColors.primary),
           ),
           title: const Text(
-            'Dark Mode Prep',
+            'App Appearance',
             style: TextStyle(
               fontWeight: FontWeight.w700,
-              color: Color(0xFF111827),
+              color: AppColors.textPrimary,
             ),
           ),
-          subtitle: const Text(
-            'Save preference now, apply theme later',
-            style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+          subtitle: Text(
+            darkModePrep
+                ? 'Dark preview saved · App remains Light'
+                : 'Light preview · Theme controls',
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary,
+            ),
           ),
+          trailing: const Icon(Icons.chevron_right_rounded),
         ),
       ],
     );

@@ -12,7 +12,7 @@ import 'dashboard_test_fakes.dart';
 // Opt-in offline render, never used as production inventory data.
 void main() {
   testWidgets(
-    'Capture Style 1 offline composition at 393px',
+    'Capture Batch 3 Dashboard at 393px',
     (tester) async {
       tester.view.physicalSize = const Size(393, 852);
       tester.view.devicePixelRatio = 1;
@@ -83,7 +83,7 @@ void main() {
         final image = await render.toImage();
         final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
         await File(
-          '${Directory.systemTemp.path}/velora-dashboard-style1-preview.png',
+          '${Directory.systemTemp.path}/velora-dashboard-batch3-preview.png',
         ).writeAsBytes(bytes!.buffer.asUint8List());
         image.dispose();
       });
