@@ -1,0 +1,20 @@
+{
+  "name": "velora-workspace-functions",
+  "private": true,
+  "main": "src/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "test": "node --test test/workspace-creation.test.js",
+    "test:integration": "firebase emulators:exec --config ../firebase.workspace-emulator.json --project demo-velora-workspaces --only auth,firestore,functions \"node --test test/workspace-emulator.integration.test.js\"",
+    "test:rules": "firebase emulators:exec --config ../firebase.workspace-emulator.json --project demo-velora-workspaces --only firestore \"node --test test/firestore.rules.test.js\""
+  },
+  "dependencies": {
+    "firebase-admin": "^14.5.0",
+    "firebase-functions": "^7.4.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2"
+  }
+}

@@ -1,10 +1,12 @@
-# Workspace foundation — isolated draft, not deployed
+# Workspace foundation — trusted creation backend, not deployed
 
-Existing production routing, registration, global queries and Firebase configuration
-are unchanged. Nothing provisions a cafe or assigns legacy records. No deployed
-rules/indexes have been inspected. Do not deploy the sibling rules as a replacement:
-they intentionally deny all legacy paths and profile writes, which would break the
-current application. A reviewed integration and emulator run are prerequisites.
+Existing production routing, registration and global queries are unchanged. The
+`functions/` codebase now contains an authenticated callable workspace-creation
+operation, but Flutter does not call it and nothing has been deployed. No legacy
+record is assigned or migrated. No deployed rules/indexes have been inspected. Do
+not deploy the sibling rules as a replacement: they intentionally deny all legacy
+paths and profile writes, which would break the current application. A reviewed
+integration and emulator run are prerequisites.
 
 ## Schema (version 1)
 
@@ -32,14 +34,15 @@ require future routing/listener invalidation plus server checks on every operati
 
 ## Trusted-server lifecycle required before onboarding
 
-Implement with an authenticated Cloud Function/Admin SDK service, not this client.
-Admin SDK bypasses Rules; the server must perform these validations itself:
+The `createWorkspace` callable implements only the bootstrap operation with Firebase
+Auth and an Admin SDK transaction. Admin SDK bypasses Rules, so its validation is
+authoritative. Invitations, removal and ownership transfer remain future work:
 
-1. Bootstrap: authenticate the caller from a verified token; never accept an
-   authoritative caller UID/role. In one transaction, require its mapping to be
-   absent, generate the cafe ID, and create cafe, owner membership and mapping.
-   Validate names and timestamps; make retries idempotent. Never auto-bootstrap
-   existing users or use `users.role` as proof of ownership.
+1. Bootstrap (implemented, not deployed): derive UID from callable auth; reject
+   client UID/role/cafe ID fields. In one transaction, require no mapping, generate
+   the cafe ID, and create cafe, owner membership and mapping. A retry returns the
+   same verified owner workspace. Existing staff/inconsistent mappings fail closed.
+   `users.role` is never read. Input is allowlisted and length/type validated.
 2. Invite: verify caller is the current active owner in the same transaction.
    Use expiring, one-use server-held invitations bound to the intended verified
    identity. Accept invitations only as the authenticated target; transactionally
@@ -61,7 +64,9 @@ notification, activity or AI writes until their schemas/permissions are reviewed
 
 ## Rules, indexes and production boundaries
 
-`workspace.firestore.rules` is an uncompiled, standalone deny-by-default draft.
+`workspace.firestore.rules` remains a standalone deny-by-default draft and is not
+referenced by the production `firebase.json`. `firebase.workspace-emulator.json`
+exists only for isolated rules tests against project `demo-velora-workspaces`.
 Missing document fields deny access. Five distinct dependency documents are used
 for membership checks; verify access-call limits for transactions and queries.
 Broad allow rules in a future merged ruleset can override these denials: Firestore
@@ -71,7 +76,8 @@ grants are additive, so review the complete deployed ruleset before integration.
 document gets, requiring no composite index. Future cafe activity should use a
 bounded query ordered by `createdAt` and document ID with a cursor, not offsets.
 Add composite indexes only for actual approved filters. Do not deploy an empty
-index draft over unknown production indexes. `firebase.json` remains unchanged.
+index draft over unknown production indexes. `firebase.json` registers only the
+Functions codebase and deliberately does not configure Firestore deployment.
 
 Future paths: `cafes/{cafeId}/inventory`, `inventory_records`, `activities`,
 `notifications`, `ai_recipe_suggestions`, `ai_cache`, `ai_quota`. Decide personal
@@ -80,9 +86,11 @@ legacy thresholds and auth behavior during later, separately approved integratio
 
 ## Verification and exact emulator test matrix
 
-Firebase CLI exists locally, but Java and `@firebase/rules-unit-testing` were not
-found. No dependencies were installed, no emulator started and no Rules deployed.
-Offline Dart tests do not prove Rules authorization or compilation.
+Backend unit tests cover authentication, rejected authority fields, validation,
+idempotent retry, duplicate staff membership and concurrent creation. Rules test
+source covers unauthenticated, cross-business and forged-role access. Java and
+installed Node dependencies are still required to run the Firestore emulator. No
+emulator or Rules deployment should use the production project ID.
 
 When tooling is approved, use an isolated emulator config pointing only to these
 drafts and a demo project (e.g. `demo-velora-workspaces`), never the production ID.

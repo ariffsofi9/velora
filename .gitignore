@@ -12,6 +12,35 @@
 .swiftpm/
 migrate_working_dir/
 
+# Local environment and secret files
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Private keys and signing credentials
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+key.properties
+**/key.properties
+id_rsa
+id_ed25519
+
+# Server/service-account credentials (Firebase client config remains tracked)
+**/service-account*.json
+**/service_account*.json
+**/*serviceAccount*.json
+**/firebase-adminsdk-*.json
+**/google-application-credentials*.json
+!lib/firebase_options.dart
+!android/app/google-services.json
+
 # IntelliJ related
 *.iml
 *.ipr

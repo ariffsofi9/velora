@@ -49,6 +49,7 @@ class AuthService {
     required String password,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+    final previousRegistrationGuard = prefs.getBool(_manualLoginKey) ?? false;
     // Persist before Firebase creates/signs in the account, including reloads.
     if (!await prefs.setBool(_manualLoginKey, true)) {
       throw const AuthFlowException(
@@ -86,7 +87,12 @@ class AuthService {
       } catch (_) {
         /* Startup still requires login. */
       }
-      if (!created) rethrow;
+      if (!created) {
+        // A rejected create (for example, an existing email) must not turn a
+        // normal account into an unfinished-registration session.
+        await prefs.setBool(_manualLoginKey, previousRegistrationGuard);
+        rethrow;
+      }
       throw AuthFlowException(
         profileSaved
             ? 'Your account and profile were created, but sign-out could not be completed. Please return to Login and sign in manually.'
@@ -111,9 +117,10 @@ class AuthService {
           'Login could not be confirmed. Please try again.',
         );
       }
-      // Recover an interrupted registration without overwriting an existing profile.
+      // Idempotently recover missing legacy/interrupted profiles. Existing
+      // profiles are read only and never overwritten.
+      await _profiles.createUserProfileIfNeeded(user);
       if (pendingRegistration) {
-        await _profiles.createUserProfileIfNeeded(user);
         if (!await prefs.setBool(_manualLoginKey, false)) {
           throw const AuthFlowException(
             'Unable to finish login. Please try again.',

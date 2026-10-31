@@ -1,11 +1,55 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/main.dart' show VeloraApp;
+import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/screens/business_setup/business_setup_page.dart';
 import 'package:velora/screens/business_setup/business_setup_widgets.dart';
+import 'package:velora/services/workspace_provisioning_service.dart';
+import 'package:velora/services/workspace_resolver.dart';
 
-Widget setupApp({double scale = 1, double keyboard = 0}) => MaterialApp(
+class _Provisioner implements WorkspaceProvisioner {
+  final Future<WorkspaceCreationResult> Function(WorkspaceCreationRequest)
+  callback;
+  final requests = <WorkspaceCreationRequest>[];
+  _Provisioner(this.callback);
+
+  @override
+  Future<WorkspaceCreationResult> createWorkspace(
+    WorkspaceCreationRequest request,
+  ) {
+    requests.add(request);
+    return callback(request);
+  }
+}
+
+class _Resolver extends WorkspaceResolver {
+  final Future<CafeWorkspace> Function() callback;
+  int calls = 0;
+  _Resolver(this.callback);
+
+  @override
+  Future<CafeWorkspace> resolve() {
+    calls++;
+    return callback();
+  }
+}
+
+const _workspace = CafeWorkspace(
+  cafeId: 'cafe-a',
+  uid: 'owner-a',
+  ownerUid: 'owner-a',
+  role: CafeRole.owner,
+);
+
+Widget setupApp({
+  double scale = 1,
+  double keyboard = 0,
+  WorkspaceProvisioner? provisioner,
+  WorkspaceResolver? resolver,
+}) => MaterialApp(
   theme: AppTheme.light,
   builder: (context, child) => MediaQuery(
     data: MediaQuery.of(context).copyWith(
@@ -14,7 +58,11 @@ Widget setupApp({double scale = 1, double keyboard = 0}) => MaterialApp(
     ),
     child: child!,
   ),
-  home: const BusinessSetupPage(),
+  home: BusinessSetupPage(
+    provisioner: provisioner,
+    resolver: resolver,
+    homeBuilder: (_) => const Scaffold(body: Text('Verified Dashboard')),
+  ),
 );
 
 Future<void> tapSetup(WidgetTester tester, Finder target) async {
@@ -47,6 +95,116 @@ SetupChoices choices(WidgetTester tester, String group) =>
     );
 
 void main() {
+  testWidgets('Successful creation verifies membership before Dashboard', (
+    tester,
+  ) async {
+    final provisioner = _Provisioner(
+      (_) async => const WorkspaceCreationResult(created: true),
+    );
+    final resolver = _Resolver(() async => _workspace);
+    await tester.pumpWidget(
+      setupApp(provisioner: provisioner, resolver: resolver),
+    );
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+    await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+
+    expect(provisioner.requests, hasLength(1));
+    final request = provisioner.requests.single;
+    expect(request.businessName, 'Sunrise Cafe');
+    expect(request.businessType, 'Bakery');
+    expect(request.address, '12 Market Street');
+    expect(request.inventoryUnit, 'kg');
+    expect(resolver.calls, 1);
+    expect(find.text('Verified Dashboard'), findsOneWidget);
+  });
+
+  testWidgets('Duplicate submit taps create only one callable request', (
+    tester,
+  ) async {
+    final completion = Completer<WorkspaceCreationResult>();
+    final provisioner = _Provisioner((_) => completion.future);
+    final resolver = _Resolver(() async => _workspace);
+    await tester.pumpWidget(
+      setupApp(provisioner: provisioner, resolver: resolver),
+    );
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+
+    final submit = find.byKey(const ValueKey('setup-dashboard'));
+    await tester.tap(submit);
+    await tester.tap(submit);
+    await tester.pump();
+    expect(provisioner.requests, hasLength(1));
+    expect(tester.widget<FilledButton>(submit).onPressed, isNull);
+
+    completion.complete(const WorkspaceCreationResult(created: true));
+    await tester.pumpAndSettle();
+    expect(find.text('Verified Dashboard'), findsOneWidget);
+  });
+
+  testWidgets('Callable error stays fail-closed and allows retry', (
+    tester,
+  ) async {
+    final provisioner = _Provisioner(
+      (_) async => throw const WorkspaceProvisioningException(
+        WorkspaceProvisioningFailure.unavailable,
+      ),
+    );
+    final resolver = _Resolver(() async => _workspace);
+    await tester.pumpWidget(
+      setupApp(provisioner: provisioner, resolver: resolver),
+    );
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+    await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+
+    expect(find.text('Verified Dashboard'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('setup-submission-error')),
+      findsOneWidget,
+    );
+    expect(provisioner.requests, hasLength(1));
+    expect(resolver.calls, 0);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('setup-dashboard')))
+          .onPressed,
+      isNotNull,
+    );
+  });
+
+  testWidgets('Verification retry never creates a second workspace', (
+    tester,
+  ) async {
+    final provisioner = _Provisioner(
+      (_) async => const WorkspaceCreationResult(created: true),
+    );
+    var failVerification = true;
+    final resolver = _Resolver(() async {
+      if (failVerification) {
+        throw const WorkspaceResolutionException(WorkspaceFailure.unavailable);
+      }
+      return _workspace;
+    });
+    await tester.pumpWidget(
+      setupApp(provisioner: provisioner, resolver: resolver),
+    );
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+    await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+
+    expect(find.text('Recheck Workspace'), findsOneWidget);
+    expect(find.text('Verified Dashboard'), findsNothing);
+    expect(provisioner.requests, hasLength(1));
+
+    failVerification = false;
+    await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+    expect(provisioner.requests, hasLength(1));
+    expect(resolver.calls, 2);
+    expect(find.text('Verified Dashboard'), findsOneWidget);
+  });
+
   testWidgets('Disabled reminders are accurately reported in the summary', (
     tester,
   ) async {
@@ -207,7 +365,9 @@ void main() {
       );
       expect(
         tester
-            .widget<Text>(find.byKey(const ValueKey('summary-Inventory Unit')))
+            .widget<Text>(
+              find.byKey(const ValueKey('summary-Default Inventory Unit')),
+            )
             .data,
         'L',
       );
@@ -225,12 +385,11 @@ void main() {
             .data,
         '7 days before',
       );
-      expect(find.textContaining('Preview only'), findsOneWidget);
       expect(
         tester
             .widget<FilledButton>(find.byKey(const ValueKey('setup-dashboard')))
             .onPressed,
-        isNull,
+        isNotNull,
       );
       await tapSetup(tester, find.text('Edit inventory preferences'));
       expect(find.text('Set Up Your Inventory'), findsOneWidget);

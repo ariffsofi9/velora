@@ -1,16 +1,18 @@
 import 'dart:async';
 
 import '../../services/auth_service.dart';
+import '../../services/workspace_resolver.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
 
-import '../home/home_page.dart';
 import 'welcome_page.dart';
+import 'workspace_gate.dart';
 
 class SplashPage extends StatefulWidget {
   final AuthService? authService;
-  const SplashPage({super.key, this.authService});
+  final WorkspaceResolver? workspaceResolver;
+  const SplashPage({super.key, this.authService, this.workspaceResolver});
 
   @override
   State<SplashPage> createState() => _SplashPageState();
@@ -39,7 +41,9 @@ class _SplashPageState extends State<SplashPage> {
     if (restoreSession) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const HomePage()),
+        MaterialPageRoute(
+          builder: (_) => WorkspaceGate(resolver: widget.workspaceResolver),
+        ),
       );
     } else {
       Navigator.pushReplacement(

@@ -1,14 +1,27 @@
 import 'package:flutter/material.dart';
+
 import '../../core/theme/app_tokens.dart';
+import '../../models/cafe_workspace.dart';
+import '../../services/workspace_provisioning_service.dart';
+import '../../services/workspace_resolver.dart';
+import '../home/home_page.dart';
 import 'business_information_step.dart';
 import 'business_setup_draft.dart';
 import 'business_setup_widgets.dart';
 import 'inventory_preferences_step.dart';
 import 'setup_complete_step.dart';
 
-/// Standalone local preview. No provisioning, persistence or workspace activation.
 class BusinessSetupPage extends StatefulWidget {
-  const BusinessSetupPage({super.key});
+  final WorkspaceProvisioner? provisioner;
+  final WorkspaceResolver? resolver;
+  final WidgetBuilder? homeBuilder;
+
+  const BusinessSetupPage({
+    super.key,
+    this.provisioner,
+    this.resolver,
+    this.homeBuilder,
+  });
   @override
   State<BusinessSetupPage> createState() => _BusinessSetupPageState();
 }
@@ -20,6 +33,9 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   final _form = GlobalKey<FormState>();
   final _scroll = ScrollController();
   int _step = 0;
+  bool _submitting = false;
+  bool _creationAccepted = false;
+  String? _submissionError;
 
   @override
   void dispose() {
@@ -44,6 +60,76 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
     _goToStep(_step + 1);
   }
 
+  WorkspaceCreationRequest get _request => WorkspaceCreationRequest(
+    businessName: _draft.businessName,
+    businessType: _draft.businessType!,
+    address: _draft.address,
+    inventoryUnit: _draft.unit,
+    lowStockAlerts: _draft.lowStockAlerts,
+    expiryReminders: _draft.expiryReminders,
+    reminderDays: _draft.reminderDays,
+  );
+
+  Future<void> _submit() async {
+    if (_submitting) return;
+    setState(() {
+      _submitting = true;
+      _submissionError = null;
+    });
+    try {
+      if (!_creationAccepted) {
+        await (widget.provisioner ?? FirebaseWorkspaceProvisioner())
+            .createWorkspace(_request);
+        if (!mounted) return;
+        setState(() => _creationAccepted = true);
+      }
+      await (widget.resolver ?? WorkspaceResolver()).resolve();
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: widget.homeBuilder ?? (_) => const HomePage(),
+          settings: const RouteSettings(name: '/workspace-home'),
+        ),
+      );
+    } on WorkspaceProvisioningException catch (error) {
+      if (!mounted) return;
+      setState(() => _submissionError = _provisioningMessage(error.failure));
+    } on WorkspaceResolutionException {
+      if (!mounted) return;
+      setState(() {
+        _submissionError = _creationAccepted
+            ? 'Workspace creation was accepted, but secure access could not yet be verified. Recheck without creating another workspace.'
+            : 'Workspace access could not be verified. Please try again.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _submissionError =
+            'Secure workspace setup is temporarily unavailable. Please try again.';
+      });
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  String _provisioningMessage(
+    WorkspaceProvisioningFailure failure,
+  ) => switch (failure) {
+    WorkspaceProvisioningFailure.emulatorRequired =>
+      'Workspace setup is enabled only with the local Firebase emulators in this phase.',
+    WorkspaceProvisioningFailure.unauthenticated =>
+      'Your session could not be verified. Please sign in again.',
+    WorkspaceProvisioningFailure.invalidInput =>
+      'Some setup details were not accepted. Review them and try again.',
+    WorkspaceProvisioningFailure.existingMembership =>
+      'An existing workspace membership could not be safely confirmed. Recheck access or contact support.',
+    WorkspaceProvisioningFailure.unavailable =>
+      'The local workspace service is unavailable. Check the emulators and try again.',
+    WorkspaceProvisioningFailure.internal =>
+      'Workspace setup could not be completed safely. Please try again.',
+  };
+
   Widget _stepBody() => switch (_step) {
     0 => BusinessInformationStep(
       formKey: _form,
@@ -62,8 +148,8 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
     ),
     _ => SetupCompleteStep(
       draft: _draft,
-      onEditBusiness: () => _goToStep(0),
-      onEditPreferences: () => _goToStep(1),
+      onEditBusiness: _creationAccepted ? null : () => _goToStep(0),
+      onEditPreferences: _creationAccepted ? null : () => _goToStep(1),
     ),
   };
 
@@ -92,25 +178,38 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
         ),
       ],
     ),
-    _ => const Column(
+    _ => Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         FilledButton(
-          key: ValueKey('setup-dashboard'),
-          onPressed: null,
-          child: Text('Go to Dashboard'),
+          key: const ValueKey('setup-dashboard'),
+          onPressed: _submitting ? null : _submit,
+          child: _submitting
+              ? const SizedBox.square(
+                  dimension: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text(
+                  _creationAccepted ? 'Recheck Workspace' : 'Create Workspace',
+                ),
         ),
-        SizedBox(height: 10),
-        Text(
-          'Available after secure workspace setup is connected.',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontWeight: FontWeight.w400,
-            color: AppColors.textSecondary,
-            fontSize: 12,
+        if (_submissionError != null) ...[
+          const SizedBox(height: 10),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _submissionError!,
+              key: const ValueKey('setup-submission-error'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontWeight: FontWeight.w400,
+                color: AppColors.danger,
+                fontSize: 12,
+              ),
+            ),
           ),
-        ),
+        ],
       ],
     ),
   };

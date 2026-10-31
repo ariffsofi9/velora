@@ -1,1 +1,31 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"velora-73222","appId":"1:384873169563:android:d83c95f3e2134983b63c3e","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"velora-73222","configurations":{"android":"1:384873169563:android:d83c95f3e2134983b63c3e","ios":"1:384873169563:ios:bb11a6515ca104d3b63c3e","macos":"1:384873169563:ios:bb11a6515ca104d3b63c3e","web":"1:384873169563:web:80da212022315171b63c3e","windows":"1:384873169563:web:db3de6c066168655b63c3e"}}}}}}
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "workspace"
+    }
+  ],
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "velora-73222",
+          "appId": "1:384873169563:android:d83c95f3e2134983b63c3e",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "velora-73222",
+          "configurations": {
+            "android": "1:384873169563:android:d83c95f3e2134983b63c3e",
+            "ios": "1:384873169563:ios:bb11a6515ca104d3b63c3e",
+            "macos": "1:384873169563:ios:bb11a6515ca104d3b63c3e",
+            "web": "1:384873169563:web:80da212022315171b63c3e",
+            "windows": "1:384873169563:web:db3de6c066168655b63c3e"
+          }
+        }
+      }
+    }
+  }
+}

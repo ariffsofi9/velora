@@ -68,7 +68,15 @@ class InventoryPreferencesStep extends StatelessWidget {
         subtitle: 'Customize how Velora manages your ingredients.',
       ),
       const SizedBox(height: 28),
-      const SetupLabel('Inventory Tracking Unit'),
+      const SetupLabel('Default Inventory Unit'),
+      Text(
+        'Used as the default when adding ingredients. You can choose a different unit for each ingredient.',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: AppColors.textSecondary,
+          fontWeight: FontWeight.w400,
+        ),
+      ),
+      const SizedBox(height: 12),
       SetupChoices(
         group: 'unit',
         options: BusinessSetupDraft.units,
@@ -116,10 +124,6 @@ class InventoryPreferencesStep extends StatelessWidget {
         onSelected: draft.expiryReminders
             ? (value) => onTimingChanged(int.parse(value))
             : null,
-      ),
-      const SizedBox(height: 24),
-      const SetupNotice(
-        'These preferences stay in this preview until secure business setup is available.',
       ),
     ],
   );

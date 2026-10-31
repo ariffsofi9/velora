@@ -4,15 +4,22 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../widgets/auth/auth_layout.dart';
 import '../../services/auth_service.dart';
+import '../../services/workspace_resolver.dart';
 
 import 'signup_page.dart';
 import 'forgot_password_page.dart';
-import '../home/home_page.dart';
+import 'workspace_gate.dart';
 
 class LoginPage extends StatefulWidget {
   final String? message;
   final AuthService? authService;
-  const LoginPage({super.key, this.message, this.authService});
+  final WorkspaceResolver? workspaceResolver;
+  const LoginPage({
+    super.key,
+    this.message,
+    this.authService,
+    this.workspaceResolver,
+  });
 
   @override
   State<LoginPage> createState() => _LoginPageState();
@@ -64,7 +71,9 @@ class _LoginPageState extends State<LoginPage> {
 
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const HomePage()),
+        MaterialPageRoute(
+          builder: (_) => WorkspaceGate(resolver: widget.workspaceResolver),
+        ),
       );
     } on FirebaseAuthException catch (e) {
       String message = 'Login failed. Please try again.';

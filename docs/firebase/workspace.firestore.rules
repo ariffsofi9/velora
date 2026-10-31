@@ -29,9 +29,35 @@ service cloud.firestore {
       return isMember(cafeId) &&
         get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == request.auth.uid;
     }
+    function validProfileCreate(uid) {
+      let data = request.resource.data;
+      return signedIn() && request.auth.uid == uid &&
+        data.keys().hasOnly([
+          'username', 'email', 'photoUrl', 'role', 'createdAt', 'updatedAt'
+        ]) &&
+        data.username is string && data.username.size() > 0 &&
+        data.username.size() <= 80 &&
+        data.email is string && data.email == request.auth.token.email &&
+        data.photoUrl is string && data.photoUrl.size() <= 2048 &&
+        data.role == 'owner' &&
+        data.createdAt == request.time && data.updatedAt == request.time;
+    }
+    function validProfileUpdate(uid) {
+      let data = request.resource.data;
+      return signedIn() && request.auth.uid == uid &&
+        data.diff(resource.data).affectedKeys().hasOnly([
+          'username', 'photoUrl', 'updatedAt'
+        ]) &&
+        data.username is string && data.username.size() > 0 &&
+        data.username.size() <= 80 &&
+        data.photoUrl is string && data.photoUrl.size() <= 2048 &&
+        data.updatedAt == request.time;
+    }
     match /users/{uid} {
       allow get: if signedIn() && request.auth.uid == uid;
-      allow list, write: if false;
+      allow create: if validProfileCreate(uid);
+      allow update: if validProfileUpdate(uid);
+      allow list, delete: if false;
     }
     match /user_cafe_memberships/{uid} {
       // Same-cafe staff can read the owner's mapping for resolver consistency.

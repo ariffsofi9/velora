@@ -5,8 +5,8 @@ import 'business_setup_widgets.dart';
 
 class SetupCompleteStep extends StatelessWidget {
   final BusinessSetupDraft draft;
-  final VoidCallback onEditBusiness;
-  final VoidCallback onEditPreferences;
+  final VoidCallback? onEditBusiness;
+  final VoidCallback? onEditPreferences;
   const SetupCompleteStep({
     super.key,
     required this.draft,
@@ -109,10 +109,6 @@ class SetupCompleteStep extends StatelessWidget {
         ).textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
       ),
       const SizedBox(height: 24),
-      const SetupNotice(
-        'Preview only — not saved. Secure workspace creation is not available yet, so setup cannot be completed.',
-      ),
-      const SizedBox(height: 24),
       Card(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -142,7 +138,7 @@ class SetupCompleteStep extends StatelessWidget {
               if (draft.address.isNotEmpty)
                 _row(context, 'Business Address', draft.address),
               const Divider(),
-              _row(context, 'Inventory Unit', draft.unit),
+              _row(context, 'Default Inventory Unit', draft.unit),
               _row(
                 context,
                 'Low Stock Alerts',

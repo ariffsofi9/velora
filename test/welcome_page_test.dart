@@ -6,7 +6,7 @@ import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/screens/auth/login_page.dart';
 import 'package:velora/screens/auth/splash_page.dart';
 import 'package:velora/screens/auth/welcome_page.dart';
-import 'package:velora/screens/home/home_page.dart';
+import 'package:velora/screens/auth/workspace_gate.dart';
 import 'package:velora/services/auth_service.dart';
 
 class _Session extends Fake implements AuthService {
@@ -78,7 +78,7 @@ void main() {
     );
   });
 
-  testWidgets('Restorable session still opens Home after the existing delay', (
+  testWidgets('Restorable session opens the workspace gate after the delay', (
     tester,
   ) async {
     final session = Completer<bool>();
@@ -93,12 +93,12 @@ void main() {
     expect(find.byType(SplashPage), findsOneWidget);
     await tester.pump(const Duration(seconds: 1));
     session.complete(true);
-    // Flush routing without building Home, which uses real Firebase streams.
+    // Flush routing without resolving a real Firebase workspace.
     await tester.idle();
     final route = observer.top! as MaterialPageRoute<dynamic>;
     expect(
       route.builder(tester.element(find.byType(SplashPage))),
-      isA<HomePage>(),
+      isA<WorkspaceGate>(),
     );
     await tester.pumpWidget(const SizedBox());
   });
@@ -114,7 +114,7 @@ void main() {
       session.completeError(StateError('offline'));
       await tester.pumpAndSettle();
       expect(find.byType(WelcomePage), findsOneWidget);
-      expect(find.byType(HomePage), findsNothing);
+      expect(find.byType(WorkspaceGate), findsNothing);
     },
   );
 }

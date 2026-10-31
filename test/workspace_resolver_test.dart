@@ -40,6 +40,21 @@ class _Store implements WorkspaceStore, WorkspaceReader {
   }
 }
 
+/// Models a web/JS transaction bridge that obscures callback-thrown Dart
+/// exceptions. Domain exceptions must therefore be raised after the callback.
+class _WebBoundaryStore extends _Store {
+  _WebBoundaryStore(super.docs);
+
+  @override
+  Future<T> readTransaction<T>(Future<T> Function(WorkspaceReader) read) async {
+    try {
+      return await super.readTransaction(read);
+    } catch (_) {
+      throw StateError('NativeError');
+    }
+  }
+}
+
 Map<String, dynamic> _link(String uid) => {
   'uid': uid,
   'cafeId': 'cafe-a',
@@ -104,6 +119,20 @@ void main() {
     expect(store.reads, ['user_cafe_memberships/staff-a']);
   });
 
+  test(
+    'Missing mapping remains typed across a Web transaction boundary',
+    () async {
+      final fixture = _fixture()..docs.remove('user_cafe_memberships/staff-a');
+      final store = _WebBoundaryStore(fixture.docs);
+
+      await expectLater(
+        WorkspaceResolver(auth: _Auth('staff-a'), store: store).resolve(),
+        throwsA(_failure(WorkspaceFailure.missingMembership)),
+      );
+      expect(store.reads, ['user_cafe_memberships/staff-a']);
+    },
+  );
+
   final mutations = <String, void Function(_Store)>{
     'mapping points to another cafe': (s) =>
         s.docs['user_cafe_memberships/staff-a']!['cafeId'] = 'cafe-b',
@@ -163,6 +192,37 @@ void main() {
         expect(error.failure, WorkspaceFailure.unavailable);
         expect(error.toString(), isNot(contains('backend-sensitive-detail')));
       }
+    },
+  );
+
+  test(
+    'Debug diagnostics keep Firebase code but never backend details',
+    () async {
+      const sensitiveDetail = 'private-user-or-document-detail';
+      final logs = <String>[];
+      final store = _fixture()
+        ..error = FirebaseException(
+          plugin: 'cloud_firestore',
+          code: 'unavailable',
+          message: sensitiveDetail,
+        );
+
+      await expectLater(
+        WorkspaceResolver(
+          auth: _Auth('owner-a'),
+          store: store,
+          debugLog: logs.add,
+        ).resolve(),
+        throwsA(_failure(WorkspaceFailure.unavailable)),
+      );
+
+      expect(logs, hasLength(1));
+      expect(logs.single, contains('result=firebase-failure'));
+      expect(logs.single, contains('operation=begin-read-transaction'));
+      expect(logs.single, contains('plugin=cloud_firestore'));
+      expect(logs.single, contains('code=unavailable'));
+      expect(logs.single, isNot(contains(sensitiveDetail)));
+      expect(logs.single, isNot(contains('owner-a')));
     },
   );
 

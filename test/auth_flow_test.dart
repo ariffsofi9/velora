@@ -211,8 +211,26 @@ void main() {
       );
       expect(events, isNot(contains('profile')));
       expect(await service.canRestoreSession(), isFalse);
+
+      await service.signIn(
+        email: 'owner@example.test',
+        password: 'test-password',
+      );
+      expect(events.where((event) => event == 'profile'), hasLength(1));
+      expect(auth.currentUser, isNotNull);
+      expect(await service.canRestoreSession(), isTrue);
     },
   );
+
+  test('Every login idempotently ensures the current user profile', () async {
+    await service.signIn(
+      email: 'owner@example.test',
+      password: 'test-password',
+    );
+
+    expect(events, ['login', 'profile', 'profileSaved']);
+    expect(auth.currentUser, isNotNull);
+  });
 
   test(
     'Interrupted registration profile recovery must succeed before login returns',

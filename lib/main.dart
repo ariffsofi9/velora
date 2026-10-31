@@ -6,13 +6,12 @@ import 'core/theme/app_theme.dart';
 
 // SERVICES
 import 'services/local_notification_service.dart';
+import 'services/firebase_emulator_config.dart';
 
 // AUTH
 import 'screens/auth/splash_page.dart';
 import 'screens/auth/login_page.dart';
-
-// HOME
-import 'screens/home/home_page.dart';
+import 'screens/auth/workspace_gate.dart';
 
 // INVENTORY
 import 'screens/inventory/add_item/add_item_page.dart';
@@ -28,6 +27,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await FirebaseEmulatorConfig.connectIfEnabled();
 
   await LocalNotificationService.init();
 
@@ -46,7 +46,7 @@ class VeloraApp extends StatelessWidget {
       home: const SplashPage(),
       routes: {
         '/login': (context) => const LoginPage(),
-        '/home': (context) => const HomePage(),
+        '/home': (context) => const WorkspaceGate(),
         '/add-item': (context) => const AddItemPage(),
         '/suggestions': (context) => const SuggestionsPage(),
         '/alerts': (context) => const AlertsPage(),
