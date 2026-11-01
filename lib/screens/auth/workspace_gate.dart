@@ -3,13 +3,15 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../models/cafe_workspace.dart';
 import '../../services/workspace_resolver.dart';
+import '../../services/workspace_session.dart';
 import '../business_setup/business_setup_page.dart';
 import '../home/home_page.dart';
 
 /// Resolves trusted membership before exposing any workspace-backed home UI.
 class WorkspaceGate extends StatefulWidget {
   final WorkspaceResolver? resolver;
-  final WidgetBuilder? homeBuilder;
+  final Widget Function(BuildContext context, WorkspaceSession session)?
+  homeBuilder;
   final WidgetBuilder? setupBuilder;
 
   const WorkspaceGate({
@@ -41,10 +43,14 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
       _failure = null;
     });
     try {
-      await (widget.resolver ?? WorkspaceResolver()).resolve();
+      final workspace = await (widget.resolver ?? WorkspaceResolver())
+          .resolve();
       if (!mounted) return;
+      final session = WorkspaceSession.fromVerified(workspace);
       _replace(
-        widget.homeBuilder ?? (_) => const HomePage(),
+        (context) =>
+            widget.homeBuilder?.call(context, session) ??
+            HomePage(workspaceSession: session),
         '/workspace-home',
       );
     } on WorkspaceResolutionException catch (error) {

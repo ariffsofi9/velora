@@ -1,3 +1,7 @@
+// Legacy generation internals remain compiled for a later trusted backend,
+// but Phase 2.3C.3 exposes no entry point to them.
+// ignore_for_file: unused_element, unused_field
+
 part of 'suggestions_page.dart';
 
 abstract class _SuggestionsGeneration extends _SuggestionsFoundation {

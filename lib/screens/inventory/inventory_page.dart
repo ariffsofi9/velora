@@ -1,8 +1,13 @@
 import '../../core/theme/app_tokens.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
+import '../../repositories/workspace_inventory_repository.dart';
+import '../../services/workspace_session.dart';
+import '../../services/workspace_inventory_create_service.dart';
+import '../../services/workspace_inventory_update_service.dart';
+import '../../services/workspace_inventory_stock_service.dart';
+import 'add_item/add_item_page.dart';
 import 'item_details_page.dart';
 import 'utils_inventory/inventory_sort_helper.dart';
 import 'widgets_inventory/inventory_card.dart';
@@ -12,7 +17,20 @@ import 'widgets_inventory/inventory_header_summary.dart';
 import 'widgets_inventory/inventory_search_bar.dart';
 
 class InventoryPage extends StatefulWidget {
-  const InventoryPage({super.key});
+  final WorkspaceSession workspaceSession;
+  final WorkspaceInventoryRepository? repository;
+  final WorkspaceInventoryCreator? inventoryCreator;
+  final WorkspaceInventoryUpdater? inventoryUpdater;
+  final WorkspaceInventoryStockAdjuster? stockAdjuster;
+
+  const InventoryPage({
+    super.key,
+    required this.workspaceSession,
+    this.repository,
+    this.inventoryCreator,
+    this.inventoryUpdater,
+    this.stockAdjuster,
+  });
 
   @override
   State<InventoryPage> createState() => _InventoryPageState();
@@ -20,35 +38,25 @@ class InventoryPage extends StatefulWidget {
 
 class _InventoryPageState extends State<InventoryPage> {
   final TextEditingController _searchController = TextEditingController();
+  late final WorkspaceInventoryRepository _repository;
+  late final Stream<List<InventoryItem>> _itemsStream;
 
   String _searchQuery = '';
   String _selectedFilter = 'All Items';
 
   @override
+  void initState() {
+    super.initState();
+    _repository =
+        widget.repository ??
+        WorkspaceInventoryRepository(session: widget.workspaceSession);
+    _itemsStream = _repository.watchItems();
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
-  }
-
-  DateTime _parseExpiry(dynamic value) {
-    if (value is Timestamp) return value.toDate();
-    if (value is DateTime) return value;
-    if (value is String) return DateTime.tryParse(value) ?? DateTime.now();
-    return DateTime.now();
-  }
-
-  InventoryItem _itemFromDoc(DocumentSnapshot doc) {
-    final data = doc.data() as Map<String, dynamic>;
-
-    return InventoryItem(
-      id: doc.id,
-      name: data['name'] ?? '',
-      category: data['category'] ?? '',
-      quantity: data['quantity'] ?? 0,
-      expiryDate: _parseExpiry(data['expiryDate']),
-      imageUrl: data['imageUrl'] ?? '',
-      createdAt: DateTime.now(),
-    );
   }
 
   List<InventoryItem> _applySearchFilterSort(List<InventoryItem> items) {
@@ -59,13 +67,29 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   void _goToAddItem() {
-    Navigator.pushNamed(context, '/add-item');
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddItemPage(
+          workspaceSession: widget.workspaceSession,
+          creator: widget.inventoryCreator,
+        ),
+      ),
+    );
   }
 
   void _goToDetails(InventoryItem item) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => ItemDetailsPage(item: item)),
+      MaterialPageRoute(
+        builder: (_) => ItemDetailsPage(
+          item: item,
+          workspaceSession: widget.workspaceSession,
+          repository: _repository,
+          updater: widget.inventoryUpdater,
+          stockAdjuster: widget.stockAdjuster,
+        ),
+      ),
     );
   }
 
@@ -91,8 +115,8 @@ class _InventoryPageState extends State<InventoryPage> {
           ),
         ),
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('inventory').snapshots(),
+      body: StreamBuilder<List<InventoryItem>>(
+        stream: _itemsStream,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return const Center(child: Text('Something went wrong.'));
@@ -104,7 +128,7 @@ class _InventoryPageState extends State<InventoryPage> {
             );
           }
 
-          final items = snapshot.data!.docs.map(_itemFromDoc).toList();
+          final items = snapshot.data!;
           final visibleItems = _applySearchFilterSort(items);
 
           return Center(

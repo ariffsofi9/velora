@@ -1,4 +1,5 @@
 import '../../../models/inventory_item.dart';
+import '../../../logic/low_stock_policy.dart';
 import 'expiry_helper.dart';
 
 class InventorySortHelper {
@@ -33,7 +34,7 @@ class InventorySortHelper {
     String filter,
   ) {
     if (filter == 'Low Stock') {
-      return items.where((item) => item.quantity <= 3).toList();
+      return items.where(LowStockPolicy.isLowStock).toList();
     }
 
     if (filter == 'Near Expiry') {

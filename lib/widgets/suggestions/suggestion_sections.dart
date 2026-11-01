@@ -55,8 +55,8 @@ class SuggestionPageTitle extends StatelessWidget {
 }
 
 class SuggestionActionButtons extends StatelessWidget {
-  final VoidCallback onRecipeTap;
-  final VoidCallback onRestockTap;
+  final VoidCallback? onRecipeTap;
+  final VoidCallback? onRestockTap;
 
   const SuggestionActionButtons({
     super.key,

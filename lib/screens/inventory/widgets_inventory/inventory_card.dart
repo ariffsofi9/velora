@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../../models/inventory_item.dart';
+import '../../../logic/low_stock_policy.dart';
 import '../utils_inventory/expiry_helper.dart';
 
 class InventoryCard extends StatelessWidget {
@@ -92,7 +93,7 @@ class InventoryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final expiryText = ExpiryHelper.daysLeftText(item.expiryDate);
     final expiryColor = ExpiryHelper.statusColor(item.expiryDate);
-    final isLowStock = item.quantity <= 3;
+    final isLowStock = LowStockPolicy.isLowStock(item);
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(12),

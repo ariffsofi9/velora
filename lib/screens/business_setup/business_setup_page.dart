@@ -4,6 +4,7 @@ import '../../core/theme/app_tokens.dart';
 import '../../models/cafe_workspace.dart';
 import '../../services/workspace_provisioning_service.dart';
 import '../../services/workspace_resolver.dart';
+import '../../services/workspace_session.dart';
 import '../home/home_page.dart';
 import 'business_information_step.dart';
 import 'business_setup_draft.dart';
@@ -14,7 +15,8 @@ import 'setup_complete_step.dart';
 class BusinessSetupPage extends StatefulWidget {
   final WorkspaceProvisioner? provisioner;
   final WorkspaceResolver? resolver;
-  final WidgetBuilder? homeBuilder;
+  final Widget Function(BuildContext context, WorkspaceSession session)?
+  homeBuilder;
 
   const BusinessSetupPage({
     super.key,
@@ -83,12 +85,16 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
         if (!mounted) return;
         setState(() => _creationAccepted = true);
       }
-      await (widget.resolver ?? WorkspaceResolver()).resolve();
+      final workspace = await (widget.resolver ?? WorkspaceResolver())
+          .resolve();
       if (!mounted) return;
+      final session = WorkspaceSession.fromVerified(workspace);
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: widget.homeBuilder ?? (_) => const HomePage(),
+          builder: (context) =>
+              widget.homeBuilder?.call(context, session) ??
+              HomePage(workspaceSession: session),
           settings: const RouteSettings(name: '/workspace-home'),
         ),
       );

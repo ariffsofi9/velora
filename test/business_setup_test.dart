@@ -61,7 +61,8 @@ Widget setupApp({
   home: BusinessSetupPage(
     provisioner: provisioner,
     resolver: resolver,
-    homeBuilder: (_) => const Scaffold(body: Text('Verified Dashboard')),
+    homeBuilder: (_, session) =>
+        Scaffold(body: Text('Verified Dashboard ${session.cafeId}')),
   ),
 );
 
@@ -116,7 +117,7 @@ void main() {
     expect(request.address, '12 Market Street');
     expect(request.inventoryUnit, 'kg');
     expect(resolver.calls, 1);
-    expect(find.text('Verified Dashboard'), findsOneWidget);
+    expect(find.text('Verified Dashboard cafe-a'), findsOneWidget);
   });
 
   testWidgets('Duplicate submit taps create only one callable request', (
@@ -140,7 +141,7 @@ void main() {
 
     completion.complete(const WorkspaceCreationResult(created: true));
     await tester.pumpAndSettle();
-    expect(find.text('Verified Dashboard'), findsOneWidget);
+    expect(find.text('Verified Dashboard cafe-a'), findsOneWidget);
   });
 
   testWidgets('Callable error stays fail-closed and allows retry', (
@@ -159,7 +160,7 @@ void main() {
     await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
     await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
 
-    expect(find.text('Verified Dashboard'), findsNothing);
+    expect(find.textContaining('Verified Dashboard'), findsNothing);
     expect(
       find.byKey(const ValueKey('setup-submission-error')),
       findsOneWidget,
@@ -195,14 +196,14 @@ void main() {
     await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
 
     expect(find.text('Recheck Workspace'), findsOneWidget);
-    expect(find.text('Verified Dashboard'), findsNothing);
+    expect(find.textContaining('Verified Dashboard'), findsNothing);
     expect(provisioner.requests, hasLength(1));
 
     failVerification = false;
     await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
     expect(provisioner.requests, hasLength(1));
     expect(resolver.calls, 2);
-    expect(find.text('Verified Dashboard'), findsOneWidget);
+    expect(find.text('Verified Dashboard cafe-a'), findsOneWidget);
   });
 
   testWidgets('Disabled reminders are accurately reported in the summary', (

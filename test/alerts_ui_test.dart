@@ -1,15 +1,70 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
+import 'package:velora/models/cafe_workspace.dart';
+import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/alerts/alerts_page.dart';
+import 'package:velora/screens/home/widgets_home/notification_bell.dart';
 import 'package:velora/screens/notifications/notification_alert_item.dart';
 import 'package:velora/screens/notifications/widgets_notification/notification_alert_card.dart';
 import 'package:velora/screens/notifications/widgets_notification/notification_empty_view.dart';
 import 'package:velora/screens/notifications/widgets_notification/notification_filter_bar.dart';
 import 'package:velora/screens/notifications/widgets_notification/notification_header_card.dart';
+import 'package:velora/services/workspace_session.dart';
 
-import 'dashboard_test_fakes.dart';
+class _InventorySource implements WorkspaceInventoryDataSource {
+  final Stream<List<WorkspaceInventoryDocument>> stream;
+  String? watchedPath;
+
+  _InventorySource(this.stream);
+
+  @override
+  Future<List<WorkspaceInventoryDocument>> readCollection(String path) =>
+      throw UnimplementedError();
+
+  @override
+  Stream<List<WorkspaceInventoryDocument>> watchCollection(String path) {
+    watchedPath = path;
+    return stream;
+  }
+}
+
+final _session = WorkspaceSession.fromVerified(
+  const CafeWorkspace(
+    cafeId: 'alerts-cafe',
+    uid: 'staff-a',
+    ownerUid: 'owner-a',
+    role: CafeRole.staff,
+  ),
+);
+
+WorkspaceInventoryDocument _item(
+  String id,
+  String name,
+  int quantity,
+  int expiryDays,
+) => WorkspaceInventoryDocument(
+  id: id,
+  data: {
+    'name': name,
+    'category': 'General',
+    'quantity': quantity,
+    'unit': 'pcs',
+    'expiryDate': DateTime.now().add(Duration(days: expiryDays)),
+    'imageUrl': '',
+    'createdAt': DateTime.now(),
+  },
+);
+
+AlertsPage _alerts(_InventorySource source) => AlertsPage(
+  workspaceSession: _session,
+  repository: WorkspaceInventoryRepository(
+    session: _session,
+    dataSource: source,
+  ),
+);
 
 void main() {
   final alert = NotificationAlertItem(
@@ -59,43 +114,86 @@ void main() {
     expect(selected, 'Low Stock');
   });
 
-  testWidgets('Named Alerts route preserves existing inventory thresholds', (
+  testWidgets('Scoped Alerts use the shared low-stock threshold', (
     tester,
   ) async {
-    final today = DateTime.now();
-    final firestore = DashboardFirestore({
-      'inventory': dashboardCollection([
-        {
-          'id': 'low',
-          'name': 'Coffee Beans',
-          'quantity': 5,
-          'expiryDate': Timestamp.fromDate(today.add(const Duration(days: 20))),
-        },
-        {
-          'id': 'expiry',
-          'name': 'Fresh Milk',
-          'quantity': 12,
-          'expiryDate': Timestamp.fromDate(today.add(const Duration(days: 2))),
-        },
-        {
-          'id': 'healthy',
-          'name': 'Rice',
-          'quantity': 20,
-          'expiryDate': Timestamp.fromDate(today.add(const Duration(days: 20))),
-        },
+    final source = _InventorySource(
+      Stream.value([
+        _item('low', 'Coffee Beans', 5, 20),
+        _item('above', 'Tea Leaves', 6, 20),
+        _item('expiry', 'Fresh Milk', 12, 2),
+        _item('healthy', 'Rice', 20, 20),
       ]),
-    });
-    await tester.pumpWidget(app(AlertsPage(firestore: firestore)));
+    );
+    await tester.pumpWidget(app(_alerts(source)));
     await tester.pump();
 
+    expect(source.watchedPath, 'cafes/alerts-cafe/inventory');
     expect(find.text('Coffee Beans'), findsOneWidget);
     expect(find.text('Fresh Milk'), findsOneWidget);
+    expect(find.text('Tea Leaves'), findsNothing);
     expect(find.text('Rice'), findsNothing);
 
     await tester.tap(find.text('Near Expiry'));
     await tester.pump();
     expect(find.text('Coffee Beans'), findsNothing);
     expect(find.text('Fresh Milk'), findsOneWidget);
+  });
+
+  testWidgets('Empty cafe shows normal no-alerts guidance', (tester) async {
+    await tester.pumpWidget(
+      app(_alerts(_InventorySource(Stream.value(const [])))),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('No active alerts.\nYour inventory looks good.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('Loading and scoped repository errors remain visible', (
+    tester,
+  ) async {
+    final controller = StreamController<List<WorkspaceInventoryDocument>>();
+    addTearDown(controller.close);
+    await tester.pumpWidget(app(_alerts(_InventorySource(controller.stream))));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    controller.addError(StateError('permission denied'));
+    await tester.pump();
+    expect(find.text('Retry alerts'), findsOneWidget);
+  });
+
+  testWidgets('Unverified access and legacy bell actions fail closed', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: const Scaffold(
+          body: Column(
+            children: [
+              Expanded(child: AlertsPage()),
+              NotificationBell(),
+            ],
+          ),
+        ),
+      ),
+    );
+    expect(
+      find.text(
+        'Alerts are unavailable because workspace access was not verified.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byTooltip('Alerts'));
+    await tester.pump();
+    expect(
+      find.textContaining('secure workspace notifications'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Alert card preserves read and dismiss interactions', (

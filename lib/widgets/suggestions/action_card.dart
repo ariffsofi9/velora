@@ -6,7 +6,7 @@ class ActionCard extends StatelessWidget {
   final String subtitle;
   final IconData icon;
   final bool isPrimary;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const ActionCard({
     super.key,
@@ -19,44 +19,50 @@ class ActionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap, // 🔥 THIS IS IMPORTANT
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: isPrimary ? AppColors.primary : Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              icon,
-              color: isPrimary ? Colors.white : AppColors.primary,
-              size: 26,
+    return Semantics(
+      enabled: onTap != null,
+      button: true,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Opacity(
+          opacity: onTap == null ? 0.55 : 1,
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: isPrimary ? AppColors.primary : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.border),
             ),
-            const SizedBox(height: 10),
-            Text(
-              title,
-              style: TextStyle(
-                color: isPrimary ? Colors.white : AppColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  icon,
+                  color: isPrimary ? Colors.white : AppColors.primary,
+                  size: 26,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: isPrimary ? Colors.white : AppColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: isPrimary
+                        ? Colors.white.withValues(alpha: 0.82)
+                        : AppColors.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              subtitle,
-              style: TextStyle(
-                color: isPrimary
-                    ? Colors.white.withValues(alpha: 0.85)
-                    : AppColors.textSecondary,
-                fontSize: 12,
-                fontWeight: FontWeight.w400,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

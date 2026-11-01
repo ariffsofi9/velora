@@ -1,87 +1,95 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../../widgets/dashboard/inventory_health_card.dart';
+import 'package:flutter/material.dart';
 
-import '../../services/auto_notification_trigger_service.dart';
+import '../../models/inventory_item.dart';
+import '../../logic/low_stock_policy.dart';
+import '../../repositories/workspace_inventory_repository.dart';
+import '../../services/workspace_session.dart';
 import '../../widgets/dashboard/dashboard_content.dart';
 import '../../widgets/dashboard/dashboard_style.dart';
+import '../../widgets/dashboard/inventory_health_card.dart';
 import '../home/widgets_home/notification_bell.dart';
 import '../home/widgets_home/recent_activity_card.dart';
-import '../inventory/add_item/add_item_page.dart';
-import '../inventory/inventory_page.dart';
-import '../notifications/notification_page.dart';
 import '../suggestions/suggestions_page.dart';
 
-class DashboardPage extends StatelessWidget {
+class DashboardPage extends StatefulWidget {
+  final WorkspaceSession workspaceSession;
+  final WorkspaceInventoryRepository? inventoryRepository;
   final FirebaseFirestore? firestore;
   final VoidCallback? onCheckNotifications;
-  const DashboardPage({super.key, this.firestore, this.onCheckNotifications});
+  final VoidCallback? onAddTap;
+  final VoidCallback? onInventoryTap;
+  final VoidCallback? onAlertTap;
 
-  FirebaseFirestore get _firestore => firestore ?? FirebaseFirestore.instance;
+  const DashboardPage({
+    super.key,
+    required this.workspaceSession,
+    this.inventoryRepository,
+    this.firestore,
+    this.onCheckNotifications,
+    this.onAddTap,
+    this.onInventoryTap,
+    this.onAlertTap,
+  });
 
-  static const Color bg = DashboardStyle.background;
-  static const Color orange = Color(0xFFF59E0B);
-  static const Color red = Color(0xFFEF4444);
+  @override
+  State<DashboardPage> createState() => _DashboardPageState();
+}
+
+class _DashboardPageState extends State<DashboardPage> {
+  late final WorkspaceInventoryRepository _inventoryRepository;
+  late final Stream<List<InventoryItem>> _inventoryStream;
+
+  @override
+  void initState() {
+    super.initState();
+    _inventoryRepository =
+        widget.inventoryRepository ??
+        WorkspaceInventoryRepository(session: widget.workspaceSession);
+    _inventoryStream = _inventoryRepository.watchItems();
+  }
 
   int _daysLeft(DateTime expiryDate) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final expiry = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
-
     return expiry.difference(today).inDays;
   }
 
-  int _nearExpiryCount(List<QueryDocumentSnapshot> docs) {
-    int count = 0;
+  bool _hasKnownExpiry(InventoryItem item) =>
+      item.expiryDate.millisecondsSinceEpoch != 0;
 
-    for (final doc in docs) {
-      final data = doc.data() as Map<String, dynamic>;
-      final expiryRaw = data['expiryDate'];
+  int _nearExpiryCount(List<InventoryItem> items) => items.where((item) {
+    if (!_hasKnownExpiry(item)) return false;
+    final days = _daysLeft(item.expiryDate);
+    return days >= 0 && days <= 4;
+  }).length;
 
-      if (expiryRaw is Timestamp) {
-        final days = _daysLeft(expiryRaw.toDate());
-        if (days >= 0 && days <= 4) count++;
-      }
-    }
-
-    return count;
-  }
-
-  int _lowStockCount(List<QueryDocumentSnapshot> docs) {
-    int count = 0;
-
-    for (final doc in docs) {
-      final data = doc.data() as Map<String, dynamic>;
-      final quantity = data['quantity'] ?? 0;
-
-      if (quantity <= 2) count++;
-    }
-
-    return count;
-  }
+  int _lowStockCount(List<InventoryItem> items) =>
+      items.where(LowStockPolicy.isLowStock).length;
 
   void _goTo(BuildContext context, Widget page) {
     Navigator.push(context, MaterialPageRoute(builder: (_) => page));
   }
 
-  void _triggerAutoNotification() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (onCheckNotifications != null) {
-        onCheckNotifications!();
-      } else {
-        AutoNotificationTriggerService.checkAndTriggerUnreadAlerts();
-      }
-    });
+  void _showMutationsUnavailable(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Inventory changes are unavailable until secure workspace updates are enabled.',
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: bg,
+      backgroundColor: DashboardStyle.background,
       body: SafeArea(
-        child: StreamBuilder<QuerySnapshot>(
-          stream: _firestore.collection('inventory').snapshots(),
+        child: StreamBuilder<List<InventoryItem>>(
+          stream: _inventoryStream,
           builder: (context, snapshot) {
             if (snapshot.hasError) {
               return const Center(
@@ -95,38 +103,38 @@ class DashboardPage extends StatelessWidget {
               return const Center(child: CircularProgressIndicator());
             }
 
-            final docs = snapshot.data!.docs;
-            final totalItems = docs.length;
-            final nearExpiry = _nearExpiryCount(docs);
-            final lowStock = _lowStockCount(docs);
-
-            _triggerAutoNotification();
-            final user = firestore == null
+            final items = snapshot.data!;
+            final user = widget.firestore == null
                 ? FirebaseAuth.instance.currentUser
                 : null;
 
             return DashboardContent(
               firstName: user?.displayName,
               photoUrl: user?.photoURL,
-              totalItems: totalItems,
-              nearExpiry: nearExpiry,
-              lowStock: lowStock,
-              expired: docs.where((doc) {
-                final raw = (doc.data() as Map<String, dynamic>)['expiryDate'];
-                return raw is Timestamp && _daysLeft(raw.toDate()) < 0;
-              }).length,
-              notificationBell: NotificationBell(firestore: firestore),
+              totalItems: items.length,
+              nearExpiry: _nearExpiryCount(items),
+              lowStock: _lowStockCount(items),
+              expired: items
+                  .where(
+                    (item) =>
+                        _hasKnownExpiry(item) && _daysLeft(item.expiryDate) < 0,
+                  )
+                  .length,
+              notificationBell: NotificationBell(onTap: widget.onAlertTap),
               recentActivity: RecentActivityCard(
-                firestore: firestore,
                 inventoryItems: {
-                  for (final doc in docs)
-                    doc.id: doc.data() as Map<String, dynamic>,
+                  for (final item in items)
+                    item.id: {'name': item.name, 'imageUrl': item.imageUrl},
                 },
               ),
-              onAddTap: () => _goTo(context, const AddItemPage()),
-              onInventoryTap: () => _goTo(context, const InventoryPage()),
+              onAddTap:
+                  widget.onAddTap ?? () => _showMutationsUnavailable(context),
+              onInventoryTap:
+                  widget.onInventoryTap ??
+                  () => _showMutationsUnavailable(context),
               onSuggestionTap: () => _goTo(context, const SuggestionsPage()),
-              onAlertTap: () => _goTo(context, const NotificationPage()),
+              onAlertTap:
+                  widget.onAlertTap ?? () => _showMutationsUnavailable(context),
             );
           },
         ),

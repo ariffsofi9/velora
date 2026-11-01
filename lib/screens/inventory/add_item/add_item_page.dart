@@ -1,12 +1,12 @@
 import '../../../core/theme/app_tokens.dart';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../../logic/firestore_service.dart';
-import '../../../models/inventory_item.dart';
-import '../../../services/activity_service.dart';
+import '../../../services/workspace_inventory_create_service.dart';
+import '../../../services/workspace_session.dart';
 
 import 'widgets_add/add_item_date_box.dart';
 import 'widgets_add/add_item_dropdown.dart';
@@ -16,7 +16,16 @@ import 'widgets_add/add_item_save_button.dart';
 import 'widgets_add/add_item_text_field.dart';
 
 class AddItemPage extends StatefulWidget {
-  const AddItemPage({super.key});
+  final WorkspaceSession? workspaceSession;
+  final WorkspaceInventoryCreator? creator;
+  final String Function()? idempotencyKeyFactory;
+
+  const AddItemPage({
+    super.key,
+    this.workspaceSession,
+    this.creator,
+    this.idempotencyKeyFactory,
+  });
 
   @override
   State<AddItemPage> createState() => _AddItemPageState();
@@ -32,11 +41,23 @@ class _AddItemPageState extends State<AddItemPage> {
   DateTime? selectedDate;
   bool isSaving = false;
   File? selectedImage;
+  String? _submissionFingerprint;
+  String? _idempotencyKey;
+
+  late final WorkspaceInventoryCreator _creator;
 
   final picker = ImagePicker();
 
   final categories = ['Meat', 'Dairy', 'Vegetable', 'Fruit', 'Bakery', 'Other'];
   final units = ['kg', 'g', 'L', 'ml', 'pcs'];
+
+  bool get _hasVerifiedWorkspace => widget.workspaceSession != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _creator = widget.creator ?? FirebaseWorkspaceInventoryCreator();
+  }
 
   @override
   void dispose() {
@@ -71,53 +92,98 @@ class _AddItemPageState extends State<AddItemPage> {
   }
 
   Future<void> _saveItem() async {
-    if (itemNameController.text.trim().isEmpty ||
-        quantityController.text.trim().isEmpty ||
-        selectedDate == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please fill item name, quantity and expiry date'),
-          behavior: SnackBarBehavior.floating,
-        ),
+    if (!_hasVerifiedWorkspace) {
+      _showMessage(
+        'Adding items requires a verified workspace. Please sign in again.',
       );
       return;
     }
+    if (isSaving) return;
+
+    final quantityText = quantityController.text.trim();
+    final quantity = int.tryParse(quantityText);
+    if (itemNameController.text.trim().isEmpty ||
+        quantityText.isEmpty ||
+        selectedDate == null) {
+      _showMessage('Please fill item name, quantity and expiry date');
+      return;
+    }
+    if (quantity == null || quantity < 0) {
+      _showMessage('Quantity must be a whole number of zero or more.');
+      return;
+    }
+
+    final requestWithoutKey = WorkspaceInventoryCreateRequest(
+      idempotencyKey: 'pending-idempotency-key',
+      name: itemNameController.text.trim(),
+      category: selectedCategory,
+      quantity: quantity,
+      unit: selectedUnit,
+      expiryDate: selectedDate!,
+    );
+    final fingerprint = requestWithoutKey.fingerprint;
+    if (_submissionFingerprint != fingerprint || _idempotencyKey == null) {
+      _submissionFingerprint = fingerprint;
+      _idempotencyKey =
+          widget.idempotencyKeyFactory?.call() ?? _newIdempotencyKey();
+    }
+    final request = WorkspaceInventoryCreateRequest(
+      idempotencyKey: _idempotencyKey!,
+      name: requestWithoutKey.name,
+      category: requestWithoutKey.category,
+      quantity: requestWithoutKey.quantity,
+      unit: requestWithoutKey.unit,
+      expiryDate: requestWithoutKey.expiryDate,
+    );
 
     setState(() => isSaving = true);
-
-    final itemName = itemNameController.text.trim();
-
-    final newItem = InventoryItem(
-      id: '',
-      name: itemName,
-      category: selectedCategory,
-      quantity: int.tryParse(quantityController.text.trim()) ?? 0,
-      expiryDate: selectedDate!,
-      imageUrl: selectedImage?.path ?? '',
-      createdAt: DateTime.now(),
-    );
-
-    await FirestoreService.instance.addItem(newItem);
-
-    await ActivityService.addActivity(
-      type: 'stock_in',
-      title: 'Added $itemName',
-      subtitle: 'New item added to inventory',
-    );
-
-    if (!mounted) return;
-
-    setState(() => isSaving = false);
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$itemName added successfully'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-
-    Navigator.pop(context);
+    try {
+      await _creator.createItem(request);
+      if (!mounted) return;
+      setState(() => isSaving = false);
+      _showMessage('${request.name} added successfully');
+      Navigator.pop(context, true);
+    } on WorkspaceInventoryCreateException catch (error) {
+      if (!mounted) return;
+      setState(() => isSaving = false);
+      _showMessage(_failureMessage(error.failure));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => isSaving = false);
+      _showMessage('Unable to add the item. Check your connection and retry.');
+    }
   }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  String _newIdempotencyKey() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    final encoded = bytes.map(
+      (value) => value.toRadixString(16).padLeft(2, '0'),
+    );
+    return encoded.join();
+  }
+
+  String _failureMessage(
+    WorkspaceInventoryCreateFailure failure,
+  ) => switch (failure) {
+    WorkspaceInventoryCreateFailure.invalidInput =>
+      'Check the item details and try again.',
+    WorkspaceInventoryCreateFailure.unauthenticated ||
+    WorkspaceInventoryCreateFailure.permissionDenied =>
+      'Your workspace access could not be verified. Please sign in again.',
+    WorkspaceInventoryCreateFailure.conflict =>
+      'This request conflicts with an earlier submission. Change the item and retry.',
+    WorkspaceInventoryCreateFailure.unavailable =>
+      'Unable to reach inventory services. Check your connection and retry.',
+    WorkspaceInventoryCreateFailure.internal =>
+      'Unable to add the item right now. Please retry.',
+  };
 
   String get expiryText {
     if (selectedDate == null) return 'Select date';

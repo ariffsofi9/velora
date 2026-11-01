@@ -1,100 +1,51 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
-import '../../notifications/notification_page.dart';
 import '../../../widgets/dashboard/dashboard_style.dart';
 
+/// Safe bell shell. Notification history stays disabled until it is scoped.
 class NotificationBell extends StatelessWidget {
-  final FirebaseFirestore? firestore;
-  const NotificationBell({super.key, this.firestore});
+  final VoidCallback? onTap;
 
-  int _unreadCount(QuerySnapshot snapshot) {
-    int count = 0;
+  const NotificationBell({super.key, this.onTap});
 
-    for (final doc in snapshot.docs) {
-      final data = doc.data() as Map<String, dynamic>;
-
-      final isRead = data['isRead'] == true;
-      final isDismissed = data['isDismissed'] == true;
-
-      if (!isRead && !isDismissed) {
-        count++;
-      }
+  void _handleTap(BuildContext context) {
+    final callback = onTap;
+    if (callback != null) {
+      callback();
+      return;
     }
-
-    return count;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Notification history is unavailable until secure workspace notifications are enabled.',
+        ),
+      ),
+    );
   }
 
   @override
-  Widget build(BuildContext context) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: (firestore ?? FirebaseFirestore.instance)
-          .collection('notifications')
-          .snapshots(),
-      builder: (context, snapshot) {
-        final count = snapshot.hasData ? _unreadCount(snapshot.data!) : 0;
-
-        return Tooltip(
-          message: 'Notifications',
-          child: Semantics(
-            button: true,
-            label: count == 0
-                ? 'Notifications'
-                : 'Notifications, $count unread',
-            child: InkWell(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const NotificationPage()),
-                );
-              },
-              borderRadius: BorderRadius.circular(999),
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    height: 48,
-                    width: 48,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: DashboardStyle.border),
-                    ),
-                    child: const Icon(
-                      Icons.notifications_rounded,
-                      color: DashboardStyle.primary,
-                    ),
-                  ),
-                  if (count > 0)
-                    Positioned(
-                      top: -4,
-                      right: -4,
-                      child: Container(
-                        constraints: const BoxConstraints(minWidth: 19),
-                        padding: const EdgeInsets.symmetric(horizontal: 5),
-                        decoration: BoxDecoration(
-                          color: DashboardStyle.danger,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: Colors.white, width: 2),
-                        ),
-                        child: Center(
-                          child: Text(
-                            count > 9 ? '9+' : count.toString(),
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+  Widget build(BuildContext context) => Tooltip(
+    message: 'Alerts',
+    child: Semantics(
+      button: true,
+      label: 'Alerts',
+      child: InkWell(
+        onTap: () => _handleTap(context),
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          height: 48,
+          width: 48,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: DashboardStyle.border),
           ),
-        );
-      },
-    );
-  }
+          child: const Icon(
+            Icons.notifications_rounded,
+            color: DashboardStyle.primary,
+          ),
+        ),
+      ),
+    ),
+  );
 }

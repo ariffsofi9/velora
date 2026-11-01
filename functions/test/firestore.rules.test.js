@@ -68,6 +68,8 @@ test.beforeEach(async () => {
     await db.doc('user_cafe_memberships/owner-b').set(
       link('owner-b', 'cafe-b'),
     );
+    await db.doc('cafes/cafe-a/inventory/item-a').set({name: 'Milk'});
+    await db.doc('cafes/cafe-b/inventory/item-b').set({name: 'Coffee'});
   });
 });
 
@@ -106,6 +108,41 @@ test('clients cannot forge mappings, roles or owner workspaces', async () => {
     status: 'active',
     schemaVersion: 1,
   }));
+});
+
+test('active members can read only their cafe inventory', async () => {
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const staff = environment.authenticatedContext('staff-a').firestore();
+  const outsider = environment.authenticatedContext('owner-b').firestore();
+
+  await assertSucceeds(owner.doc('cafes/cafe-a/inventory/item-a').get());
+  await assertSucceeds(staff.collection('cafes/cafe-a/inventory').get());
+  await assertFails(outsider.doc('cafes/cafe-a/inventory/item-a').get());
+  await assertFails(outsider.collection('cafes/cafe-a/inventory').get());
+});
+
+test('unauthenticated and inactive members cannot read cafe inventory', async () => {
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertFails(anonymous.doc('cafes/cafe-a/inventory/item-a').get());
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().doc('cafes/cafe-a/members/staff-a').update({
+      status: 'disabled',
+    });
+  });
+  const staff = environment.authenticatedContext('staff-a').firestore();
+  await assertFails(staff.doc('cafes/cafe-a/inventory/item-a').get());
+});
+
+test('all client inventory mutations remain denied', async () => {
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const item = owner.doc('cafes/cafe-a/inventory/item-a');
+
+  await assertFails(
+    owner.doc('cafes/cafe-a/inventory/new-item').set({name: 'Tea'}),
+  );
+  await assertFails(item.update({name: 'Changed'}));
+  await assertFails(item.delete());
 });
 
 test('users can create only their own validated profile', async () => {

@@ -51,6 +51,8 @@ void main() {
             debugShowCheckedModeBanner: false,
             home: Scaffold(
               body: DashboardPage(
+                workspaceSession: dashboardSession,
+                inventoryRepository: dashboardInventoryRepository(),
                 firestore: dashboardFirestore(),
                 onCheckNotifications: () {},
               ),

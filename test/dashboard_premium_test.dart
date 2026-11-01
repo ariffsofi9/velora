@@ -3,19 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/screens/dashboard/dashboard_page.dart';
 import 'package:velora/screens/home/widgets_home/notification_bell.dart';
-import 'package:velora/screens/notifications/notification_page.dart';
 import 'package:velora/widgets/dashboard/dashboard_content.dart';
 import 'package:velora/widgets/dashboard/dashboard_header.dart';
 import 'package:velora/widgets/dashboard/inventory_health_card.dart';
 import 'dashboard_test_fakes.dart';
 import 'package:velora/widgets/dashboard/activity_thumbnail.dart';
-
-class _Observer extends NavigatorObserver {
-  Route<dynamic>? route;
-  @override
-  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
-      this.route = route;
-}
 
 Widget _app(Widget child, {NavigatorObserver? observer}) => MaterialApp(
   theme: AppTheme.light,
@@ -126,9 +118,15 @@ void main() {
     tester,
   ) async {
     final db = dashboardFirestore();
-    db.collections['inventory'] = dashboardCollection([]);
     await tester.pumpWidget(
-      _app(DashboardPage(firestore: db, onCheckNotifications: () {})),
+      _app(
+        DashboardPage(
+          workspaceSession: dashboardSession,
+          inventoryRepository: dashboardInventoryRepository(values: const []),
+          firestore: db,
+          onCheckNotifications: () {},
+        ),
+      ),
     );
     await tester.pumpAndSettle();
     expect(
@@ -146,11 +144,17 @@ void main() {
     'Inventory failure displays unavailable health, not zero statistics',
     (tester) async {
       final db = dashboardFirestore();
-      db.collections['inventory'] = DashboardCollection(
-        Stream.error(StateError('offline')),
-      );
       await tester.pumpWidget(
-        _app(DashboardPage(firestore: db, onCheckNotifications: () {})),
+        _app(
+          DashboardPage(
+            workspaceSession: dashboardSession,
+            inventoryRepository: dashboardInventoryRepository(
+              stream: Stream.error(StateError('offline')),
+            ),
+            firestore: db,
+            onCheckNotifications: () {},
+          ),
+        ),
       );
       await tester.pumpAndSettle();
       expect(find.text('Inventory health unavailable'), findsOneWidget);
@@ -216,25 +220,12 @@ void main() {
     },
   );
 
-  testWidgets('Bell retains unread badge and notification destination', (
-    tester,
-  ) async {
-    final observer = _Observer();
-    await tester.pumpWidget(
-      _app(
-        NotificationBell(firestore: dashboardFirestore()),
-        observer: observer,
-      ),
-    );
+  testWidgets('Bell uses a safe injected Alerts destination', (tester) async {
+    var taps = 0;
+    await tester.pumpWidget(_app(NotificationBell(onTap: () => taps++)));
     await tester.pumpAndSettle();
-    expect(find.text('2'), findsOneWidget);
-    expect(find.byTooltip('Notifications'), findsOneWidget);
+    expect(find.byTooltip('Alerts'), findsOneWidget);
     await tester.tap(find.byIcon(Icons.notifications_rounded));
-    final route = observer.route! as MaterialPageRoute<dynamic>;
-    expect(
-      route.builder(tester.element(find.byType(NotificationBell))),
-      isA<NotificationPage>(),
-    );
-    await tester.pumpWidget(const SizedBox());
+    expect(taps, 1);
   });
 }

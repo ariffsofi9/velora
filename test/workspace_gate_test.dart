@@ -49,7 +49,9 @@ Widget _app(_Resolver resolver) => MaterialApp(
   theme: AppTheme.light,
   home: WorkspaceGate(
     resolver: resolver,
-    homeBuilder: (_) => const Scaffold(body: Text('Verified Home')),
+    homeBuilder: (_, session) => Scaffold(
+      body: Text('Verified Home ${session.cafeId} ${session.role.name}'),
+    ),
     setupBuilder: (_) => const Scaffold(body: Text('Setup Preview')),
   ),
 );
@@ -87,7 +89,10 @@ void main() {
       await tester.pumpWidget(_app(resolver));
       await tester.pumpAndSettle();
 
-      expect(find.text('Verified Home'), findsOneWidget);
+      expect(
+        find.text('Verified Home cafe-a ${workspace.role.name}'),
+        findsOneWidget,
+      );
       expect(find.text('Setup Preview'), findsNothing);
       expect(resolver.calls, 1);
     });
@@ -105,7 +110,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Setup Preview'), findsOneWidget);
-    expect(find.text('Verified Home'), findsNothing);
+    expect(find.textContaining('Verified Home'), findsNothing);
   });
 
   testWidgets('inconsistent membership fails closed', (tester) async {
@@ -119,7 +124,7 @@ void main() {
 
     expect(find.text('Workspace access not verified'), findsOneWidget);
     expect(find.byKey(const ValueKey('workspace-retry')), findsOneWidget);
-    expect(find.text('Verified Home'), findsNothing);
+    expect(find.textContaining('Verified Home'), findsNothing);
     expect(find.text('Setup Preview'), findsNothing);
   });
 
@@ -138,7 +143,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const ValueKey('workspace-retry')), findsOneWidget);
-      expect(find.text('Verified Home'), findsNothing);
+      expect(find.textContaining('Verified Home'), findsNothing);
       expect(find.text('Setup Preview'), findsNothing);
     });
   }
@@ -158,7 +163,7 @@ void main() {
     resolver.result = () async => owner;
     await tester.tap(find.byKey(const ValueKey('workspace-retry')));
     await tester.pumpAndSettle();
-    expect(find.text('Verified Home'), findsOneWidget);
+    expect(find.text('Verified Home cafe-a owner'), findsOneWidget);
     expect(resolver.calls, 2);
   });
 }

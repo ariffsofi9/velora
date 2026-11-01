@@ -1,13 +1,17 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
+import '../../models/inventory_item.dart';
+import '../../logic/low_stock_policy.dart';
+import '../../repositories/workspace_inventory_repository.dart';
+import '../../services/workspace_session.dart';
 import '../notifications/widgets_notification/notification_filter_bar.dart';
 
 class AlertsPage extends StatefulWidget {
-  final FirebaseFirestore? firestore;
+  final WorkspaceSession? workspaceSession;
+  final WorkspaceInventoryRepository? repository;
 
-  const AlertsPage({super.key, this.firestore});
+  const AlertsPage({super.key, this.workspaceSession, this.repository});
 
   @override
   State<AlertsPage> createState() => _AlertsPageState();
@@ -17,17 +21,31 @@ class _AlertsPageState extends State<AlertsPage> {
   static const red = Color(0xFFEF4444);
   static const orange = Color(0xFFF97316);
 
+  Stream<List<InventoryItem>>? _itemsStream;
   String _selectedFilter = 'All';
 
-  bool _isLowStock(Map<String, dynamic> data) {
-    final quantity = (data['quantity'] ?? 0) as num;
-    return quantity.toInt() <= 5;
+  @override
+  void initState() {
+    super.initState();
+    var repository = widget.repository;
+    final session = widget.workspaceSession;
+    if (repository == null && session != null) {
+      repository = WorkspaceInventoryRepository(session: session);
+    }
+    _itemsStream = repository?.watchItems();
   }
 
-  bool _isNearExpiry(Map<String, dynamic> data, DateTime now) {
-    final expiry = data['expiryDate'];
-    if (expiry is! Timestamp) return false;
-    final difference = expiry.toDate().difference(now).inDays;
+  bool _isLowStock(InventoryItem item) => LowStockPolicy.isLowStock(item);
+
+  bool _isNearExpiry(InventoryItem item, DateTime now) {
+    if (item.expiryDate.millisecondsSinceEpoch == 0) return false;
+    final today = DateTime(now.year, now.month, now.day);
+    final expiry = DateTime(
+      item.expiryDate.year,
+      item.expiryDate.month,
+      item.expiryDate.day,
+    );
+    final difference = expiry.difference(today).inDays;
     return difference >= 0 && difference <= 4;
   }
 
@@ -39,90 +57,108 @@ class _AlertsPageState extends State<AlertsPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: AppColors.background,
-    appBar: AppBar(
-      backgroundColor: AppColors.background,
-      elevation: 0,
-      title: const Text(
-        'Alerts',
-        style: TextStyle(
-          color: AppColors.textPrimary,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-      iconTheme: const IconThemeData(color: AppColors.textPrimary),
-    ),
-    body: StreamBuilder<QuerySnapshot>(
-      stream: (widget.firestore ?? FirebaseFirestore.instance)
-          .collection('inventory')
-          .snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return Center(
-            child: TextButton.icon(
-              onPressed: () => setState(() {}),
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Retry alerts'),
-            ),
-          );
-        }
-        if (!snapshot.hasData) {
-          return const Center(
-            child: CircularProgressIndicator(color: AppColors.primary),
-          );
-        }
-
-        final now = DateTime.now();
-        final alerts = snapshot.data!.docs.where((document) {
-          final data = document.data() as Map<String, dynamic>;
-          return _matchesFilter(
-            isLowStock: _isLowStock(data),
-            isNearExpiry: _isNearExpiry(data, now),
-          );
-        }).toList();
-
-        return Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 760),
-            child: SizedBox(
-              height: double.infinity,
-              child: Column(
-                children: [
-                  NotificationFilterBar(
-                    selected: _selectedFilter,
-                    onSelected: (value) {
-                      setState(() => _selectedFilter = value);
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: alerts.isEmpty
-                        ? const _EmptyAlerts()
-                        : ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                            itemCount: alerts.length,
-                            itemBuilder: (context, index) {
-                              final data =
-                                  alerts[index].data() as Map<String, dynamic>;
-                              final quantity = (data['quantity'] ?? 0) as num;
-                              return _InventoryAlertCard(
-                                name: (data['name'] ?? 'Item').toString(),
-                                quantity: quantity.toInt(),
-                                isLowStock: _isLowStock(data),
-                                isNearExpiry: _isNearExpiry(data, now),
-                              );
-                            },
-                          ),
-                  ),
-                ],
+  Widget build(BuildContext context) {
+    final itemsStream = _itemsStream;
+    if (itemsStream == null) {
+      return const Scaffold(
+        backgroundColor: AppColors.background,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                'Alerts are unavailable because workspace access was not verified.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textSecondary),
               ),
             ),
           ),
-        );
-      },
-    ),
-  );
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        backgroundColor: AppColors.background,
+        elevation: 0,
+        title: const Text(
+          'Alerts',
+          style: TextStyle(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        iconTheme: const IconThemeData(color: AppColors.textPrimary),
+      ),
+      body: StreamBuilder<List<InventoryItem>>(
+        stream: itemsStream,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: TextButton.icon(
+                onPressed: () => setState(() {}),
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('Retry alerts'),
+              ),
+            );
+          }
+          if (!snapshot.hasData) {
+            return const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            );
+          }
+
+          final now = DateTime.now();
+          final alerts = snapshot.data!
+              .where((item) {
+                return _matchesFilter(
+                  isLowStock: _isLowStock(item),
+                  isNearExpiry: _isNearExpiry(item, now),
+                );
+              })
+              .toList(growable: false);
+
+          return Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: SizedBox(
+                height: double.infinity,
+                child: Column(
+                  children: [
+                    NotificationFilterBar(
+                      selected: _selectedFilter,
+                      onSelected: (value) {
+                        setState(() => _selectedFilter = value);
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: alerts.isEmpty
+                          ? const _EmptyAlerts()
+                          : ListView.builder(
+                              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                              itemCount: alerts.length,
+                              itemBuilder: (context, index) {
+                                final item = alerts[index];
+                                return _InventoryAlertCard(
+                                  name: item.name,
+                                  quantity: item.quantity,
+                                  isLowStock: _isLowStock(item),
+                                  isNearExpiry: _isNearExpiry(item, now),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
 class _InventoryAlertCard extends StatelessWidget {

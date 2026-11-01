@@ -1,12 +1,16 @@
+// Legacy generation internals remain compiled for a later trusted backend,
+// but Phase 2.3C.3 exposes no entry point to them.
+// ignore_for_file: unused_element, unused_field
+
 part of 'suggestions_page.dart';
 
 abstract class _SuggestionsFoundation extends State<SuggestionsPage> {
   final GroqService _groqService = GroqService();
-  final AiQuotaService _quotaService = AiQuotaService();
-  final AiGenerateService _aiService = AiGenerateService();
-  final AiCacheService _cacheService = AiCacheService();
-  final AiInventoryChecker _inventoryChecker = AiInventoryChecker();
-  final AiRecipeSaveService _recipeSaveService = AiRecipeSaveService();
+  AiQuotaService get _quotaService => AiQuotaService();
+  AiGenerateService get _aiService => AiGenerateService();
+  AiCacheService get _cacheService => AiCacheService();
+  AiInventoryChecker get _inventoryChecker => AiInventoryChecker();
+  AiRecipeSaveService get _recipeSaveService => AiRecipeSaveService();
   final SuggestionHelper _helper = SuggestionHelper();
 
   final RestockSuggestionService _restockService = RestockSuggestionService();

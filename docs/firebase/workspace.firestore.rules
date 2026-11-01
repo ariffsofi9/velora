@@ -76,7 +76,11 @@ service cloud.firestore {
         allow list: if isOwner(cafeId);
         allow write: if false;
       }
-      // Future inventory/activity/AI paths intentionally have no grants yet.
+      match /inventory/{itemId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
+      // Future activity/AI paths intentionally have no grants yet.
     }
     match /{document=**} { allow read, write: if false; }
   }

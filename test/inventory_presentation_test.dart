@@ -2,10 +2,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/inventory_item.dart';
+import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/screens/inventory/add_item/add_item_page.dart';
 import 'package:velora/screens/inventory/edit_item_page.dart';
 import 'package:velora/screens/inventory/item_details_page.dart';
 import 'package:velora/screens/inventory/widgets_inventory/inventory_card.dart';
+import 'package:velora/services/workspace_session.dart';
+
+final _session = WorkspaceSession.fromVerified(
+  const CafeWorkspace(
+    cafeId: 'inventory-cafe',
+    uid: 'staff-a',
+    ownerUid: 'owner-a',
+    role: CafeRole.staff,
+  ),
+);
 
 void main() {
   final item = InventoryItem(
@@ -23,9 +34,10 @@ void main() {
         child: InventoryCard(item: item, onTap: () {}),
       ),
     ),
-    'Add Item': () => const AddItemPage(),
-    'Edit Item': () => EditItemPage(item: item),
-    'Item Details': () => ItemDetailsPage(item: item),
+    'Add Item': () => AddItemPage(workspaceSession: _session),
+    'Edit Item': () => EditItemPage(item: item, workspaceSession: _session),
+    'Item Details': () =>
+        ItemDetailsPage(item: item, workspaceSession: _session),
   };
 
   testWidgets('Inventory row opens its existing details action', (
@@ -51,7 +63,10 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      MaterialApp(theme: AppTheme.light, home: const AddItemPage()),
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AddItemPage(workspaceSession: _session),
+      ),
     );
 
     await tester.ensureVisible(find.text('Save Item'));
@@ -64,7 +79,7 @@ void main() {
     );
   });
 
-  testWidgets('Item Details exposes only the existing supported actions', (
+  testWidgets('Item Details exposes trusted stock and edit actions only', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -75,10 +90,10 @@ void main() {
     );
 
     expect(find.text('Edit Item'), findsOneWidget);
-    expect(find.text('Mark as Used'), findsOneWidget);
-    expect(find.text('Delete Item'), findsOneWidget);
-    expect(find.text('Stock In'), findsNothing);
-    expect(find.text('Stock Out'), findsNothing);
+    expect(find.text('Stock In'), findsOneWidget);
+    expect(find.text('Stock Out'), findsOneWidget);
+    expect(find.text('Mark as Used'), findsNothing);
+    expect(find.text('Delete Item'), findsNothing);
   });
 
   for (final entry in screens.entries) {

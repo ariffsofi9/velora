@@ -77,6 +77,8 @@ void main() {
         'forgot': () => const ForgotPasswordPage(),
         'dashboard': () => Scaffold(
           body: DashboardPage(
+            workspaceSession: dashboardSession,
+            inventoryRepository: dashboardInventoryRepository(),
             firestore: dashboardFirestore(),
             onCheckNotifications: () {},
           ),

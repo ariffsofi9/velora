@@ -1,21 +1,34 @@
 import 'widgets_inventory/item_detail_hero.dart';
 import '../../core/theme/app_tokens.dart';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
-import '../../services/activity_service.dart';
+import '../../repositories/workspace_inventory_repository.dart';
+import '../../services/workspace_inventory_update_service.dart';
+import '../../services/workspace_inventory_stock_service.dart';
+import '../../services/workspace_session.dart';
 import 'edit_item_page.dart';
+import 'stock/stock_adjustment_page.dart';
 import 'utils_inventory/expiry_helper.dart';
 import 'widgets_inventory/item_detail_action_button.dart';
 import 'widgets_inventory/item_detail_info_card.dart';
-import 'widgets_inventory/mark_as_used_dialog.dart';
 
 class ItemDetailsPage extends StatelessWidget {
   final InventoryItem item;
+  final WorkspaceSession? workspaceSession;
+  final WorkspaceInventoryRepository? repository;
+  final WorkspaceInventoryUpdater? updater;
+  final WorkspaceInventoryStockAdjuster? stockAdjuster;
 
-  const ItemDetailsPage({super.key, required this.item});
+  const ItemDetailsPage({
+    super.key,
+    required this.item,
+    this.workspaceSession,
+    this.repository,
+    this.updater,
+    this.stockAdjuster,
+  });
 
   bool get hasImage => item.imageUrl.trim().isNotEmpty;
 
@@ -59,91 +72,60 @@ class ItemDetailsPage extends StatelessWidget {
     return '${date.day}/${date.month}/${date.year}';
   }
 
-  Future<void> _deleteItem(BuildContext context) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete Item?'),
-        content: Text('Are you sure you want to delete ${item.name}?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text(
-              'Delete',
-              style: TextStyle(color: Color(0xFFEF4444)),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    await FirebaseFirestore.instance
-        .collection('inventory')
-        .doc(item.id)
-        .delete();
-
-    await ActivityService.addActivity(
-      type: 'item_deleted',
-      title: 'Deleted ${item.name}',
-      subtitle: 'Item removed from inventory',
-    );
-
-    if (context.mounted) Navigator.pop(context);
-  }
-
-  Future<void> _markAsUsed(BuildContext context) async {
-    final usedAmount = await showDialog<int>(
-      context: context,
-      builder: (_) => MarkAsUsedDialog(currentQuantity: item.quantity),
-    );
-
-    if (usedAmount == null) return;
-
-    final newQuantity = item.quantity - usedAmount;
-
-    await FirebaseFirestore.instance
-        .collection('inventory')
-        .doc(item.id)
-        .update({'quantity': newQuantity});
-
-    await FirebaseFirestore.instance.collection('inventory_records').add({
-      'itemId': item.id,
-      'itemName': item.name,
-      'type': 'stock_out',
-      'quantity': usedAmount,
-      'remainingQuantity': newQuantity,
-      'createdAt': Timestamp.now(),
-    });
-
-    await ActivityService.addActivity(
-      type: 'stock_out',
-      title: '${item.name} marked as used',
-      subtitle: 'Used $usedAmount, remaining $newQuantity',
-    );
-
-    if (!context.mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${item.name} updated successfully'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-
-    Navigator.pop(context);
-  }
-
-  void _goToEdit(BuildContext context) {
-    Navigator.push(
+  Future<void> _goToEdit(BuildContext context) async {
+    if (workspaceSession == null || item.id.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Editing requires a verified workspace item.'),
+        ),
+      );
+      return;
+    }
+    final updated = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => EditItemPage(item: item)),
+      MaterialPageRoute(
+        builder: (_) => EditItemPage(
+          item: item,
+          workspaceSession: workspaceSession,
+          repository: repository,
+          updater: updater,
+        ),
+      ),
     );
+    if (updated == true && context.mounted) Navigator.pop(context, true);
+  }
+
+  Future<void> _goToStock(
+    BuildContext context,
+    StockAdjustmentType type,
+  ) async {
+    if (workspaceSession == null || item.id.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Stock adjustments require a verified workspace item.'),
+        ),
+      );
+      return;
+    }
+    final adjusted = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => type == StockAdjustmentType.stockIn
+            ? StockInPage(
+                item: item,
+                workspaceSession: workspaceSession,
+                repository: repository,
+                adjuster: stockAdjuster,
+              )
+            : StockOutPage(
+                item: item,
+                workspaceSession: workspaceSession,
+                repository: repository,
+                adjuster: stockAdjuster,
+              ),
+      ),
+    );
+    if (adjusted == true && context.mounted) Navigator.pop(context, true);
   }
 
   @override
@@ -231,28 +213,30 @@ class ItemDetailsPage extends StatelessWidget {
                 children: [
                   Expanded(
                     child: ItemDetailActionButton(
+                      label: 'Stock In',
+                      icon: Icons.add_circle_outline,
+                      color: AppColors.primary,
+                      onTap: () =>
+                          _goToStock(context, StockAdjustmentType.stockIn),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ItemDetailActionButton(
+                      label: 'Stock Out',
+                      icon: Icons.remove_circle_outline,
+                      color: AppColors.warning,
+                      onTap: () =>
+                          _goToStock(context, StockAdjustmentType.stockOut),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ItemDetailActionButton(
                       label: 'Edit Item',
                       icon: Icons.edit_outlined,
                       color: AppColors.primary,
                       onTap: () => _goToEdit(context),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ItemDetailActionButton(
-                      label: 'Mark as Used',
-                      icon: Icons.check_circle_outline,
-                      color: AppColors.success,
-                      onTap: () => _markAsUsed(context),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ItemDetailActionButton(
-                      label: 'Delete Item',
-                      icon: Icons.delete_outline,
-                      color: AppColors.danger,
-                      onTap: () => _deleteItem(context),
                     ),
                   ),
                 ],

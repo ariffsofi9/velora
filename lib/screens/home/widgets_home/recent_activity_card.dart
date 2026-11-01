@@ -4,11 +4,11 @@ import '../../../widgets/dashboard/dashboard_style.dart';
 import '../../../widgets/dashboard/activity_thumbnail.dart';
 
 class RecentActivityCard extends StatelessWidget {
-  final FirebaseFirestore? firestore;
+  final Stream<QuerySnapshot<Map<String, dynamic>>>? activityStream;
   final Map<String, Map<String, dynamic>> inventoryItems;
   const RecentActivityCard({
     super.key,
-    this.firestore,
+    this.activityStream,
     this.inventoryItems = const {},
   });
 
@@ -97,116 +97,121 @@ class RecentActivityCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          StreamBuilder<QuerySnapshot>(
-            stream: (firestore ?? FirebaseFirestore.instance)
-                .collection('inventory_records')
-                .orderBy('createdAt', descending: true)
-                .limit(4)
-                .snapshots(),
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
-                return const Text(
-                  'Recent activity cannot load right now.',
-                  style: TextStyle(color: DashboardStyle.danger),
-                );
-              }
-              if (!snapshot.hasData) {
-                return const SizedBox(
-                  height: 90,
-                  child: Center(
-                    child: CircularProgressIndicator(
-                      color: DashboardStyle.primary,
-                    ),
-                  ),
-                );
-              }
-              final docs = snapshot.data!.docs;
-              if (docs.isEmpty) {
-                return const Text(
-                  'No stock activity yet.',
-                  style: TextStyle(color: DashboardStyle.secondary),
-                );
-              }
-              return Column(
-                children: docs.map((doc) {
-                  final data = doc.data() as Map<String, dynamic>;
-                  final type = (data['type'] ?? '').toString();
-                  final color = _color(type);
-                  final item =
-                      inventoryItems[data['itemId']?.toString()] ??
-                      const <String, dynamic>{};
-                  final image = (data['imageUrl'] ?? item['imageUrl'] ?? '')
-                      .toString();
-                  return Container(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(
-                      border: doc == docs.last
-                          ? null
-                          : const Border(
-                              bottom: BorderSide(color: DashboardStyle.border),
-                            ),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CircleAvatar(
-                          radius: 14,
-                          backgroundColor: color.withAlpha(20),
-                          child: Icon(_icon(type), color: color, size: 18),
-                        ),
-                        const SizedBox(width: 8),
-                        ActivityThumbnail(imageUrl: image),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _formatType(type),
-                                style: text.titleSmall?.copyWith(
-                                  color: DashboardStyle.forest,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _message(data),
-                                style: text.bodySmall?.copyWith(
-                                  color: DashboardStyle.secondary,
-                                  fontWeight: FontWeight.w400,
-                                ),
-                              ),
-                              if (MediaQuery.textScalerOf(context).scale(12) >
-                                      16 ||
-                                  MediaQuery.sizeOf(context).width < 375) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  _timeAgo(data['createdAt']),
-                                  style: text.bodySmall?.copyWith(
-                                    color: DashboardStyle.secondary,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        if (MediaQuery.textScalerOf(context).scale(12) <= 16 &&
-                            MediaQuery.sizeOf(context).width >= 375) ...[
-                          const SizedBox(width: 8),
-                          Text(
-                            _timeAgo(data['createdAt']),
-                            style: text.bodySmall?.copyWith(
-                              color: DashboardStyle.secondary,
-                            ),
-                          ),
-                        ],
-                      ],
+          if (activityStream == null)
+            const Text(
+              'Recent activity is unavailable until secure workspace activity is enabled.',
+              style: TextStyle(color: DashboardStyle.secondary),
+            )
+          else
+            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: activityStream,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return const Text(
+                    'Recent activity cannot load right now.',
+                    style: TextStyle(color: DashboardStyle.danger),
+                  );
+                }
+                if (!snapshot.hasData) {
+                  return const SizedBox(
+                    height: 90,
+                    child: Center(
+                      child: CircularProgressIndicator(
+                        color: DashboardStyle.primary,
+                      ),
                     ),
                   );
-                }).toList(),
-              );
-            },
-          ),
+                }
+                final docs = snapshot.data!.docs;
+                if (docs.isEmpty) {
+                  return const Text(
+                    'No stock activity yet.',
+                    style: TextStyle(color: DashboardStyle.secondary),
+                  );
+                }
+                return Column(
+                  children: docs.map((doc) {
+                    final data = doc.data();
+                    final type = (data['type'] ?? '').toString();
+                    final color = _color(type);
+                    final item =
+                        inventoryItems[data['itemId']?.toString()] ??
+                        const <String, dynamic>{};
+                    final image = (data['imageUrl'] ?? item['imageUrl'] ?? '')
+                        .toString();
+                    return Container(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      decoration: BoxDecoration(
+                        border: doc == docs.last
+                            ? null
+                            : const Border(
+                                bottom: BorderSide(
+                                  color: DashboardStyle.border,
+                                ),
+                              ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CircleAvatar(
+                            radius: 14,
+                            backgroundColor: color.withAlpha(20),
+                            child: Icon(_icon(type), color: color, size: 18),
+                          ),
+                          const SizedBox(width: 8),
+                          ActivityThumbnail(imageUrl: image),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _formatType(type),
+                                  style: text.titleSmall?.copyWith(
+                                    color: DashboardStyle.forest,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _message(data),
+                                  style: text.bodySmall?.copyWith(
+                                    color: DashboardStyle.secondary,
+                                    fontWeight: FontWeight.w400,
+                                  ),
+                                ),
+                                if (MediaQuery.textScalerOf(context).scale(12) >
+                                        16 ||
+                                    MediaQuery.sizeOf(context).width < 375) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _timeAgo(data['createdAt']),
+                                    style: text.bodySmall?.copyWith(
+                                      color: DashboardStyle.secondary,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                          if (MediaQuery.textScalerOf(context).scale(12) <=
+                                  16 &&
+                              MediaQuery.sizeOf(context).width >= 375) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              _timeAgo(data['createdAt']),
+                              style: text.bodySmall?.copyWith(
+                                color: DashboardStyle.secondary,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                );
+              },
+            ),
         ],
       ),
     );

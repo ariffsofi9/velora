@@ -3,12 +3,10 @@ import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
+import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/dashboard/dashboard_page.dart';
 import 'package:velora/screens/home/widgets_home/bottom_bar.dart';
 import 'package:velora/screens/home/widgets_home/recent_activity_card.dart';
-import 'package:velora/screens/inventory/add_item/add_item_page.dart';
-import 'package:velora/screens/inventory/inventory_page.dart';
-import 'package:velora/screens/notifications/notification_page.dart';
 import 'package:velora/screens/suggestions/suggestions_page.dart';
 import 'dashboard_test_fakes.dart';
 
@@ -40,13 +38,18 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final stream = StreamController<QuerySnapshot<Map<String, dynamic>>>();
-      final db = DashboardFirestore({
-        'inventory': DashboardCollection(stream.stream),
-      });
+      final stream = StreamController<List<WorkspaceInventoryDocument>>();
+      final db = dashboardFirestore();
       await tester.pumpWidget(
         app(
-          DashboardPage(firestore: db, onCheckNotifications: () {}),
+          DashboardPage(
+            workspaceSession: dashboardSession,
+            inventoryRepository: dashboardInventoryRepository(
+              stream: stream.stream,
+            ),
+            firestore: db,
+            onCheckNotifications: () {},
+          ),
           scale: 2,
         ),
       );
@@ -60,54 +63,93 @@ void main() {
       unawaited(stream.close());
     },
   );
-  testWidgets(
-    'Live inventory thresholds, unread alerts and activity query are preserved',
-    (tester) async {
-      final db = dashboardFirestore();
-      await tester.pumpWidget(
-        app(DashboardPage(firestore: db, onCheckNotifications: () {})),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        tester.widget<Text>(find.byKey(const ValueKey('total-count'))).data,
-        '6',
-      );
-      expect(
-        tester
-            .widget<Text>(find.byKey(const ValueKey('near-expiry-count')))
-            .data,
-        '3',
-      );
-      expect(
-        tester.widget<Text>(find.byKey(const ValueKey('low-stock-count'))).data,
-        '4',
-      );
-      expect(
-        tester.widget<Text>(find.byKey(const ValueKey('expired-count'))).data,
-        '1',
-      );
-      expect(find.text('2'), findsOneWidget);
-      await tester.scrollUntilVisible(find.text('Recent Activity'), 250);
-      await tester.pumpAndSettle();
-      expect(find.text('Stock In'), findsOneWidget);
-      expect(find.text('Milk added to inventory'), findsOneWidget);
-      expect(find.text('5 min ago'), findsOneWidget);
-      expect(find.text('Stock Out'), findsOneWidget);
-      expect(find.textContaining('2 used'), findsOneWidget);
-      expect(find.text('2 hours ago'), findsOneWidget);
-      final query = db.collections['inventory_records']!;
-      expect(query.orderedField, 'createdAt');
-      expect(query.descending, isTrue);
-      expect(query.queryLimit, 4);
-    },
-  );
+  testWidgets('Scoped inventory uses the shared low-stock threshold', (
+    tester,
+  ) async {
+    final db = dashboardFirestore();
+    await tester.pumpWidget(
+      app(
+        DashboardPage(
+          workspaceSession: dashboardSession,
+          inventoryRepository: dashboardInventoryRepository(),
+          firestore: db,
+          onCheckNotifications: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('total-count'))).data,
+      '6',
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('near-expiry-count'))).data,
+      '3',
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('low-stock-count'))).data,
+      '5',
+    );
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('expired-count'))).data,
+      '1',
+    );
+    await tester.scrollUntilVisible(find.text('Recent Activity'), 250);
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Recent activity is unavailable until secure workspace activity is enabled.',
+      ),
+      findsOneWidget,
+    );
+    final query = db.collections['inventory_records']!;
+    expect(query.calls, isEmpty);
+  });
 
-  final destinations = <String, Type>{
-    'Add Item': AddItemPage,
-    'Inventory': InventoryPage,
-    'AI Suggestions': SuggestionsPage,
-    'Alerts': NotificationPage,
-  };
+  testWidgets('Dashboard reads only the verified cafe inventory path', (
+    tester,
+  ) async {
+    final source = DashboardInventorySource(
+      Stream.value([
+        WorkspaceInventoryDocument(
+          id: 'milk-a',
+          data: {
+            'name': 'Milk',
+            'category': 'Dairy',
+            'quantity': 2,
+            'unit': 'L',
+            'expiryDate': DateTime.now().add(const Duration(days: 2)),
+            'imageUrl': '',
+            'createdAt': DateTime.now(),
+          },
+        ),
+      ]),
+    );
+    final repository = WorkspaceInventoryRepository(
+      session: dashboardSession,
+      dataSource: source,
+    );
+
+    await tester.pumpWidget(
+      app(
+        DashboardPage(
+          workspaceSession: dashboardSession,
+          inventoryRepository: repository,
+          firestore: dashboardFirestore(),
+          onCheckNotifications: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(source.watchedPath, 'cafes/dashboard-cafe/inventory');
+    expect(
+      tester.widget<Text>(find.byKey(const ValueKey('total-count'))).data,
+      '1',
+    );
+  });
+
+  final destinations = <String, Type>{'AI Suggestions': SuggestionsPage};
   for (final entry in destinations.entries) {
     testWidgets('${entry.key} keeps its production navigation destination', (
       tester,
@@ -116,6 +158,8 @@ void main() {
       await tester.pumpWidget(
         app(
           DashboardPage(
+            workspaceSession: dashboardSession,
+            inventoryRepository: dashboardInventoryRepository(),
             firestore: dashboardFirestore(),
             onCheckNotifications: () {},
           ),
@@ -135,6 +179,36 @@ void main() {
     });
   }
 
+  testWidgets('inventory, add and alerts use the trusted Home callbacks', (
+    tester,
+  ) async {
+    var addTaps = 0;
+    var inventoryTaps = 0;
+    var alertTaps = 0;
+    await tester.pumpWidget(
+      app(
+        DashboardPage(
+          workspaceSession: dashboardSession,
+          inventoryRepository: dashboardInventoryRepository(),
+          firestore: dashboardFirestore(),
+          onCheckNotifications: () {},
+          onAddTap: () => addTaps++,
+          onInventoryTap: () => inventoryTaps++,
+          onAlertTap: () => alertTaps++,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Add Item'));
+    await tester.tap(find.text('Inventory'));
+    await tester.tap(find.text('Alerts'));
+
+    expect(addTaps, 1);
+    expect(inventoryTaps, 1);
+    expect(alertTaps, 1);
+  });
+
   for (final width in [320.0, 393.0, 768.0, 1280.0]) {
     for (final scale in [1.0, 2.0]) {
       testWidgets(
@@ -149,6 +223,8 @@ void main() {
             app(
               Scaffold(
                 body: DashboardPage(
+                  workspaceSession: dashboardSession,
+                  inventoryRepository: dashboardInventoryRepository(),
                   firestore: dashboardFirestore(),
                   onCheckNotifications: () {},
                 ),
@@ -190,11 +266,8 @@ void main() {
     tester,
   ) async {
     final stream = StreamController<QuerySnapshot<Map<String, dynamic>>>();
-    final db = DashboardFirestore({
-      'inventory_records': DashboardCollection(stream.stream),
-    });
     await tester.pumpWidget(
-      app(Scaffold(body: RecentActivityCard(firestore: db))),
+      app(Scaffold(body: RecentActivityCard(activityStream: stream.stream))),
     );
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     stream.add(DashboardSnapshot([]));

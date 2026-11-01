@@ -1,4 +1,4 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../models/inventory_item.dart';
 
 class RestockSuggestion {
   final String itemName;
@@ -33,13 +33,6 @@ class RestockSuggestionService {
     final expiry = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
 
     return expiry.difference(today).inDays;
-  }
-
-  int _toInt(dynamic value) {
-    if (value is int) return value;
-    if (value is double) return value.toInt();
-
-    return int.tryParse(value.toString()) ?? 0;
   }
 
   String _buildReason({
@@ -86,25 +79,19 @@ class RestockSuggestionService {
     return 3;
   }
 
-  List<RestockSuggestion> generateSuggestions(
-    List<QueryDocumentSnapshot> docs,
-  ) {
+  List<RestockSuggestion> generateSuggestions(List<InventoryItem> items) {
     final suggestions = <RestockSuggestion>[];
     final addedNames = <String>{};
 
-    for (final doc in docs) {
-      final data = doc.data() as Map<String, dynamic>;
-
-      final name = (data['name'] ?? 'Item').toString().trim();
-      final category = (data['category'] ?? 'General').toString().trim();
-      final quantity = _toInt(data['quantity']);
-
-      int? daysLeft;
-      final expiryRaw = data['expiryDate'];
-
-      if (expiryRaw is Timestamp) {
-        daysLeft = _daysLeft(expiryRaw.toDate());
-      }
+    for (final item in items) {
+      final name = item.name.trim().isEmpty ? 'Item' : item.name.trim();
+      final category = item.category.trim().isEmpty
+          ? 'General'
+          : item.category.trim();
+      final quantity = item.quantity;
+      final daysLeft = item.expiryDate.millisecondsSinceEpoch == 0
+          ? null
+          : _daysLeft(item.expiryDate);
 
       final shouldSuggest =
           quantity <= 2 || (daysLeft != null && daysLeft >= 0 && daysLeft <= 1);
