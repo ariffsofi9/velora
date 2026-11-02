@@ -32,6 +32,39 @@ class _Source implements WorkspaceMovementDataSource {
   }
 }
 
+class _PaginatedSource implements WorkspaceMovementDataSource {
+  final List<WorkspaceMovementDocument> documents;
+  final List<Object?> cursors = [];
+
+  _PaginatedSource(this.documents);
+
+  @override
+  Future<List<WorkspaceMovementDocument>> fetchPage({
+    required String path,
+    required String itemId,
+    required int limit,
+    required bool descending,
+    Object? startAfter,
+  }) async {
+    expect(path, 'cafes/cafe-a/inventory_movements');
+    expect(itemId, 'item-a');
+    expect(descending, isTrue);
+    cursors.add(startAfter);
+    final ordered = [...documents]
+      ..sort((left, right) {
+        final leftDate = left.data['createdAt'] as DateTime;
+        final rightDate = right.data['createdAt'] as DateTime;
+        final dateOrder = rightDate.compareTo(leftDate);
+        return dateOrder != 0 ? dateOrder : right.id.compareTo(left.id);
+      });
+    final start = startAfter == null
+        ? 0
+        : ordered.indexWhere((document) => document.cursorToken == startAfter) +
+              1;
+    return ordered.skip(start).take(limit).toList(growable: false);
+  }
+}
+
 WorkspaceSession _session(String cafeId) => WorkspaceSession.fromVerified(
   CafeWorkspace(
     cafeId: cafeId,
@@ -53,6 +86,7 @@ Map<String, dynamic> _initial({
   'quantity': 0,
   'unit': 'kg',
   'requestHash': 'request-hash',
+  'schemaVersion': 1,
   'createdAt': createdAt ?? DateTime.utc(2030),
 };
 
@@ -78,12 +112,40 @@ Map<String, dynamic> _adjustment({
     'resultVersion': 2,
     if (optionalFields) 'reason': 'Delivery',
     'requestHash': 'request-hash',
+    'schemaVersion': 1,
     'createdAt': DateTime.utc(2030),
   };
 }
 
 WorkspaceMovementDocument _document(String id, Map<String, dynamic> data) =>
     WorkspaceMovementDocument(id: id, data: data, cursorToken: 'cursor-$id');
+
+List<WorkspaceMovementDocument> _history(int count, {bool equalDates = false}) {
+  return List.generate(count, (index) {
+    final id = 'movement-${index.toString().padLeft(3, '0')}';
+    return _document(
+      id,
+      _initial(
+        createdAt: equalDates
+            ? DateTime.utc(2030)
+            : DateTime.utc(2030).subtract(Duration(minutes: index)),
+      ),
+    );
+  });
+}
+
+Future<List<InventoryMovement>> _readAll(
+  WorkspaceInventoryMovementRepository repository,
+) async {
+  final movements = <InventoryMovement>[];
+  WorkspaceMovementCursor? cursor;
+  do {
+    final page = await repository.getItemMovements('item-a', cursor: cursor);
+    movements.addAll(page.movements);
+    cursor = page.nextCursor;
+  } while (cursor != null);
+  return movements;
+}
 
 void main() {
   test(
@@ -101,7 +163,7 @@ void main() {
       expect(source.path, 'cafes/cafe-a/inventory_movements');
       expect(source.itemId, 'item-a');
       expect(source.limit, 20);
-    expect(source.descending, isTrue);
+      expect(source.descending, isTrue);
       expect(source.startAfter, isNull);
       expect(page.movements.single.type, InventoryMovementType.initialStock);
       expect(page.nextCursor, isNull);
@@ -202,10 +264,62 @@ void main() {
     },
   );
 
+  for (final count in [20, 21, 41]) {
+    test('$count records paginate without gaps or duplicates', () async {
+      final source = _PaginatedSource(_history(count));
+      final repository = WorkspaceInventoryMovementRepository(
+        session: _session('cafe-a'),
+        dataSource: source,
+      );
+
+      final movements = await _readAll(repository);
+
+      expect(movements, hasLength(count));
+      expect(
+        movements.map((movement) => movement.id).toSet(),
+        hasLength(count),
+      );
+      expect(
+        movements.map((movement) => movement.createdAt),
+        orderedEquals(
+          movements.map((movement) => movement.createdAt).toList()
+            ..sort((left, right) => right.compareTo(left)),
+        ),
+      );
+      expect(source.cursors.first, isNull);
+      expect(source.cursors.length, count == 20 ? 2 : (count == 21 ? 2 : 3));
+    });
+  }
+
+  test('equal timestamps use the cursor tie-breaker across pages', () async {
+    final source = _PaginatedSource(_history(41, equalDates: true));
+    final repository = WorkspaceInventoryMovementRepository(
+      session: _session('cafe-a'),
+      dataSource: source,
+    );
+
+    final movements = await _readAll(repository);
+
+    expect(movements, hasLength(41));
+    expect(movements.map((movement) => movement.id).toSet(), hasLength(41));
+    expect(
+      movements.map((movement) => movement.id),
+      orderedEquals(
+        _history(41, equalDates: true).map((document) => document.id).toList()
+          ..sort((left, right) => right.compareTo(left)),
+      ),
+    );
+    expect(source.cursors, hasLength(3));
+  });
+
   test('malformed timestamps, data and scope mismatches fail closed', () async {
     for (final data in [
       _initial(createdAt: 'not-a-timestamp'),
       {..._adjustment(type: 'stock_in'), 'delta': -2},
+      {..._adjustment(type: 'stock_in'), 'resultingQuantity': 6},
+      {..._adjustment(type: 'stock_out'), 'resultingQuantity': 4},
+      {..._initial(), 'schemaVersion': 2},
+      {..._initial()}..remove('schemaVersion'),
       _initial(cafeId: 'cafe-b'),
       _initial(itemId: 'item-b'),
     ]) {

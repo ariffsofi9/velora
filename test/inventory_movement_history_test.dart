@@ -97,6 +97,7 @@ class _CursorSource implements WorkspaceMovementDataSource {
         'quantity': 1,
         'unit': 'kg',
         'requestHash': 'hash-$index',
+        'schemaVersion': 1,
         'createdAt': DateTime.utc(2030),
       },
     ),
@@ -310,6 +311,59 @@ void main() {
     expect(reader.calls[1].$2, same(reader.calls[2].$2));
   });
 
+  testWidgets('repeated Load More taps start only one active request', (
+    tester,
+  ) async {
+    final next = await cursor();
+    final pending = Completer<WorkspaceMovementPage>();
+    final reader = _Reader([
+      WorkspaceMovementPage(
+        movements: [movement('initial', InventoryMovementType.initialStock)],
+        nextCursor: next,
+      ),
+      pending.future,
+    ]);
+    await tester.pumpWidget(
+      app(
+        StockHistoryPage(
+          item: item('item-a'),
+          workspaceSession: session('cafe-a'),
+          movementReader: reader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final loadMore = find.byKey(const ValueKey('stock-history-load-more'));
+    await tester.tap(loadMore);
+    await tester.pump();
+    await tester.tap(loadMore, warnIfMissed: false);
+    await tester.pump();
+    expect(reader.calls, hasLength(2));
+    pending.complete(const WorkspaceMovementPage(movements: []));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('disposing during a pending request is safe', (tester) async {
+    final pending = Completer<WorkspaceMovementPage>();
+    await tester.pumpWidget(
+      app(
+        StockHistoryPage(
+          item: item('item-a'),
+          workspaceSession: session('cafe-a'),
+          movementReader: _Reader([pending.future]),
+        ),
+      ),
+    );
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    pending.complete(
+      WorkspaceMovementPage(
+        movements: [movement('stale', InventoryMovementType.stockIn)],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('stale results cannot replace a changed item scope', (
     tester,
   ) async {
@@ -336,7 +390,7 @@ void main() {
         StockHistoryPage(
           key: pageKey,
           item: item('item-b', name: 'Sugar'),
-          workspaceSession: session('cafe-b'),
+          workspaceSession: session('cafe-a'),
           movementReader: reader,
         ),
       ),
@@ -352,5 +406,48 @@ void main() {
     expect(find.byKey(const ValueKey('movement-new')), findsOneWidget);
     expect(find.byKey(const ValueKey('movement-stale')), findsNothing);
     expect(reader.calls[1].$1, 'item-b');
+  });
+
+  testWidgets('stale results cannot replace a changed cafe session', (
+    tester,
+  ) async {
+    final stale = Completer<WorkspaceMovementPage>();
+    final reader = _Reader([
+      stale.future,
+      WorkspaceMovementPage(
+        movements: [movement('current', InventoryMovementType.stockIn)],
+      ),
+    ]);
+    const pageKey = ValueKey('history-session-page');
+    await tester.pumpWidget(
+      app(
+        StockHistoryPage(
+          key: pageKey,
+          item: item('item-a'),
+          workspaceSession: session('cafe-a'),
+          movementReader: reader,
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      app(
+        StockHistoryPage(
+          key: pageKey,
+          item: item('item-a'),
+          workspaceSession: session('cafe-b'),
+          movementReader: reader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    stale.complete(
+      WorkspaceMovementPage(
+        movements: [movement('stale', InventoryMovementType.stockOut)],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('movement-current')), findsOneWidget);
+    expect(find.byKey(const ValueKey('movement-stale')), findsNothing);
+    expect(reader.calls.map((call) => call.$1), everyElement('item-a'));
   });
 }

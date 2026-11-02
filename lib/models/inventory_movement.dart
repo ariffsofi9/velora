@@ -40,6 +40,9 @@ class InventoryMovement {
   });
 
   factory InventoryMovement.fromMap(String id, Map<String, dynamic> data) {
+    if (_integer(data, 'schemaVersion', required: true) != 1) {
+      throw const FormatException('Unsupported inventory movement schema.');
+    }
     final type = switch (data['type']) {
       'initial_stock' => InventoryMovementType.initialStock,
       'stock_in' => InventoryMovementType.stockIn,
@@ -71,6 +74,7 @@ class InventoryMovement {
           previous < 0 ||
           resulting == null ||
           resulting < 0 ||
+          resulting != previous + expectedDelta ||
           fromVersion == null ||
           resultVersion != fromVersion + 1) {
         throw const FormatException('Inconsistent stock movement data.');
