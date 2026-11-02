@@ -88,6 +88,13 @@ abstract class _RecipeDetailBase extends State<RecipeDetailPage> {
 
   Future<void> _handleCookNow() async {
     if (_isCooking) return;
+    if (!CookNowDeductionService.isSupported) {
+      _showSnackBar(
+        message: CookNowDeductionService.unavailableMessage,
+        isError: true,
+      );
+      return;
+    }
 
     final portions = await _showPortionDialog();
 
