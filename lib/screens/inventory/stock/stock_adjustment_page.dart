@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_tokens.dart';
@@ -85,6 +83,7 @@ class StockAdjustmentPage extends StatefulWidget {
 
 class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   static const maxSafeInteger = 9007199254740991;
+  static int _keySequence = 0;
   final quantityController = TextEditingController();
   final reasonController = TextEditingController();
   late InventoryItem item;
@@ -135,9 +134,9 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   }
 
   String newKey() {
-    final random = Random.secure();
+    _keySequence = (_keySequence + 1) & 0x7fffffff;
     return '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-'
-        '${random.nextInt(1 << 32).toRadixString(36).padLeft(7, '0')}-stock';
+        '${_keySequence.toRadixString(36).padLeft(6, '0')}-stock';
   }
 
   Future<void> submit() async {
@@ -150,28 +149,28 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
     if (reason.length > 200) {
       return message('Reason must be 200 characters or less.');
     }
-    final draft = WorkspaceInventoryStockRequest(
-      idempotencyKey: 'pending-idempotency-key',
-      itemId: item.id,
-      direction: stockOut ? StockDirection.stockOut : StockDirection.stockIn,
-      quantity: value,
-      expectedVersion: item.version,
-      reason: reason,
-    );
-    if (fingerprint != draft.fingerprint || idempotencyKey == null) {
-      fingerprint = draft.fingerprint;
-      idempotencyKey = widget.idempotencyKeyFactory?.call() ?? newKey();
-    }
-    final request = WorkspaceInventoryStockRequest(
-      idempotencyKey: idempotencyKey!,
-      itemId: draft.itemId,
-      direction: draft.direction,
-      quantity: draft.quantity,
-      expectedVersion: draft.expectedVersion,
-      reason: draft.reason,
-    );
     setState(() => saving = true);
     try {
+      final draft = WorkspaceInventoryStockRequest(
+        idempotencyKey: 'pending-idempotency-key',
+        itemId: item.id,
+        direction: stockOut ? StockDirection.stockOut : StockDirection.stockIn,
+        quantity: value,
+        expectedVersion: item.version,
+        reason: reason,
+      );
+      if (fingerprint != draft.fingerprint || idempotencyKey == null) {
+        fingerprint = draft.fingerprint;
+        idempotencyKey = widget.idempotencyKeyFactory?.call() ?? newKey();
+      }
+      final request = WorkspaceInventoryStockRequest(
+        idempotencyKey: idempotencyKey!,
+        itemId: draft.itemId,
+        direction: draft.direction,
+        quantity: draft.quantity,
+        expectedVersion: draft.expectedVersion,
+        reason: draft.reason,
+      );
       await adjuster.adjustStock(request);
       if (!mounted) return;
       setState(() {
@@ -190,6 +189,10 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
         needsReload = reload;
       });
       message(failureMessage(error.failure));
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => saving = false);
+      message('Unable to start the stock adjustment. Please try again.');
     }
   }
 

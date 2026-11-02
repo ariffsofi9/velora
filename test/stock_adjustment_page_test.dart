@@ -173,6 +173,62 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('default runtime key generation reaches callable safely', (
+    tester,
+  ) async {
+    final adjuster = _Adjuster([success]);
+    await tester.pumpWidget(
+      app(
+        StockInPage(
+          item: item(),
+          workspaceSession: session,
+          adjuster: adjuster,
+        ),
+      ),
+    );
+
+    await submit(tester, '3');
+    await tester.pumpAndSettle();
+
+    expect(adjuster.requests, hasLength(1));
+    expect(
+      adjuster.requests.single.idempotencyKey.length,
+      inInclusiveRange(16, 128),
+    );
+    expect(adjuster.requests.single.quantity, 3);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'unexpected pre-call failure restores button and shows feedback',
+    (tester) async {
+      final adjuster = _Adjuster(const []);
+      await tester.pumpWidget(
+        app(
+          StockInPage(
+            item: item(),
+            workspaceSession: session,
+            adjuster: adjuster,
+            idempotencyKeyFactory: () => throw StateError('key failure'),
+          ),
+        ),
+      );
+
+      await submit(tester, '2');
+      await tester.pump();
+
+      expect(
+        find.text('Unable to start the stock adjustment. Please try again.'),
+        findsOneWidget,
+      );
+      expect(adjuster.requests, isEmpty);
+      final button = tester.widget<ElevatedButton>(
+        find.byKey(const ValueKey('stock-confirm-button')),
+      );
+      expect(button.onPressed, isNotNull);
+    },
+  );
+
   testWidgets('retry keeps key while changed quantity rotates key', (
     tester,
   ) async {
