@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../models/inventory_item.dart';
 import '../../logic/low_stock_policy.dart';
+import '../../logic/inventory_expiry_policy.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 import '../../services/workspace_session.dart';
 import '../notifications/widgets_notification/notification_filter_bar.dart';
@@ -37,17 +38,8 @@ class _AlertsPageState extends State<AlertsPage> {
 
   bool _isLowStock(InventoryItem item) => LowStockPolicy.isLowStock(item);
 
-  bool _isNearExpiry(InventoryItem item, DateTime now) {
-    if (item.expiryDate.millisecondsSinceEpoch == 0) return false;
-    final today = DateTime(now.year, now.month, now.day);
-    final expiry = DateTime(
-      item.expiryDate.year,
-      item.expiryDate.month,
-      item.expiryDate.day,
-    );
-    final difference = expiry.difference(today).inDays;
-    return difference >= 0 && difference <= 4;
-  }
+  bool _isNearExpiry(InventoryItem item, DateTime now) =>
+      InventoryExpiryPolicy.isNearExpiry(item.expiryDate, now: now);
 
   bool _matchesFilter({required bool isLowStock, required bool isNearExpiry}) {
     if (!isLowStock && !isNearExpiry) return false;

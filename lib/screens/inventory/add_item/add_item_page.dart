@@ -1,9 +1,7 @@
 import '../../../core/theme/app_tokens.dart';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../../../services/workspace_inventory_create_service.dart';
 import '../../../services/workspace_session.dart';
@@ -11,7 +9,6 @@ import '../../../services/workspace_session.dart';
 import 'widgets_add/add_item_date_box.dart';
 import 'widgets_add/add_item_dropdown.dart';
 import 'widgets_add/add_item_header.dart';
-import 'widgets_add/add_item_image_box.dart';
 import 'widgets_add/add_item_save_button.dart';
 import 'widgets_add/add_item_text_field.dart';
 
@@ -34,19 +31,15 @@ class AddItemPage extends StatefulWidget {
 class _AddItemPageState extends State<AddItemPage> {
   final itemNameController = TextEditingController();
   final quantityController = TextEditingController();
-  final priceController = TextEditingController();
 
   String selectedCategory = 'Meat';
   String selectedUnit = 'kg';
   DateTime? selectedDate;
   bool isSaving = false;
-  File? selectedImage;
   String? _submissionFingerprint;
   String? _idempotencyKey;
 
   late final WorkspaceInventoryCreator _creator;
-
-  final picker = ImagePicker();
 
   final categories = ['Meat', 'Dairy', 'Vegetable', 'Fruit', 'Bakery', 'Other'];
   final units = ['kg', 'g', 'L', 'ml', 'pcs'];
@@ -63,19 +56,7 @@ class _AddItemPageState extends State<AddItemPage> {
   void dispose() {
     itemNameController.dispose();
     quantityController.dispose();
-    priceController.dispose();
     super.dispose();
-  }
-
-  Future<void> _pickImage() async {
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 70,
-    );
-
-    if (picked != null) {
-      setState(() => selectedImage = File(picked.path));
-    }
   }
 
   Future<void> _pickExpiryDate() async {
@@ -208,8 +189,6 @@ class _AddItemPageState extends State<AddItemPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const AddItemHeader(),
-              const SizedBox(height: 16),
-              AddItemImageBox(selectedImage: selectedImage, onTap: _pickImage),
               const SizedBox(height: 20),
               const AddItemTextFieldLabel(text: 'Item Name'),
               AddItemTextField(
@@ -255,13 +234,6 @@ class _AddItemPageState extends State<AddItemPage> {
                 expiryText: expiryText,
                 selectedDate: selectedDate,
                 onTap: _pickExpiryDate,
-              ),
-              const SizedBox(height: 16),
-              const AddItemTextFieldLabel(text: 'Purchase Price (RM)'),
-              AddItemTextField(
-                controller: priceController,
-                hint: '0.00',
-                keyboardType: TextInputType.number,
               ),
               const SizedBox(height: 24),
               AddItemSaveButton(isSaving: isSaving, onTap: _saveItem),

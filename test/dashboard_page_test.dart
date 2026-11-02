@@ -84,7 +84,7 @@ void main() {
     );
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('near-expiry-count'))).data,
-      '3',
+      '2',
     );
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('low-stock-count'))).data,

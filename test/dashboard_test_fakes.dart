@@ -44,7 +44,13 @@ WorkspaceInventoryRepository dashboardInventoryRepository({
     'category': 'General',
     'quantity': quantity,
     'unit': 'pcs',
-    'expiryDate': Timestamp.fromDate(today.add(Duration(days: days))),
+    'expiryDate': Timestamp.fromDate(
+      DateTime.utc(
+        today.add(Duration(days: days)).year,
+        today.add(Duration(days: days)).month,
+        today.add(Duration(days: days)).day,
+      ),
+    ),
     'imageUrl': '',
     'createdAt': Timestamp.fromDate(now),
   };
@@ -55,7 +61,7 @@ WorkspaceInventoryRepository dashboardInventoryRepository({
                 item(3, 5),
                 item(0, -1),
                 item(1, 0),
-                {...item(8, 8), 'expiryDate': null},
+                item(8, 8),
                 item(1, 1),
               ])
           .indexed

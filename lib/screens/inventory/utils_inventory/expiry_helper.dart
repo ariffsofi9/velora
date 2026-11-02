@@ -1,32 +1,21 @@
 import 'package:flutter/material.dart';
 import '../../../core/theme/app_tokens.dart';
+import '../../../logic/inventory_expiry_policy.dart';
 
 class ExpiryHelper {
-  static int daysLeft(DateTime expiryDate) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final expiry = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
-
-    return expiry.difference(today).inDays;
-  }
+  static int daysLeft(DateTime expiryDate) =>
+      InventoryExpiryPolicy.daysUntil(expiryDate);
 
   static String daysLeftText(DateTime expiryDate) {
-    final days = daysLeft(expiryDate);
-
-    if (days < 0) return 'Expired ${days.abs()} days ago';
-    if (days == 0) return 'Expires today';
-    if (days == 1) return '1 day left';
-
-    return '$days days left';
+    return InventoryExpiryPolicy.label(expiryDate);
   }
 
   static bool isExpired(DateTime expiryDate) {
-    return daysLeft(expiryDate) < 0;
+    return InventoryExpiryPolicy.isExpired(expiryDate);
   }
 
   static bool isNearExpiry(DateTime expiryDate) {
-    final days = daysLeft(expiryDate);
-    return days >= 0 && days <= 3;
+    return InventoryExpiryPolicy.isNearExpiry(expiryDate);
   }
 
   static Color statusColor(DateTime expiryDate) {

@@ -1,4 +1,5 @@
 import '../../models/inventory_item.dart';
+import '../../logic/inventory_expiry_policy.dart';
 
 class RestockSuggestion {
   final String itemName;
@@ -27,13 +28,8 @@ class RestockSuggestion {
 }
 
 class RestockSuggestionService {
-  int _daysLeft(DateTime expiryDate) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final expiry = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
-
-    return expiry.difference(today).inDays;
-  }
+  int _daysLeft(DateTime expiryDate) =>
+      InventoryExpiryPolicy.daysUntil(expiryDate);
 
   String _buildReason({
     required String name,

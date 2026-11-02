@@ -129,11 +129,21 @@ void main() {
   test('legacy items use version 1 while invalid versions fail closed', () {
     final legacy = InventoryItem.fromMap('legacy', {
       'name': 'Legacy',
+      'category': 'General',
       'quantity': 1,
+      'expiryDate': DateTime(2030),
+      'createdAt': DateTime(2029),
     });
     expect(legacy.version, 1);
     expect(
-      () => InventoryItem.fromMap('invalid', {'version': 0}),
+      () => InventoryItem.fromMap('invalid', {
+        'name': 'Invalid',
+        'category': 'General',
+        'quantity': 1,
+        'expiryDate': DateTime(2030),
+        'createdAt': DateTime(2029),
+        'version': 0,
+      }),
       throwsFormatException,
     );
   });

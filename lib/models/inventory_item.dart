@@ -24,21 +24,62 @@ class InventoryItem {
   });
 
   factory InventoryItem.fromFirestore(DocumentSnapshot doc) {
-    return InventoryItem.fromMap(doc.id, doc.data() as Map<String, dynamic>);
+    final data = doc.data();
+    if (data is! Map<String, dynamic>) {
+      throw const FormatException('Invalid inventory item data.');
+    }
+    return InventoryItem.fromMap(doc.id, data);
   }
 
-  factory InventoryItem.fromMap(String id, Map<String, dynamic> data) =>
-      InventoryItem(
-        id: id,
-        name: data['name'] as String? ?? '',
-        category: data['category'] as String? ?? '',
-        quantity: data['quantity'] as int? ?? 0,
-        unit: _unit(data['unit']),
-        expiryDate: _date(data['expiryDate']),
-        imageUrl: data['imageUrl'] as String? ?? '',
-        createdAt: _date(data['createdAt']),
-        version: _version(data),
-      );
+  factory InventoryItem.fromMap(String id, Map<String, dynamic> data) {
+    _validateId(id);
+    _validateSchema(data);
+    final imageUrl = data['imageUrl'];
+    if (imageUrl != null && imageUrl is! String) {
+      throw const FormatException('Invalid inventory item image URL.');
+    }
+
+    return InventoryItem(
+      id: id,
+      name: _requiredText(data['name'], maxLength: 100),
+      category: _requiredText(data['category'], maxLength: 60),
+      quantity: _quantity(data['quantity']),
+      unit: _unit(data),
+      expiryDate: _requiredExpiryDate(data['expiryDate']),
+      imageUrl: imageUrl as String? ?? '',
+      createdAt: _requiredDate(data['createdAt']),
+      version: _version(data),
+    );
+  }
+
+  static void _validateId(String id) {
+    if (id.isEmpty || id.trim() != id || id.contains('/') || id.length > 128) {
+      throw const FormatException('Invalid inventory item identifier.');
+    }
+  }
+
+  static void _validateSchema(Map<String, dynamic> data) {
+    if (!data.containsKey('schemaVersion')) return;
+    if (data['schemaVersion'] != 1) {
+      throw const FormatException('Unsupported inventory item schema.');
+    }
+  }
+
+  static String _requiredText(Object? value, {required int maxLength}) {
+    if (value is! String ||
+        value.isEmpty ||
+        value.trim() != value ||
+        value.length > maxLength ||
+        value.codeUnits.any((code) => code < 32 || code == 127)) {
+      throw const FormatException('Invalid required inventory text.');
+    }
+    return value;
+  }
+
+  static int _quantity(Object? value) {
+    if (value is int && value >= 0) return value;
+    throw const FormatException('Invalid inventory item quantity.');
+  }
 
   static int _version(Map<String, dynamic> data) {
     if (!data.containsKey('version')) return 1;
@@ -47,15 +88,26 @@ class InventoryItem {
     throw const FormatException('Invalid inventory item version.');
   }
 
-  static DateTime _date(Object? value) => switch (value) {
+  static DateTime _requiredDate(Object? value) => switch (value) {
     Timestamp timestamp => timestamp.toDate(),
     DateTime date => date,
-    _ => DateTime.fromMillisecondsSinceEpoch(0),
+    _ => throw const FormatException('Invalid inventory item timestamp.'),
   };
 
-  static String _unit(Object? value) {
+  // Trusted callables persist expiry as UTC midnight. Preserve those UTC date
+  // components instead of allowing the viewer's timezone to shift the date.
+  static DateTime _requiredExpiryDate(Object? value) => switch (value) {
+    Timestamp timestamp => timestamp.toDate().toUtc(),
+    DateTime date => date,
+    _ => throw const FormatException('Invalid inventory item expiry date.'),
+  };
+
+  static String _unit(Map<String, dynamic> data) {
+    if (!data.containsKey('unit')) return 'pcs';
+    final value = data['unit'];
     const supported = {'kg', 'g', 'L', 'ml', 'pcs'};
-    return value is String && supported.contains(value) ? value : 'pcs';
+    if (value is String && supported.contains(value)) return value;
+    throw const FormatException('Invalid inventory item unit.');
   }
 
   Map<String, dynamic> toMap() {

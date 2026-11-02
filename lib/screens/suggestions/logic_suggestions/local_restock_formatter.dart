@@ -1,4 +1,5 @@
 import '../../../models/inventory_item.dart';
+import '../../../logic/inventory_expiry_policy.dart';
 
 class LocalRestockFormatter {
   String format(List<InventoryItem> items) {
@@ -54,13 +55,7 @@ Your current inventory quantity looks stable. Keep monitoring low-stock and near
   }
 
   int _daysLeft(DateTime expiryDate) {
-    final now = DateTime.now();
-
-    final today = DateTime(now.year, now.month, now.day);
-
-    final expiry = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
-
-    return expiry.difference(today).inDays;
+    return InventoryExpiryPolicy.daysUntil(expiryDate);
   }
 
   String _priorityText(int quantity, int daysLeft) {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
 import '../../logic/low_stock_policy.dart';
+import '../../logic/inventory_expiry_policy.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 import '../../services/workspace_session.dart';
 import '../../widgets/dashboard/dashboard_content.dart';
@@ -50,21 +51,9 @@ class _DashboardPageState extends State<DashboardPage> {
     _inventoryStream = _inventoryRepository.watchItems();
   }
 
-  int _daysLeft(DateTime expiryDate) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final expiry = DateTime(expiryDate.year, expiryDate.month, expiryDate.day);
-    return expiry.difference(today).inDays;
-  }
-
-  bool _hasKnownExpiry(InventoryItem item) =>
-      item.expiryDate.millisecondsSinceEpoch != 0;
-
-  int _nearExpiryCount(List<InventoryItem> items) => items.where((item) {
-    if (!_hasKnownExpiry(item)) return false;
-    final days = _daysLeft(item.expiryDate);
-    return days >= 0 && days <= 4;
-  }).length;
+  int _nearExpiryCount(List<InventoryItem> items) => items
+      .where((item) => InventoryExpiryPolicy.isNearExpiry(item.expiryDate))
+      .length;
 
   int _lowStockCount(List<InventoryItem> items) =>
       items.where(LowStockPolicy.isLowStock).length;
@@ -116,8 +105,7 @@ class _DashboardPageState extends State<DashboardPage> {
               lowStock: _lowStockCount(items),
               expired: items
                   .where(
-                    (item) =>
-                        _hasKnownExpiry(item) && _daysLeft(item.expiryDate) < 0,
+                    (item) => InventoryExpiryPolicy.isExpired(item.expiryDate),
                   )
                   .length,
               notificationBell: NotificationBell(onTap: widget.onAlertTap),

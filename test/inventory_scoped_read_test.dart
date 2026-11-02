@@ -103,6 +103,30 @@ void main() {
     expect(find.text('No matching items found.'), findsOneWidget);
   });
 
+  testWidgets('malformed scoped inventory fails with a generic safe message', (
+    tester,
+  ) async {
+    final malformed = WorkspaceInventoryDocument(
+      id: 'bad-item',
+      data: {
+        'name': 'Bad item',
+        'category': 'General',
+        'quantity': 'unknown',
+        'unit': 'pcs',
+        'expiryDate': DateTime.now(),
+        'createdAt': DateTime.now(),
+      },
+    );
+    final source = _InventorySource(Stream.value([malformed]));
+
+    await tester.pumpWidget(_app(source));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Something went wrong.'), findsOneWidget);
+    expect(find.textContaining('unknown'), findsNothing);
+    expect(find.textContaining('Invalid inventory'), findsNothing);
+  });
+
   testWidgets('Low Stock filter uses shared below equal and above boundary', (
     tester,
   ) async {

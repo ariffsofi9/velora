@@ -79,6 +79,24 @@ void main() {
     );
   });
 
+  testWidgets('Add Item shows only fields supported by the create callable', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.light,
+        home: AddItemPage(workspaceSession: _session),
+      ),
+    );
+
+    expect(find.text('Item Name'), findsOneWidget);
+    expect(find.text('Category'), findsOneWidget);
+    expect(find.text('Quantity'), findsOneWidget);
+    expect(find.text('Expiry Date'), findsOneWidget);
+    expect(find.text('Add Photo'), findsNothing);
+    expect(find.text('Purchase Price (RM)'), findsNothing);
+  });
+
   testWidgets('Item Details exposes trusted stock and edit actions only', (
     tester,
   ) async {

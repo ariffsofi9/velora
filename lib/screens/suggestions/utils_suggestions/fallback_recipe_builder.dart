@@ -1,4 +1,5 @@
 import '../../../models/inventory_item.dart';
+import '../../../logic/inventory_expiry_policy.dart';
 
 class FallbackRecipeBuilder {
   static Map<String, dynamic>? buildRecipe(List<InventoryItem> items) {
@@ -75,15 +76,7 @@ This fallback excludes expired items from recipe suggestions.
   }
 
   static bool _isExpired(InventoryItem item) {
-    final today = DateTime.now();
-    final todayOnly = DateTime(today.year, today.month, today.day);
-    final expiryOnly = DateTime(
-      item.expiryDate.year,
-      item.expiryDate.month,
-      item.expiryDate.day,
-    );
-
-    return expiryOnly.isBefore(todayOnly);
+    return InventoryExpiryPolicy.isExpired(item.expiryDate);
   }
 
   static String _recipeContent(

@@ -1,36 +1,18 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/inventory_item.dart';
+import 'inventory_expiry_policy.dart';
 import '../screens/suggestions/utils_suggestions/recipe_parser.dart';
 
 class SuggestionHelper {
   List<InventoryItem> convertDocs(List<QueryDocumentSnapshot> docs) {
-    return docs.map((doc) {
-      final data = doc.data() as Map<String, dynamic>;
-
-      return InventoryItem(
-        id: doc.id,
-        name: data['name'] ?? '',
-        category: data['category'] ?? '',
-        quantity: (data['quantity'] as num?)?.toInt() ?? 0,
-        expiryDate: data['expiryDate'] is Timestamp
-            ? (data['expiryDate'] as Timestamp).toDate()
-            : DateTime.now(),
-        imageUrl: data['imageUrl'] ?? '',
-        createdAt: data['createdAt'] is Timestamp
-            ? (data['createdAt'] as Timestamp).toDate()
-            : DateTime.now(),
-      );
-    }).toList();
+    return docs.map(InventoryItem.fromFirestore).toList();
   }
 
   List<InventoryItem> nearExpiryItems(List<InventoryItem> items) {
-    final now = DateTime.now();
-
-    final filtered = items.where((item) {
-      final daysLeft = item.expiryDate.difference(now).inDays;
-      return daysLeft <= 7;
-    }).toList();
+    final filtered = items
+        .where((item) => InventoryExpiryPolicy.isNearExpiry(item.expiryDate))
+        .toList();
 
     filtered.sort((a, b) => a.expiryDate.compareTo(b.expiryDate));
     return filtered.take(4).toList();
@@ -100,12 +82,7 @@ class SuggestionHelper {
   }
 
   String daysLeftText(DateTime expiryDate) {
-    final days = expiryDate.difference(DateTime.now()).inDays;
-
-    if (days < 0) return 'Expired';
-    if (days == 0) return 'Expires today';
-    if (days == 1) return 'Expires tomorrow';
-    return 'Expires in $days days';
+    return InventoryExpiryPolicy.label(expiryDate);
   }
 
   String cleanAiText(String text) {

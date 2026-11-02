@@ -1,5 +1,6 @@
 import '../../../models/inventory_item.dart';
 import '../../../logic/low_stock_policy.dart';
+import '../../../logic/inventory_expiry_policy.dart';
 import 'expiry_helper.dart';
 
 class InventorySortHelper {
@@ -38,10 +39,9 @@ class InventorySortHelper {
     }
 
     if (filter == 'Near Expiry') {
-      return items.where((item) {
-        final days = ExpiryHelper.daysLeft(item.expiryDate);
-        return days >= 0 && days <= 3;
-      }).toList();
+      return items
+          .where((item) => InventoryExpiryPolicy.isNearExpiry(item.expiryDate))
+          .toList();
     }
 
     return items;

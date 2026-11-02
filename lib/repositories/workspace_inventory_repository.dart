@@ -10,6 +10,13 @@ class WorkspaceInventoryDocument {
   const WorkspaceInventoryDocument({required this.id, required this.data});
 }
 
+class WorkspaceInventoryDataException implements Exception {
+  const WorkspaceInventoryDataException();
+
+  @override
+  String toString() => 'Workspace inventory data is invalid.';
+}
+
 abstract interface class WorkspaceInventoryDataSource {
   Stream<List<WorkspaceInventoryDocument>> watchCollection(String path);
   Future<List<WorkspaceInventoryDocument>> readCollection(String path);
@@ -55,8 +62,13 @@ class WorkspaceInventoryRepository {
   Future<List<InventoryItem>> getItems() async =>
       _items(await _dataSource.readCollection(collectionPath));
 
-  List<InventoryItem> _items(List<WorkspaceInventoryDocument> documents) =>
-      documents
+  List<InventoryItem> _items(List<WorkspaceInventoryDocument> documents) {
+    try {
+      return documents
           .map((doc) => InventoryItem.fromMap(doc.id, doc.data))
           .toList(growable: false);
+    } on FormatException {
+      throw const WorkspaceInventoryDataException();
+    }
+  }
 }
