@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
+import '../../repositories/workspace_inventory_movement_repository.dart';
 import '../../services/workspace_session.dart';
 import '../../services/workspace_inventory_create_service.dart';
 import '../../services/workspace_inventory_update_service.dart';
@@ -22,6 +23,7 @@ class InventoryPage extends StatefulWidget {
   final WorkspaceInventoryCreator? inventoryCreator;
   final WorkspaceInventoryUpdater? inventoryUpdater;
   final WorkspaceInventoryStockAdjuster? stockAdjuster;
+  final WorkspaceInventoryMovementReader? movementReader;
 
   const InventoryPage({
     super.key,
@@ -30,6 +32,7 @@ class InventoryPage extends StatefulWidget {
     this.inventoryCreator,
     this.inventoryUpdater,
     this.stockAdjuster,
+    this.movementReader,
   });
 
   @override
@@ -88,6 +91,7 @@ class _InventoryPageState extends State<InventoryPage> {
           repository: _repository,
           updater: widget.inventoryUpdater,
           stockAdjuster: widget.stockAdjuster,
+          movementReader: widget.movementReader,
         ),
       ),
     );

@@ -11,6 +11,7 @@ const {
 const {serverTimestamp} = require('firebase/firestore');
 
 let environment;
+const firestorePort = Number(process.env.FIRESTORE_RULES_TEST_PORT || 8080);
 
 const link = (uid, cafeId, role) => ({
   uid,
@@ -29,7 +30,7 @@ test.before(async () => {
         'utf8',
       ),
       host: '127.0.0.1',
-      port: 8080,
+      port: firestorePort,
     },
   });
 });
@@ -70,6 +71,20 @@ test.beforeEach(async () => {
     );
     await db.doc('cafes/cafe-a/inventory/item-a').set({name: 'Milk'});
     await db.doc('cafes/cafe-b/inventory/item-b').set({name: 'Coffee'});
+    await db.doc('cafes/cafe-a/inventory_movements/movement-a').set({
+      cafeId: 'cafe-a',
+      itemId: 'item-a',
+      type: 'stock_in',
+      quantity: 2,
+      createdAt: new Date(),
+    });
+    await db.doc('cafes/cafe-b/inventory_movements/movement-b').set({
+      cafeId: 'cafe-b',
+      itemId: 'item-b',
+      type: 'stock_out',
+      quantity: 1,
+      createdAt: new Date(),
+    });
   });
 });
 
@@ -143,6 +158,62 @@ test('all client inventory mutations remain denied', async () => {
   );
   await assertFails(item.update({name: 'Changed'}));
   await assertFails(item.delete());
+});
+
+test('active owner and staff can read only their cafe movements', async () => {
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const staff = environment.authenticatedContext('staff-a').firestore();
+  const outsider = environment.authenticatedContext('owner-b').firestore();
+
+  await assertSucceeds(
+    owner.doc('cafes/cafe-a/inventory_movements/movement-a').get(),
+  );
+  await assertSucceeds(
+    staff.collection('cafes/cafe-a/inventory_movements').get(),
+  );
+  await assertFails(
+    outsider.doc('cafes/cafe-a/inventory_movements/movement-a').get(),
+  );
+  await assertFails(
+    outsider.collection('cafes/cafe-a/inventory_movements').get(),
+  );
+  await assertFails(
+    staff.collectionGroup('inventory_movements')
+      .where('itemId', '==', 'item-a')
+      .get(),
+  );
+});
+
+test('unauthenticated and inactive members cannot read movements', async () => {
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertFails(
+    anonymous.doc('cafes/cafe-a/inventory_movements/movement-a').get(),
+  );
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().doc('cafes/cafe-a/members/staff-a').update({
+      status: 'disabled',
+    });
+  });
+  const staff = environment.authenticatedContext('staff-a').firestore();
+  await assertFails(
+    staff.collection('cafes/cafe-a/inventory_movements').get(),
+  );
+});
+
+test('all client movement mutations remain denied, including owner writes', async () => {
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const movement = owner.doc(
+    'cafes/cafe-a/inventory_movements/movement-a',
+  );
+  await assertFails(
+    owner.doc('cafes/cafe-a/inventory_movements/forged').set({
+      itemId: 'item-a',
+      quantity: 99,
+    }),
+  );
+  await assertFails(movement.update({quantity: 99}));
+  await assertFails(movement.delete());
 });
 
 test('users can create only their own validated profile', async () => {

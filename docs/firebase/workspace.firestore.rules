@@ -80,6 +80,10 @@ service cloud.firestore {
         allow get, list: if isMember(cafeId);
         allow create, update, delete: if false;
       }
+      match /inventory_movements/{movementId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
       // Future activity/AI paths intentionally have no grants yet.
     }
     match /{document=**} { allow read, write: if false; }

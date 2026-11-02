@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
+import '../../repositories/workspace_inventory_movement_repository.dart';
 import '../../services/workspace_inventory_update_service.dart';
 import '../../services/workspace_inventory_stock_service.dart';
 import '../../services/workspace_session.dart';
 import 'edit_item_page.dart';
 import 'stock/stock_adjustment_page.dart';
+import 'stock/stock_history_page.dart';
 import 'utils_inventory/expiry_helper.dart';
 import 'widgets_inventory/item_detail_action_button.dart';
 import 'widgets_inventory/item_detail_info_card.dart';
@@ -20,6 +22,7 @@ class ItemDetailsPage extends StatelessWidget {
   final WorkspaceInventoryRepository? repository;
   final WorkspaceInventoryUpdater? updater;
   final WorkspaceInventoryStockAdjuster? stockAdjuster;
+  final WorkspaceInventoryMovementReader? movementReader;
 
   const ItemDetailsPage({
     super.key,
@@ -28,6 +31,7 @@ class ItemDetailsPage extends StatelessWidget {
     this.repository,
     this.updater,
     this.stockAdjuster,
+    this.movementReader,
   });
 
   bool get hasImage => item.imageUrl.trim().isNotEmpty;
@@ -128,6 +132,27 @@ class ItemDetailsPage extends StatelessWidget {
     if (adjusted == true && context.mounted) Navigator.pop(context, true);
   }
 
+  void _goToHistory(BuildContext context) {
+    if (workspaceSession == null || item.id.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Stock history requires a verified workspace item.'),
+        ),
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StockHistoryPage(
+          item: item,
+          workspaceSession: workspaceSession!,
+          movementReader: movementReader,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final width = MediaQuery.of(context).size.width;
@@ -159,7 +184,7 @@ class ItemDetailsPage extends StatelessWidget {
               isSmall ? 16 : 22,
               8,
               isSmall ? 16 : 22,
-              130,
+              210,
             ),
             children: [
               ItemDetailHero(
@@ -195,6 +220,13 @@ class ItemDetailsPage extends StatelessWidget {
               ItemDetailTipsCard(
                 expiryText: expiryText,
                 expiryColor: expiryColor,
+              ),
+              const SizedBox(height: 18),
+              OutlinedButton.icon(
+                key: const ValueKey('open-stock-history'),
+                onPressed: () => _goToHistory(context),
+                icon: const Icon(Icons.history_rounded),
+                label: const Text('Stock History'),
               ),
             ],
           ),
