@@ -23,6 +23,7 @@ function seed({
   quantity = 4,
   unit = 'kg',
   version,
+  lifecycleState,
 } = {}) {
   const docs = {
     [`user_cafe_memberships/${uid}`]: {
@@ -57,6 +58,7 @@ function seed({
       unit,
       schemaVersion: 1,
       ...(version == null ? {} : {version}),
+      ...(lifecycleState == null ? {} : {lifecycleState}),
     };
   }
   return docs;
@@ -130,6 +132,17 @@ function auditDocs(store, collection) {
 
 test('requires authentication', async () => {
   await assert.rejects(invoke({uid: null}), errorCode('unauthenticated'));
+});
+
+test('archived and invalid-lifecycle items reject stock adjustments', async () => {
+  await assert.rejects(
+    invoke({store: new MemoryStore(seed({lifecycleState: 'archived'}))}),
+    errorCode('failed-precondition'),
+  );
+  await assert.rejects(
+    invoke({store: new MemoryStore(seed({lifecycleState: 'unknown'}))}),
+    errorCode('failed-precondition'),
+  );
 });
 
 test('stock in updates quantity/version and atomically writes both audits', async () => {

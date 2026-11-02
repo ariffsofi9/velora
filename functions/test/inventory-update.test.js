@@ -18,7 +18,8 @@ const validData = {
   imageUrl: 'https://example.test/milk.png',
 };
 
-function seed({uid = 'staff-a', status = 'active', includeItem = true} = {}) {
+function seed({uid = 'staff-a', status = 'active', includeItem = true,
+  lifecycleState} = {}) {
   const docs = {
     [`user_cafe_memberships/${uid}`]: {
       uid,
@@ -65,6 +66,7 @@ function seed({uid = 'staff-a', status = 'active', includeItem = true} = {}) {
       schemaVersion: 1,
       createdAt: 'created-time',
       updatedAt: 'created-time',
+      ...(lifecycleState == null ? {} : {lifecycleState}),
     };
   }
   return docs;
@@ -134,6 +136,17 @@ function errorCode(code) {
 
 test('requires authentication', async () => {
   await assert.rejects(invoke({uid: null}), errorCode('unauthenticated'));
+});
+
+test('archived and invalid-lifecycle items cannot be edited', async () => {
+  await assert.rejects(
+    invoke({store: new MemoryStore(seed({lifecycleState: 'archived'}))}),
+    errorCode('failed-precondition'),
+  );
+  await assert.rejects(
+    invoke({store: new MemoryStore(seed({lifecycleState: 'unknown'}))}),
+    errorCode('failed-precondition'),
+  );
 });
 
 test('valid metadata update increments version and writes one audit', async () => {

@@ -22,6 +22,7 @@ class DashboardPage extends StatefulWidget {
   final VoidCallback? onAddTap;
   final VoidCallback? onInventoryTap;
   final VoidCallback? onAlertTap;
+  final VoidCallback? onActivityTap;
 
   const DashboardPage({
     super.key,
@@ -32,6 +33,7 @@ class DashboardPage extends StatefulWidget {
     this.onAddTap,
     this.onInventoryTap,
     this.onAlertTap,
+    this.onActivityTap,
   });
 
   @override
@@ -110,6 +112,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   .length,
               notificationBell: NotificationBell(onTap: widget.onAlertTap),
               recentActivity: RecentActivityCard(
+                onViewAll: widget.onActivityTap,
                 inventoryItems: {
                   for (final item in items)
                     item.id: {'name': item.name, 'imageUrl': item.imageUrl},

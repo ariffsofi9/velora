@@ -6,10 +6,12 @@ import '../../../widgets/dashboard/activity_thumbnail.dart';
 class RecentActivityCard extends StatelessWidget {
   final Stream<QuerySnapshot<Map<String, dynamic>>>? activityStream;
   final Map<String, Map<String, dynamic>> inventoryItems;
+  final VoidCallback? onViewAll;
   const RecentActivityCard({
     super.key,
     this.activityStream,
     this.inventoryItems = const {},
+    this.onViewAll,
   });
 
   String _formatType(String type) {
@@ -89,17 +91,29 @@ class RecentActivityCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Recent Activity',
-            style: text.titleMedium?.copyWith(
-              color: DashboardStyle.forest,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Recent Activity',
+                  style: text.titleMedium?.copyWith(
+                    color: DashboardStyle.forest,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (onViewAll != null)
+                TextButton(
+                  key: const ValueKey('open-activity'),
+                  onPressed: onViewAll,
+                  child: const Text('View All'),
+                ),
+            ],
           ),
           const SizedBox(height: 12),
           if (activityStream == null)
             const Text(
-              'Recent activity is unavailable until secure workspace activity is enabled.',
+              'Open Activity to view your workspace inventory history.',
               style: TextStyle(color: DashboardStyle.secondary),
             )
           else

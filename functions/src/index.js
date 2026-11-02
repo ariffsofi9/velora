@@ -16,6 +16,10 @@ const {
   adjustInventoryStock,
   InventoryStockError,
 } = require('./inventory-stock');
+const {
+  setInventoryLifecycle,
+  InventoryLifecycleError,
+} = require('./inventory-lifecycle');
 
 initializeApp();
 const db = getFirestore();
@@ -122,6 +126,27 @@ exports.adjustInventoryStock = onCall(
         error,
       );
       throw new HttpsError('internal', 'Stock adjustment failed.');
+    }
+  },
+);
+
+exports.setInventoryLifecycle = onCall(
+  {region: 'asia-southeast1', timeoutSeconds: 30},
+  async (request) => {
+    try {
+      return await setInventoryLifecycle({
+        auth: request.auth,
+        data: request.data,
+        store,
+        timestamp: () => FieldValue.serverTimestamp(),
+        deleteValue: () => FieldValue.delete(),
+      });
+    } catch (error) {
+      if (error instanceof InventoryLifecycleError) {
+        throw new HttpsError(error.code, error.message);
+      }
+      console.error('Inventory lifecycle update failed.', error);
+      throw new HttpsError('internal', 'Inventory lifecycle update failed.');
     }
   },
 );

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+enum InventoryLifecycleState { active, archived }
+
 class InventoryItem {
   final String id;
   final String name;
@@ -10,6 +12,9 @@ class InventoryItem {
   final String imageUrl;
   final DateTime createdAt;
   final int version;
+  final InventoryLifecycleState lifecycleState;
+  final DateTime? archivedAt;
+  final String? archivedBy;
 
   InventoryItem({
     required this.id,
@@ -21,6 +26,9 @@ class InventoryItem {
     required this.imageUrl,
     required this.createdAt,
     this.version = 1,
+    this.lifecycleState = InventoryLifecycleState.active,
+    this.archivedAt,
+    this.archivedBy,
   });
 
   factory InventoryItem.fromFirestore(DocumentSnapshot doc) {
@@ -38,6 +46,17 @@ class InventoryItem {
     if (imageUrl != null && imageUrl is! String) {
       throw const FormatException('Invalid inventory item image URL.');
     }
+    final lifecycleState = _lifecycle(data);
+    final archivedAt = _optionalDate(data['archivedAt']);
+    final archivedBy = _optionalIdentity(data['archivedBy']);
+    if (lifecycleState == InventoryLifecycleState.archived &&
+        (archivedAt == null || archivedBy == null)) {
+      throw const FormatException('Archived inventory metadata is incomplete.');
+    }
+    if (lifecycleState == InventoryLifecycleState.active &&
+        (archivedAt != null || archivedBy != null)) {
+      throw const FormatException('Active inventory has archive metadata.');
+    }
 
     return InventoryItem(
       id: id,
@@ -49,6 +68,9 @@ class InventoryItem {
       imageUrl: imageUrl as String? ?? '',
       createdAt: _requiredDate(data['createdAt']),
       version: _version(data),
+      lifecycleState: lifecycleState,
+      archivedAt: archivedAt,
+      archivedBy: archivedBy,
     );
   }
 
@@ -94,6 +116,37 @@ class InventoryItem {
     _ => throw const FormatException('Invalid inventory item timestamp.'),
   };
 
+  static DateTime? _optionalDate(Object? value) => switch (value) {
+    null => null,
+    Timestamp timestamp => timestamp.toDate(),
+    DateTime date => date,
+    _ => throw const FormatException('Invalid archive timestamp.'),
+  };
+
+  static String? _optionalIdentity(Object? value) {
+    if (value == null) return null;
+    if (value is String &&
+        value.isNotEmpty &&
+        value.trim() == value &&
+        !value.contains('/')) {
+      return value;
+    }
+    throw const FormatException('Invalid archive actor.');
+  }
+
+  static InventoryLifecycleState _lifecycle(Map<String, dynamic> data) {
+    if (!data.containsKey('lifecycleState')) {
+      return InventoryLifecycleState.active;
+    }
+    return switch (data['lifecycleState']) {
+      'active' => InventoryLifecycleState.active,
+      'archived' => InventoryLifecycleState.archived,
+      _ => throw const FormatException('Invalid inventory lifecycle.'),
+    };
+  }
+
+  bool get isArchived => lifecycleState == InventoryLifecycleState.archived;
+
   // Trusted callables persist expiry as UTC midnight. Preserve those UTC date
   // components instead of allowing the viewer's timezone to shift the date.
   static DateTime _requiredExpiryDate(Object? value) => switch (value) {
@@ -120,6 +173,9 @@ class InventoryItem {
       'imageUrl': imageUrl,
       'createdAt': createdAt,
       'version': version,
+      'lifecycleState': lifecycleState.name,
+      if (archivedAt != null) 'archivedAt': archivedAt,
+      if (archivedBy != null) 'archivedBy': archivedBy,
     };
   }
 }

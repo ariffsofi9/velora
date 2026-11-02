@@ -264,6 +264,15 @@ async function updateInventoryItem({auth, data, store, timestamp, toTimestamp}) 
       throw new InventoryUpdateError('not-found', 'Inventory item not found.');
     }
     const currentVersion = item.version == null ? 1 : item.version;
+    const lifecycleState = item.lifecycleState == null ? 'active' : item.lifecycleState;
+    if (lifecycleState !== 'active') {
+      throw new InventoryUpdateError(
+        'failed-precondition',
+        lifecycleState === 'archived'
+          ? 'Archived inventory items cannot be edited.'
+          : 'Inventory lifecycle data is invalid.',
+      );
+    }
     if (!Number.isSafeInteger(currentVersion) || currentVersion < 1) {
       throw new InventoryUpdateError(
         'failed-precondition',

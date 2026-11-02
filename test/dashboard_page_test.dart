@@ -97,9 +97,7 @@ void main() {
     await tester.scrollUntilVisible(find.text('Recent Activity'), 250);
     await tester.pumpAndSettle();
     expect(
-      find.text(
-        'Recent activity is unavailable until secure workspace activity is enabled.',
-      ),
+      find.text('Open Activity to view your workspace inventory history.'),
       findsOneWidget,
     );
     final query = db.collections['inventory_records']!;
@@ -185,6 +183,7 @@ void main() {
     var addTaps = 0;
     var inventoryTaps = 0;
     var alertTaps = 0;
+    var activityTaps = 0;
     await tester.pumpWidget(
       app(
         DashboardPage(
@@ -195,6 +194,7 @@ void main() {
           onAddTap: () => addTaps++,
           onInventoryTap: () => inventoryTaps++,
           onAlertTap: () => alertTaps++,
+          onActivityTap: () => activityTaps++,
         ),
       ),
     );
@@ -203,10 +203,18 @@ void main() {
     await tester.tap(find.text('Add Item'));
     await tester.tap(find.text('Inventory'));
     await tester.tap(find.text('Alerts'));
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('open-activity')),
+      250,
+    );
+    await tester.ensureVisible(find.byKey(const ValueKey('open-activity')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-activity')));
 
     expect(addTaps, 1);
     expect(inventoryTaps, 1);
     expect(alertTaps, 1);
+    expect(activityTaps, 1);
   });
 
   for (final width in [320.0, 393.0, 768.0, 1280.0]) {

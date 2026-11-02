@@ -8,6 +8,7 @@ import '../../repositories/workspace_inventory_repository.dart';
 import '../../repositories/workspace_inventory_movement_repository.dart';
 import '../../services/workspace_inventory_update_service.dart';
 import '../../services/workspace_inventory_stock_service.dart';
+import '../../services/workspace_inventory_lifecycle_service.dart';
 import '../../services/workspace_session.dart';
 import 'edit_item_page.dart';
 import 'stock/stock_adjustment_page.dart';
@@ -15,6 +16,7 @@ import 'stock/stock_history_page.dart';
 import 'utils_inventory/expiry_helper.dart';
 import 'widgets_inventory/item_detail_action_button.dart';
 import 'widgets_inventory/item_detail_info_card.dart';
+import 'widgets_inventory/inventory_lifecycle_action.dart';
 
 class ItemDetailsPage extends StatelessWidget {
   final InventoryItem item;
@@ -23,6 +25,7 @@ class ItemDetailsPage extends StatelessWidget {
   final WorkspaceInventoryUpdater? updater;
   final WorkspaceInventoryStockAdjuster? stockAdjuster;
   final WorkspaceInventoryMovementReader? movementReader;
+  final WorkspaceInventoryLifecycleManager? lifecycleManager;
 
   const ItemDetailsPage({
     super.key,
@@ -32,6 +35,7 @@ class ItemDetailsPage extends StatelessWidget {
     this.updater,
     this.stockAdjuster,
     this.movementReader,
+    this.lifecycleManager,
   });
 
   bool get hasImage => item.imageUrl.trim().isNotEmpty;
@@ -228,55 +232,69 @@ class ItemDetailsPage extends StatelessWidget {
                 icon: const Icon(Icons.history_rounded),
                 label: const Text('Stock History'),
               ),
+              const SizedBox(height: 12),
+              InventoryLifecycleActionButton(
+                item: item,
+                manager: lifecycleManager,
+                onChanged: () => Navigator.pop(context, true),
+              ),
             ],
           ),
         ),
       ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.only(top: 8, bottom: 14),
-        child: Center(
-          heightFactor: 1,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 720),
-            child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: isSmall ? 16 : 22),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: ItemDetailActionButton(
-                      label: 'Stock In',
-                      icon: Icons.add_circle_outline,
-                      color: AppColors.primary,
-                      onTap: () =>
-                          _goToStock(context, StockAdjustmentType.stockIn),
+      bottomNavigationBar: item.isArchived
+          ? null
+          : SafeArea(
+              minimum: const EdgeInsets.only(top: 8, bottom: 14),
+              child: Center(
+                heightFactor: 1,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 720),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isSmall ? 16 : 22,
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: ItemDetailActionButton(
+                            label: 'Stock In',
+                            icon: Icons.add_circle_outline,
+                            color: AppColors.primary,
+                            onTap: () => _goToStock(
+                              context,
+                              StockAdjustmentType.stockIn,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ItemDetailActionButton(
+                            label: 'Stock Out',
+                            icon: Icons.remove_circle_outline,
+                            color: AppColors.warning,
+                            onTap: () => _goToStock(
+                              context,
+                              StockAdjustmentType.stockOut,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: ItemDetailActionButton(
+                            label: 'Edit Item',
+                            icon: Icons.edit_outlined,
+                            color: AppColors.primary,
+                            onTap: () => _goToEdit(context),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ItemDetailActionButton(
-                      label: 'Stock Out',
-                      icon: Icons.remove_circle_outline,
-                      color: AppColors.warning,
-                      onTap: () =>
-                          _goToStock(context, StockAdjustmentType.stockOut),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ItemDetailActionButton(
-                      label: 'Edit Item',
-                      icon: Icons.edit_outlined,
-                      color: AppColors.primary,
-                      onTap: () => _goToEdit(context),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
-          ),
-        ),
-      ),
     );
   }
 }

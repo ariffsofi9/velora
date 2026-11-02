@@ -85,6 +85,20 @@ test.beforeEach(async () => {
       quantity: 1,
       createdAt: new Date(),
     });
+    await db.doc('cafes/cafe-a/activities/activity-a').set({
+      cafeId: 'cafe-a',
+      itemId: 'item-a',
+      actorUid: 'staff-a',
+      type: 'inventory_created',
+      createdAt: new Date(),
+    });
+    await db.doc('cafes/cafe-b/activities/activity-b').set({
+      cafeId: 'cafe-b',
+      itemId: 'item-b',
+      actorUid: 'owner-b',
+      type: 'inventory_created',
+      createdAt: new Date(),
+    });
   });
 });
 
@@ -214,6 +228,56 @@ test('all client movement mutations remain denied, including owner writes', asyn
   );
   await assertFails(movement.update({quantity: 99}));
   await assertFails(movement.delete());
+});
+
+test('active owner and staff can read only their cafe activities', async () => {
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const staff = environment.authenticatedContext('staff-a').firestore();
+  const outsider = environment.authenticatedContext('owner-b').firestore();
+
+  await assertSucceeds(owner.doc('cafes/cafe-a/activities/activity-a').get());
+  await assertSucceeds(staff.collection('cafes/cafe-a/activities').get());
+  await assertFails(outsider.doc('cafes/cafe-a/activities/activity-a').get());
+  await assertFails(outsider.collection('cafes/cafe-a/activities').get());
+  await assertFails(staff.collectionGroup('activities').get());
+});
+
+test('anonymous inactive and revoked members cannot read activities', async () => {
+  const anonymous = environment.unauthenticatedContext().firestore();
+  await assertFails(
+    anonymous.doc('cafes/cafe-a/activities/activity-a').get(),
+  );
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().doc('cafes/cafe-a/members/staff-a').update({
+      status: 'disabled',
+    });
+  });
+  let staff = environment.authenticatedContext('staff-a').firestore();
+  await assertFails(staff.collection('cafes/cafe-a/activities').get());
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+    await db.doc('cafes/cafe-a/members/staff-a').update({status: 'active'});
+    await db.doc('user_cafe_memberships/staff-a').delete();
+  });
+  staff = environment.authenticatedContext('staff-a').firestore();
+  await assertFails(staff.collection('cafes/cafe-a/activities').get());
+});
+
+test('all client activity mutations remain denied including owner writes', async () => {
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const activity = owner.doc('cafes/cafe-a/activities/activity-a');
+  await assertFails(
+    owner.doc('cafes/cafe-a/activities/forged').set({
+      cafeId: 'cafe-a',
+      itemId: 'item-a',
+      actorUid: 'owner-a',
+      type: 'inventory_created',
+    }),
+  );
+  await assertFails(activity.update({type: 'inventory_updated'}));
+  await assertFails(activity.delete());
 });
 
 test('users can create only their own validated profile', async () => {

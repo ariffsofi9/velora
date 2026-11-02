@@ -224,6 +224,7 @@ async function createInventoryItem({auth, data, store, timestamp, toTimestamp}) 
       createdBy: uid,
       createRequestHash: hash,
       createPayloadHash: inputHash,
+      lifecycleState: 'active',
       schemaVersion: 1,
       createdAt: now,
       updatedAt: now,

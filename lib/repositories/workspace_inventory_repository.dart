@@ -56,16 +56,25 @@ class WorkspaceInventoryRepository {
 
   String get collectionPath => 'cafes/${session.cafeId}/inventory';
 
-  Stream<List<InventoryItem>> watchItems() =>
-      _dataSource.watchCollection(collectionPath).map(_items);
+  Stream<List<InventoryItem>> watchItems() => _dataSource
+      .watchCollection(collectionPath)
+      .map((documents) => _items(documents, archived: false));
+
+  Stream<List<InventoryItem>> watchArchivedItems() => _dataSource
+      .watchCollection(collectionPath)
+      .map((documents) => _items(documents, archived: true));
 
   Future<List<InventoryItem>> getItems() async =>
-      _items(await _dataSource.readCollection(collectionPath));
+      _items(await _dataSource.readCollection(collectionPath), archived: false);
 
-  List<InventoryItem> _items(List<WorkspaceInventoryDocument> documents) {
+  List<InventoryItem> _items(
+    List<WorkspaceInventoryDocument> documents, {
+    required bool archived,
+  }) {
     try {
       return documents
           .map((doc) => InventoryItem.fromMap(doc.id, doc.data))
+          .where((item) => item.isArchived == archived)
           .toList(growable: false);
     } on FormatException {
       throw const WorkspaceInventoryDataException();

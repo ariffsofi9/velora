@@ -10,6 +10,7 @@ import '../suggestions/suggestions_page.dart';
 import '../settings/settings_page.dart';
 import '../alerts/alerts_page.dart';
 import '../inventory/add_item/add_item_page.dart';
+import '../activity/activity_page.dart';
 
 class HomePage extends StatefulWidget {
   final WorkspaceSession workspaceSession;
@@ -39,6 +40,7 @@ class _HomePageState extends State<HomePage> {
         onAddTap: _openAddItem,
         onInventoryTap: () => setState(() => _selectedIndex = 1),
         onAlertTap: _openAlerts,
+        onActivityTap: _openActivity,
       ),
       InventoryPage(
         workspaceSession: widget.workspaceSession,
@@ -82,6 +84,15 @@ class _HomePageState extends State<HomePage> {
           workspaceSession: widget.workspaceSession,
           repository: _inventoryRepository,
         ),
+      ),
+    );
+  }
+
+  void _openActivity() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ActivityPage(workspaceSession: widget.workspaceSession),
       ),
     );
   }

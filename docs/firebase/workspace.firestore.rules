@@ -84,7 +84,11 @@ service cloud.firestore {
         allow get, list: if isMember(cafeId);
         allow create, update, delete: if false;
       }
-      // Future activity/AI paths intentionally have no grants yet.
+      match /activities/{activityId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
+      // Future AI paths intentionally have no grants yet.
     }
     match /{document=**} { allow read, write: if false; }
   }
