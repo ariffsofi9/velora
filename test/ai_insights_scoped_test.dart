@@ -116,19 +116,24 @@ void main() {
     await tester.pumpWidget(_app(source));
     await tester.pumpAndSettle();
 
-    for (final label in ['Generate Recipes', 'Restock Advice']) {
-      final gesture = tester.widget<GestureDetector>(
-        find
-            .ancestor(
-              of: find.text(label),
-              matching: find.byType(GestureDetector),
-            )
-            .first,
-      );
-      expect(gesture.onTap, isNull);
-    }
     expect(
-      find.textContaining('secure workspace AI is enabled'),
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Generate Recipes'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.widgetWithText(OutlinedButton, 'Restock Advice'),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      find.textContaining('Recipe generation is not available yet'),
       findsOneWidget,
     );
   });

@@ -22,7 +22,7 @@ import 'logic_suggestions/groq_recipe_formatter.dart';
 import 'logic_suggestions/local_restock_formatter.dart';
 import 'logic_suggestions/skipped_recipe_service.dart';
 import 'restock_suggestion_service.dart';
-import 'widgets_suggestions/restock_suggestion_card.dart';
+import 'widgets_suggestions/recipe_suggestions_content.dart';
 
 part 'suggestions_foundation.dart';
 part 'suggestions_generation.dart';
@@ -198,22 +198,21 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 760),
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(18, 18, 18, 110),
+                  padding: EdgeInsets.fromLTRB(
+                    MediaQuery.sizeOf(context).width < 375 ? 16 : 18,
+                    18,
+                    MediaQuery.sizeOf(context).width < 375 ? 16 : 18,
+                    110,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SuggestionPageTitle(),
                       const SizedBox(height: 18),
-                      const EmptyCard(
-                        text:
-                            'AI generation, quota, cache and saved recipes are unavailable until secure workspace AI is enabled.',
-                      ),
-                      const SizedBox(height: 18),
-                      SuggestionActionButtons(
-                        onRecipeTap: null,
-                        onRestockTap: null,
-                      ),
-                      const SizedBox(height: 26),
+                      const RecipeSuggestionsContent(),
+                      const SizedBox(height: AppSpacing.xl),
+                      const SuggestionSectionTitle(title: 'Inventory Insights'),
+                      const SizedBox(height: AppSpacing.lg),
                       const SuggestionSectionTitle(title: 'Near Expiry Items'),
                       const SizedBox(height: 12),
                       NearExpirySection(
@@ -228,17 +227,14 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
                         const SizedBox(height: 12),
                         ...restockSuggestions.map(
                           (suggestion) =>
-                              RestockSuggestionCard(suggestion: suggestion),
+                              LocalRestockReminder(suggestion: suggestion),
                         ),
                       ],
                       const SizedBox(height: 26),
-                      const SuggestionSectionTitle(title: 'AI Recipes'),
-                      const SizedBox(height: 12),
-                      EmptyCard(
-                        text: items.isEmpty
-                            ? 'Add inventory items first to get AI insights.'
-                            : 'Secure AI recipe generation is not available yet.',
-                      ),
+                      if (items.isEmpty)
+                        const EmptyCard(
+                          text: 'Add inventory items first to get AI insights.',
+                        ),
                     ],
                   ),
                 ),

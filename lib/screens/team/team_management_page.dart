@@ -1,37 +1,82 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
 import '../../models/cafe_workspace.dart';
 import '../../services/workspace_resolver.dart';
+import '../../services/team_members_service.dart';
 import 'team_management_widgets.dart';
+import 'staff_invitation_page.dart';
+import '../../services/firebase_emulator_config.dart';
 
 class TeamManagementPage extends StatefulWidget {
   final FirebaseAuth? auth;
   final WorkspaceResolver? resolver;
+  final TeamMembers? members;
 
-  const TeamManagementPage({super.key, this.auth, this.resolver});
+  const TeamManagementPage({super.key, this.auth, this.resolver, this.members});
 
   @override
   State<TeamManagementPage> createState() => _TeamManagementPageState();
 }
 
 class _TeamManagementPageState extends State<TeamManagementPage> {
-  late Future<CafeWorkspace> _workspace;
+  late Future<TeamRoster> _workspace;
+  StreamSubscription<User?>? _authChanges;
+  int _generation = 0;
 
   FirebaseAuth get _auth => widget.auth ?? FirebaseAuth.instance;
+  WorkspaceResolver get _resolver =>
+      widget.resolver ?? WorkspaceResolver(auth: _auth);
 
   @override
   void initState() {
     super.initState();
-    _workspace = (widget.resolver ?? WorkspaceResolver(auth: _auth)).resolve();
+    _workspace = _load();
+    _workspace.ignore();
+    _authChanges = _auth.authStateChanges().listen((_) {
+      if (mounted) _retry();
+    });
+  }
+
+  Future<TeamRoster> _load() async {
+    final generation = ++_generation;
+    final uid = _auth.currentUser?.uid;
+    final workspace = await _resolver.resolve();
+    if (uid == null ||
+        workspace.uid != uid ||
+        _auth.currentUser?.uid != uid ||
+        generation != _generation) {
+      throw StateError('Session changed.');
+    }
+    final roster =
+        await (widget.members ??
+                FirebaseTeamMembers(auth: _auth, resolver: _resolver))
+            .load(workspace);
+    if (!mounted ||
+        generation != _generation ||
+        _auth.currentUser?.uid != uid) {
+      throw StateError('Session changed.');
+    }
+    return roster;
   }
 
   void _retry() {
     setState(() {
-      _workspace = (widget.resolver ?? WorkspaceResolver(auth: _auth))
-          .resolve();
+      _workspace = _load();
+      // Auth errors can complete before the next build attaches FutureBuilder.
+      // Mark handled here; FutureBuilder still receives the original error.
+      _workspace.ignore();
     });
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _authChanges?.cancel();
+    super.dispose();
   }
 
   @override
@@ -49,7 +94,7 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 680),
-          child: FutureBuilder<CafeWorkspace>(
+          child: FutureBuilder<TeamRoster>(
             future: _workspace,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -63,10 +108,7 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
                 return _NoTrustedTeam(onRetry: _retry);
               }
 
-              return _VerifiedTeamView(
-                workspace: workspace,
-                user: _auth.currentUser,
-              );
+              return _VerifiedTeamView(roster: workspace, onRefresh: _retry);
             },
           ),
         ),
@@ -76,38 +118,50 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
 }
 
 class _VerifiedTeamView extends StatelessWidget {
-  final CafeWorkspace workspace;
-  final User? user;
+  final TeamRoster roster;
+  final VoidCallback onRefresh;
 
-  const _VerifiedTeamView({required this.workspace, required this.user});
+  const _VerifiedTeamView({required this.roster, required this.onRefresh});
 
   @override
   Widget build(BuildContext context) {
-    final name = user?.displayName?.trim();
-    final displayName = name == null || name.isEmpty ? 'Velora User' : name;
-    final email = user?.email?.trim() ?? '';
-    final role = workspace.role == CafeRole.owner ? 'Owner' : 'Staff';
+    final role = roster.workspace.role == CafeRole.owner ? 'Owner' : 'Staff';
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
       children: [
         _TeamHeader(role: role),
         const SizedBox(height: 24),
-        const Text(
-          'Verified Member',
-          style: TextStyle(
+        Text(
+          'Verified Members (${roster.members.length})',
+          style: const TextStyle(
             color: AppColors.textPrimary,
             fontSize: 18,
             fontWeight: FontWeight.w600,
           ),
         ),
         const SizedBox(height: 10),
-        _MemberCard(name: displayName, email: email, role: role),
-        const SizedBox(height: 18),
-        const TeamBackendNotice(
-          message:
-              'Only your verified membership can be displayed. The full member list and management actions require the trusted team backend.',
+        if (roster.members.isEmpty)
+          const Text('No verified members are available.')
+        else
+          for (final member in roster.members) ...[
+            _MemberCard(
+              name: member.name,
+              email: member.email,
+              role: member.role == CafeRole.owner ? 'Owner' : 'Staff',
+            ),
+            const SizedBox(height: 10),
+          ],
+        OutlinedButton.icon(
+          onPressed: onRefresh,
+          icon: const Icon(Icons.refresh_rounded),
+          label: const Text('Refresh members'),
         ),
+        if (roster.workspace.role == CafeRole.staff)
+          const TeamBackendNotice(
+            message:
+                'Staff can view their own membership and the workspace owner.',
+          ),
       ],
     );
   }
@@ -172,7 +226,17 @@ class _TeamHeader extends StatelessWidget {
           height: 48,
           child: FilledButton.icon(
             key: const ValueKey('invite-staff-button'),
-            onPressed: null,
+            onPressed:
+                role == 'Owner' &&
+                    FirebaseEmulatorConfig.enabled &&
+                    FirebaseEmulatorConfig.staffDemo
+                ? () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          const StaffInvitationPage(ownerMode: true),
+                    ),
+                  )
+                : null,
             icon: const Icon(Icons.person_add_alt_1_outlined),
             label: const Text('Invite Staff'),
           ),
@@ -246,12 +310,6 @@ class _MemberCard extends StatelessWidget {
             ],
           ),
         ),
-        IconButton(
-          key: const ValueKey('member-management-button'),
-          onPressed: null,
-          tooltip: 'Member management unavailable',
-          icon: const Icon(Icons.more_vert_rounded),
-        ),
       ],
     ),
   );
@@ -282,7 +340,7 @@ class _NoTrustedTeam extends StatelessWidget {
       ),
       const SizedBox(height: 22),
       const Text(
-        'No trusted team workspace',
+        'Team members unavailable',
         textAlign: TextAlign.center,
         style: TextStyle(
           color: AppColors.textPrimary,
@@ -292,7 +350,7 @@ class _NoTrustedTeam extends StatelessWidget {
       ),
       const SizedBox(height: 10),
       const Text(
-        'Your account is not connected to a verified café membership. No members or roles can be shown safely yet.',
+        'The team list could not be verified. Check your connection and workspace access, then retry.',
         textAlign: TextAlign.center,
         style: TextStyle(
           color: AppColors.textSecondary,
@@ -315,11 +373,6 @@ class _NoTrustedTeam extends StatelessWidget {
         onPressed: onRetry,
         icon: const Icon(Icons.refresh_rounded),
         label: const Text('Check Again'),
-      ),
-      const SizedBox(height: 18),
-      const TeamBackendNotice(
-        message:
-            'Invitations, role changes and member removal will become available after trusted workspace provisioning is connected.',
       ),
     ],
   );

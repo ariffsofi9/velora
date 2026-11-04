@@ -1,3 +1,4 @@
+import '../team/staff_invitation_page.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
@@ -280,7 +281,19 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
                                   : null,
                             ),
                             Expanded(child: SetupProgress(step: _step)),
-                            const SizedBox(width: 48),
+                            SizedBox(
+                              width: 48,
+                              height: 48,
+                              child: IconButton(
+                                tooltip: 'Join with invite',
+                                icon: const Icon(Icons.group_add_outlined),
+                                onPressed: () => Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => const StaffInvitationPage(),
+                                  ),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: 24),

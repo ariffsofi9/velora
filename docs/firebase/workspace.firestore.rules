@@ -90,6 +90,10 @@ service cloud.firestore {
       }
       // Future AI paths intentionally have no grants yet.
     }
+    // Invitation secrets, receipts and admission limits are trusted-backend only.
+    match /workspace_invitations/{id} { allow read, write: if false; }
+    match /workspace_invite_requests/{id} { allow read, write: if false; }
+    match /workspace_invite_limits/{id} { allow read, write: if false; }
     match /{document=**} { allow read, write: if false; }
   }
 }

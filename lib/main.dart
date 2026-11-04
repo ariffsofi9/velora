@@ -26,7 +26,11 @@ import 'screens/business_setup/business_setup_page.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await Firebase.initializeApp(
+    options: FirebaseEmulatorConfig.optionsFor(
+      DefaultFirebaseOptions.currentPlatform,
+    ),
+  );
   await FirebaseEmulatorConfig.connectIfEnabled();
 
   await LocalNotificationService.init();

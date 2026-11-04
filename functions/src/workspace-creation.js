@@ -7,6 +7,7 @@ const BUSINESS_TYPES = new Set([
   'Catering',
   'Cloud Kitchen',
   'Other',
+  'cafe', 'restaurant', 'bakery',
 ]);
 const INVENTORY_UNITS = new Set(['kg', 'g', 'L', 'ml', 'pcs']);
 const REMINDER_DAYS = new Set([1, 3, 7]);
@@ -122,6 +123,8 @@ async function createWorkspace({auth, data, store, idFactory, timestamp}) {
     );
   }
   const input = validateInput(data);
+  const aliases = {cafe: 'Caf\u00e9', restaurant: 'Restaurant', bakery: 'Bakery'};
+  input.businessType = aliases[input.businessType] ?? input.businessType;
   const proposedCafeId = idFactory();
   if (!validId(proposedCafeId)) {
     throw new WorkspaceCreationError('internal', 'Workspace ID generation failed.');
@@ -155,9 +158,20 @@ async function createWorkspace({auth, data, store, idFactory, timestamp}) {
           'This account already belongs to a workspace.',
         );
       }
+      const prefs = cafe.inventoryPreferences;
+      if (cafe.name !== input.businessName || cafe.businessType !== input.businessType ||
+          cafe.address !== input.address || !prefs || prefs.unit !== input.inventoryUnit ||
+          prefs.lowStockAlerts !== input.lowStockAlerts || prefs.expiryReminders !== input.expiryReminders ||
+          prefs.reminderDays !== input.reminderDays) {
+        throw new WorkspaceCreationError('already-exists', 'This account already owns a workspace.');
+      }
       return {cafeId: existingCafeId, created: false};
     }
 
+    const newTypes = new Map([['cafe', 'Caf\u00e9'], ['restaurant', 'Restaurant'], ['bakery', 'Bakery'],
+      ['Caf\u00e9', 'Caf\u00e9'], ['Restaurant', 'Restaurant'], ['Bakery', 'Bakery']]);
+    if (!newTypes.has(input.businessType)) invalid('Unsupported business type for new workspaces.');
+    input.businessType = newTypes.get(input.businessType);
     const cafeId = proposedCafeId;
     const now = timestamp();
     transaction.create(`cafes/${cafeId}`, {

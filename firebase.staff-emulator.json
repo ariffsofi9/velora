@@ -1,0 +1,49 @@
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "staff-local"
+    }
+  ],
+  "firestore": {
+    "rules": "docs/firebase/workspace.firestore.rules",
+    "indexes": "docs/firebase/workspace.firestore.indexes.json"
+  },
+  "emulators": {
+    "auth": {
+      "host": "127.0.0.1",
+      "port": 29099
+    },
+    "firestore": {
+      "host": "127.0.0.1",
+      "port": 28080,
+      "websocketPort": 28150
+    },
+    "functions": {
+      "host": "127.0.0.1",
+      "port": 25001
+    },
+    "ui": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 24001
+    },
+    "hub": {
+      "host": "127.0.0.1",
+      "port": 24400
+    },
+    "logging": {
+      "host": "127.0.0.1",
+      "port": 24500
+    },
+    "singleProjectMode": true,
+    "eventarc": {
+      "host": "127.0.0.1",
+      "port": 29299
+    },
+    "tasks": {
+      "host": "127.0.0.1",
+      "port": 29499
+    }
+  }
+}

@@ -259,37 +259,29 @@ void main() {
     expect(find.text('Set Up Your Inventory'), findsOneWidget);
   });
 
-  testWidgets(
-    'Business type chips are text-only in three columns and two rows',
-    (tester) async {
-      await tester.pumpWidget(setupApp());
-      final group = find.byWidgetPredicate(
-        (widget) => widget is SetupChoices && widget.group == 'type',
-      );
-      expect(
-        find.descendant(of: group, matching: find.byType(Icon)),
-        findsNothing,
-      );
-      final positions = [
-        for (final value in [
-          'Restaurant',
-          'Caf\u00e9',
-          'Bakery',
-          'Catering',
-          'Cloud Kitchen',
-          'Other',
-        ])
-          tester.getTopLeft(find.byKey(ValueKey('type-$value'))),
-      ];
-      expect(positions[0].dy, positions[1].dy);
-      expect(positions[1].dy, positions[2].dy);
-      expect(positions[3].dy, positions[4].dy);
-      expect(positions[4].dy, positions[5].dy);
-      expect(positions[3].dy, greaterThan(positions[0].dy));
-      expect(positions[0].dx, lessThan(positions[1].dx));
-      expect(positions[1].dx, lessThan(positions[2].dx));
-    },
-  );
+  testWidgets('Business type chips offer only the three supported new types', (
+    tester,
+  ) async {
+    await tester.pumpWidget(setupApp());
+    final group = find.byWidgetPredicate(
+      (widget) => widget is SetupChoices && widget.group == 'type',
+    );
+    expect(
+      find.descendant(of: group, matching: find.byType(Icon)),
+      findsNothing,
+    );
+    final positions = [
+      for (final value in ['Restaurant', 'Caf\u00e9', 'Bakery'])
+        tester.getTopLeft(find.byKey(ValueKey('type-$value'))),
+    ];
+    expect(positions[0].dy, positions[1].dy);
+    expect(positions[1].dy, positions[2].dy);
+    expect(find.byKey(const ValueKey('type-Catering')), findsNothing);
+    expect(find.byKey(const ValueKey('type-Cloud Kitchen')), findsNothing);
+    expect(find.byKey(const ValueKey('type-Other')), findsNothing);
+    expect(positions[0].dx, lessThan(positions[1].dx));
+    expect(positions[1].dx, lessThan(positions[2].dx));
+  });
 
   testWidgets(
     'Defaults, disabled timing and back navigation preserve entered state',
@@ -401,7 +393,7 @@ void main() {
         find.byKey(const ValueKey('business-name')),
         'Updated Cafe',
       );
-      await tapSetup(tester, find.byKey(const ValueKey('type-Other')));
+      await tapSetup(tester, find.byKey(const ValueKey('type-Bakery')));
       await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
       await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
       expect(
@@ -414,7 +406,7 @@ void main() {
         tester
             .widget<Text>(find.byKey(const ValueKey('summary-Business Type')))
             .data,
-        'Other',
+        'Bakery',
       );
     },
   );

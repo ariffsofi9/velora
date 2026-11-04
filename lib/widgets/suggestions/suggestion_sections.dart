@@ -4,54 +4,24 @@ import 'package:flutter/material.dart';
 import '../../models/inventory_item.dart';
 import 'action_card.dart';
 import 'empty_card.dart';
-import 'near_expiry_card.dart';
 
 class SuggestionPageTitle extends StatelessWidget {
   const SuggestionPageTitle({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'AI Suggestions',
-                style: TextStyle(
-                  fontSize: 25,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              SizedBox(height: 5),
-              Text(
-                'Smart ideas to manage your inventory',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-            ],
-          ),
-        ),
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: AppColors.nude,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: const Icon(
-            Icons.auto_awesome_rounded,
-            color: AppColors.primary,
-          ),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text('AI Suggestions', style: Theme.of(context).textTheme.headlineSmall),
+      const SizedBox(height: AppSpacing.sm),
+      Text(
+        'Recipe ideas from your caf? inventory',
+        style: Theme.of(
+          context,
+        ).textTheme.bodyMedium?.copyWith(color: AppColors.textSecondary),
+      ),
+    ],
+  );
 }
 
 class SuggestionActionButtons extends StatelessWidget {
@@ -108,21 +78,44 @@ class NearExpirySection extends StatelessWidget {
       return const EmptyCard(text: 'No near-expiry items found.');
     }
 
-    return SizedBox(
-      height: 180,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: nearExpiry.length,
-        separatorBuilder: (context, index) => const SizedBox(width: 12),
-        itemBuilder: (context, index) {
-          final item = nearExpiry[index];
-
-          return NearExpiryCard(
-            item: item,
-            daysLeft: daysLeftText(item.expiryDate),
-          );
-        },
-      ),
+    return Column(
+      children: [
+        for (final item in nearExpiry)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.sm),
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.lg),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.schedule_outlined,
+                      color: AppColors.primary,
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            item.name,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: AppSpacing.xs),
+                          Text(
+                            '${item.quantity} ${item.unit} ? ${daysLeftText(item.expiryDate)}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
