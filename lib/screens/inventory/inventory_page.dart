@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
@@ -9,6 +11,7 @@ import '../../services/workspace_inventory_create_service.dart';
 import '../../services/workspace_inventory_update_service.dart';
 import '../../services/workspace_inventory_stock_service.dart';
 import '../../services/workspace_inventory_lifecycle_service.dart';
+import '../../services/inventory_csv_export_service.dart';
 import 'add_item/add_item_page.dart';
 import 'archived_items_page.dart';
 import 'item_details_page.dart';
@@ -28,6 +31,7 @@ class InventoryPage extends StatefulWidget {
   final WorkspaceInventoryStockAdjuster? stockAdjuster;
   final WorkspaceInventoryMovementReader? movementReader;
   final WorkspaceInventoryLifecycleManager? lifecycleManager;
+  final InventoryCsvExportService? csvExportService;
 
   const InventoryPage({
     super.key,
@@ -38,6 +42,7 @@ class InventoryPage extends StatefulWidget {
     this.stockAdjuster,
     this.movementReader,
     this.lifecycleManager,
+    this.csvExportService,
   });
 
   @override
@@ -46,8 +51,10 @@ class InventoryPage extends StatefulWidget {
 
 class _InventoryPageState extends State<InventoryPage> {
   final TextEditingController _searchController = TextEditingController();
-  late final WorkspaceInventoryRepository _repository;
+  late WorkspaceInventoryRepository _repository;
   late Stream<List<InventoryItem>> _itemsStream;
+  bool _exporting = false;
+  int _exportGeneration = 0;
 
   String _searchQuery = '';
   String _selectedFilter = 'All Items';
@@ -57,14 +64,34 @@ class _InventoryPageState extends State<InventoryPage> {
   @override
   void initState() {
     super.initState();
-    _repository =
-        widget.repository ??
-        WorkspaceInventoryRepository(session: widget.workspaceSession);
+    _configureRepository();
     _itemsStream = _repository.watchItems();
   }
 
   @override
+  void didUpdateWidget(covariant InventoryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.workspaceSession.cafeId != widget.workspaceSession.cafeId ||
+        oldWidget.workspaceSession.uid != widget.workspaceSession.uid ||
+        oldWidget.workspaceSession.ownerUid !=
+            widget.workspaceSession.ownerUid ||
+        oldWidget.workspaceSession.role != widget.workspaceSession.role ||
+        oldWidget.repository != widget.repository) {
+      _configureRepository();
+      _itemsStream = _repository.watchItems();
+      _exportGeneration++;
+    }
+  }
+
+  void _configureRepository() {
+    _repository =
+        widget.repository ??
+        WorkspaceInventoryRepository(session: widget.workspaceSession);
+  }
+
+  @override
   void dispose() {
+    _exportGeneration++;
     _searchController.dispose();
     super.dispose();
   }
@@ -133,6 +160,84 @@ class _InventoryPageState extends State<InventoryPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _chooseExport() async {
+    if (_exporting) return;
+    final generation = ++_exportGeneration;
+    final service =
+        widget.csvExportService ??
+        InventoryCsvExportService(repository: _repository);
+    final expected = widget.workspaceSession;
+    StreamSubscription<dynamic>? subscription;
+    setState(() => _exporting = true);
+    try {
+      var lastUid = service.auth.currentUser?.uid;
+      subscription = service.auth.authStateChanges().listen(
+        (user) {
+          if (user?.uid != lastUid) _exportGeneration++;
+          lastUid = user?.uid;
+        },
+        onError: (Object _) {
+          _exportGeneration++;
+        },
+      );
+      bool current() =>
+          mounted &&
+          generation == _exportGeneration &&
+          service.auth.currentUser?.uid == expected.uid;
+      if (!current()) return;
+      final scope = await showDialog<InventoryCsvScope>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Export inventory'),
+          content: const Text('Choose which café inventory records to export.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              key: const ValueKey('export-active-only'),
+              onPressed: () =>
+                  Navigator.pop(context, InventoryCsvScope.activeOnly),
+              child: const Text('Active only'),
+            ),
+            FilledButton(
+              key: const ValueKey('export-include-archived'),
+              onPressed: () =>
+                  Navigator.pop(context, InventoryCsvScope.includeArchived),
+              child: const Text('Include archived'),
+            ),
+          ],
+        ),
+      );
+      if (scope == null || !current()) return;
+      final result = await service.export(scope, isSessionCurrent: current);
+      if (!mounted || !current()) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Exported ${result.itemCount} inventory items.'),
+        ),
+      );
+    } on InventoryCsvEmptyException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('There are no items to export.')),
+      );
+    } on InventoryCsvSessionChangedException {
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Inventory export failed. Please try again.'),
+        ),
+      );
+    } finally {
+      unawaited(subscription?.cancel());
+      if (mounted) setState(() => _exporting = false);
+    }
   }
 
   @override
@@ -249,6 +354,23 @@ class _InventoryPageState extends State<InventoryPage> {
                             totalItems: items.length,
                             visibleItems: visibleItems.length,
                             isSmallPhone: isSmallPhone,
+                          ),
+                          const SizedBox(height: 10),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: OutlinedButton.icon(
+                              key: const ValueKey('export-inventory-csv'),
+                              onPressed: _exporting ? null : _chooseExport,
+                              icon: _exporting
+                                  ? const SizedBox.square(
+                                      dimension: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.download_outlined),
+                              label: const Text('Export CSV'),
+                            ),
                           ),
                           const SizedBox(height: 14),
                           InventorySearchBar(

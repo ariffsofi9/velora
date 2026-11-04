@@ -22,8 +22,14 @@ abstract interface class WorkspaceInventoryDataSource {
   Future<List<WorkspaceInventoryDocument>> readCollection(String path);
 }
 
+abstract interface class WorkspaceInventoryExportDataSource {
+  Future<List<WorkspaceInventoryDocument>> readServerCollection(String path);
+}
+
 class FirestoreWorkspaceInventoryDataSource
-    implements WorkspaceInventoryDataSource {
+    implements
+        WorkspaceInventoryDataSource,
+        WorkspaceInventoryExportDataSource {
   final FirebaseFirestore _firestore;
 
   FirestoreWorkspaceInventoryDataSource({FirebaseFirestore? firestore})
@@ -36,6 +42,15 @@ class FirestoreWorkspaceInventoryDataSource
   @override
   Future<List<WorkspaceInventoryDocument>> readCollection(String path) async =>
       _documents(await _firestore.collection(path).get());
+
+  @override
+  Future<List<WorkspaceInventoryDocument>> readServerCollection(
+    String path,
+  ) async => _documents(
+    await _firestore
+        .collection(path)
+        .get(const GetOptions(source: Source.server)),
+  );
 
   List<WorkspaceInventoryDocument> _documents(
     QuerySnapshot<Map<String, dynamic>> snapshot,
@@ -67,6 +82,18 @@ class WorkspaceInventoryRepository {
   Future<List<InventoryItem>> getItems() async =>
       _items(await _dataSource.readCollection(collectionPath), archived: false);
 
+  Future<List<InventoryItem>> getAllItems() async {
+    final source = _dataSource;
+    if (source is! WorkspaceInventoryExportDataSource) {
+      throw const WorkspaceInventoryDataException();
+    }
+    return _allItems(
+      await (source as WorkspaceInventoryExportDataSource).readServerCollection(
+        collectionPath,
+      ),
+    );
+  }
+
   List<InventoryItem> _items(
     List<WorkspaceInventoryDocument> documents, {
     required bool archived,
@@ -75,6 +102,16 @@ class WorkspaceInventoryRepository {
       return documents
           .map((doc) => InventoryItem.fromMap(doc.id, doc.data))
           .where((item) => item.isArchived == archived)
+          .toList(growable: false);
+    } on FormatException {
+      throw const WorkspaceInventoryDataException();
+    }
+  }
+
+  List<InventoryItem> _allItems(List<WorkspaceInventoryDocument> documents) {
+    try {
+      return documents
+          .map((doc) => InventoryItem.fromMap(doc.id, doc.data))
           .toList(growable: false);
     } on FormatException {
       throw const WorkspaceInventoryDataException();
