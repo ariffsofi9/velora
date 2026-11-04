@@ -89,6 +89,11 @@ service cloud.firestore {
         allow create, update, delete: if false;
       }
       // Future AI paths intentionally have no grants yet.
+      match /menu_items/{itemId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
+      match /menu_requests/{requestId} { allow read, write: if false; }
     }
     // Invitation secrets, receipts and admission limits are trusted-backend only.
     match /workspace_invitations/{id} { allow read, write: if false; }

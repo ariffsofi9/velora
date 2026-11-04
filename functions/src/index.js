@@ -4,7 +4,9 @@ const {initializeApp} = require('firebase-admin/app');
 const {getAuth} = require('firebase-admin/auth');
 const invitations = require('./workspace-invitations');
 const {listTeamMembers, TeamMembersError} = require('./team-members');
-const {getFirestore, FieldValue, Timestamp} = require('firebase-admin/firestore');
+const {getFirestore, FieldValue, Timestamp, FieldPath} = require('firebase-admin/firestore');
+const {menuOperation} = require('./menu-service');
+const {MenuError} = require('./menu-model');
 const {onCall, HttpsError} = require('firebase-functions/v2/https');
 const {createWorkspace, WorkspaceCreationError} = require('./workspace-creation');
 const {
@@ -40,10 +42,34 @@ const store = {
         const snapshot = await adminTransaction.get(db.collection(`cafes/${cafeId}/members`).limit(limit));
         return snapshot.docs.map(doc => ({id: doc.id, data: doc.data()}));
       },
+      menuItems: async (cafeId, input) => {
+        let query = db.collection(`cafes/${cafeId}/menu_items`);
+        if (!input.includeArchived) query = query.where('isArchived', '==', false);
+        query = query.orderBy(FieldPath.documentId()).limit(input.limit + 1);
+        if (input.cursor) query = query.startAfter(input.cursor);
+        const snapshot = await adminTransaction.get(query);
+        return snapshot.docs.map(doc => ({id: doc.id, data: doc.data()}));
+      },
     };
     return operation(transaction);
   }),
 };
+
+for (const [name, operation] of Object.entries({createMenuItem: 'create', getMenuItem: 'get',
+  listMenuItems: 'list', updateMenuItem: 'update', setMenuItemLifecycle: 'lifecycle'})) {
+  exports[name] = onCall({region: 'asia-southeast1', timeoutSeconds: 30}, async request => {
+    try {
+      if (!request.auth) throw new MenuError('unauthenticated', 'Sign in to continue.');
+      const account = await getAuth().getUser(request.auth.uid);
+      if (account.disabled) throw new MenuError('unauthenticated', 'Sign in to continue.');
+      return await menuOperation({operation, auth: request.auth, data: request.data, store,
+        timestamp: () => FieldValue.serverTimestamp()});
+    } catch (error) {
+      if (error instanceof MenuError) throw new HttpsError(error.code, error.message);
+      throw new HttpsError('unavailable', 'Menu operation unavailable. Please retry.');
+    }
+  });
+}
 
 exports.listTeamMembers = onCall({region: 'asia-southeast1', timeoutSeconds: 30}, async request => {
   try {

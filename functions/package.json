@@ -6,7 +6,7 @@
     "node": "22"
   },
   "scripts": {
-    "test": "node --test test/workspace-creation.test.js test/inventory-create.test.js test/inventory-update.test.js test/inventory-stock.test.js test/inventory-lifecycle.test.js",
+    "test": "node --test test/workspace-creation.test.js test/inventory-create.test.js test/inventory-update.test.js test/inventory-stock.test.js test/inventory-lifecycle.test.js test/menu-service.test.js",
     "test:integration": "firebase emulators:exec --config ../firebase.workspace-emulator.json --project demo-velora-workspaces --only auth,firestore,functions \"node --test test/workspace-emulator.integration.test.js\"",
     "test:rules": "firebase emulators:exec --config ../firebase.workspace-emulator.json --project demo-velora-workspaces --only firestore \"node --test test/firestore.rules.test.js\""
   },

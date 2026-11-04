@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/user_profile_service.dart';
 import '../auth/login_page.dart';
 import '../team/team_management_page.dart';
+import '../menu/menu_page.dart';
 import 'appearance_page.dart';
 import 'widgets_settings/app_info_card.dart';
 import 'widgets_settings/edit_profile_dialog.dart';
@@ -163,6 +164,15 @@ class _SettingsPageState extends State<SettingsPage> {
                       title: 'Team Management',
                       subtitle: 'View verified café membership',
                       onTap: _openTeamManagement,
+                    ),
+                    _AccountTile(
+                      icon: Icons.restaurant_menu_rounded,
+                      title: 'Menu Management',
+                      subtitle: 'View menu items and availability',
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const MenuPage()),
+                      ),
                     ),
                   ],
                 ),
