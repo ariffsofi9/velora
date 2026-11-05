@@ -14,6 +14,8 @@ import '../../logic/suggestion_helper.dart';
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 import '../../services/workspace_session.dart';
+import '../../services/firebase_emulator_config.dart';
+import 'widgets_suggestions/ai1_mock_recipe_content.dart';
 
 import '../../widgets/suggestions/empty_card.dart';
 import '../../widgets/suggestions/suggestion_sections.dart';
@@ -209,7 +211,14 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
                     children: [
                       const SuggestionPageTitle(),
                       const SizedBox(height: 18),
-                      const RecipeSuggestionsContent(),
+                      if (FirebaseEmulatorConfig.ai1Mock)
+                        Ai1MockRecipeContent(
+                          workspaceSession: widget.workspaceSession,
+                        )
+                      else
+                        RecipeSuggestionsContent(
+                          workspaceSession: widget.workspaceSession,
+                        ),
                       const SizedBox(height: AppSpacing.xl),
                       const SuggestionSectionTitle(title: 'Inventory Insights'),
                       const SizedBox(height: AppSpacing.lg),

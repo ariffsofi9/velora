@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {randomBytes} = require('node:crypto');
 const {PROJECT, HOSTS, validateRecipes, createRecipeService} = require('../ai1/recipe-service');
 const {createGroqProvider, selectProvider, serveProvider, pipeProvider} = require('../ai1/groq-provider');
+const {protectRelaySecret} = require('../ai1/relay-credential');
 const {childEnvironment} = require('../ai1/run-emulators');
 
 const secret = 'synthetic-ai2-credential';
@@ -157,11 +158,13 @@ test('oversized response is stopped and cancelled', async () => {
 });
 test('live selection and Windows pipe relay use only validated recipes, never key', async (t) => {
   const pipe = '\\\\.\\pipe\\velora-ai2-' + randomBytes(16).toString('hex');
+  const relaySecret = randomBytes(32).toString('hex');
   const provider = createGroqProvider({env: environment(), fetchImpl: async () => response(envelope())});
-  const server = serveProvider(pipe, provider);
+  const server = serveProvider(pipe, provider, relaySecret);
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(pipe, resolve); });
   t.after(() => new Promise((resolve) => server.close(resolve)));
-  const selected = selectProvider({env: {...environment(), AI2_PROVIDER_PIPE: pipe}, fakeProvider: () => []});
+  const selected = selectProvider({env: {...environment(), AI2_PROVIDER_PIPE: pipe,
+    AI2_RELAY_CREDENTIAL: protectRelaySecret(relaySecret)}, fakeProvider: () => []});
   assert.equal(selected.providerName, 'groq');
   const result = await selected.provider(input);
   assert.equal(result[0].ingredients[0].itemId, items[0].id);

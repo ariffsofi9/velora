@@ -10,6 +10,8 @@ import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/screens/team/team_management_page.dart';
 import 'package:velora/services/workspace_resolver.dart';
 import 'package:velora/services/team_members_service.dart';
+import 'package:velora/services/firebase_emulator_config.dart';
+import 'helpers/invitation_firebase.dart';
 
 class _User extends Fake implements User {
   final String id;
@@ -74,6 +76,7 @@ class _Resolver extends WorkspaceResolver {
 }
 
 void main() {
+  setUp(installInvitationFirebase);
   const ownerWorkspace = CafeWorkspace(
     cafeId: 'cafe-a',
     uid: 'owner-a',
@@ -116,7 +119,10 @@ void main() {
       final invite = tester.widget<FilledButton>(
         find.widgetWithText(FilledButton, 'Invite Staff'),
       );
-      expect(invite.onPressed, isNull);
+      expect(
+        invite.onPressed,
+        FirebaseEmulatorConfig.invitationsAvailable ? isNotNull : isNull,
+      );
       expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
     },
   );

@@ -1,0 +1,7 @@
+{
+  "name":"velora-ai1-mock-only",
+  "private":true,
+  "main":"index.js",
+  "engines":{"node":"22"},
+  "dependencies":{"firebase-admin":"^14.5.0","firebase-functions":"^7.4.0"}
+}

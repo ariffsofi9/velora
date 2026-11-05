@@ -1,4 +1,5 @@
 'use strict';
+const {activeMembershipGeneration} = require('./membership-generation');
 
 const BUSINESS_TYPES = new Set([
   'Restaurant',
@@ -122,6 +123,14 @@ async function createWorkspace({auth, data, store, idFactory, timestamp}) {
       'Authentication is required.',
     );
   }
+  // Callable Auth claims are verified by Firebase, never supplied in request data.
+  // Check before input processing, ID allocation or any transaction (also retries).
+  if (auth.token?.email_verified !== true) {
+    throw new WorkspaceCreationError(
+      'failed-precondition',
+      'Verify your email and refresh your sign-in before creating a workspace.',
+    );
+  }
   const input = validateInput(data);
   const aliases = {cafe: 'Caf\u00e9', restaurant: 'Restaurant', bakery: 'Bakery'};
   input.businessType = aliases[input.businessType] ?? input.businessType;
@@ -151,7 +160,8 @@ async function createWorkspace({auth, data, store, idFactory, timestamp}) {
         cafe.status !== 'active' ||
         cafe.schemaVersion !== 1 ||
         !activeLink(member, uid, existingCafeId) ||
-        member.role !== 'owner'
+        member.role !== 'owner' ||
+        activeMembershipGeneration(mapping, member, uid, existingCafeId, uid) === null
       ) {
         throw new WorkspaceCreationError(
           'already-exists',

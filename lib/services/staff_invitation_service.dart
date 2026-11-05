@@ -1,6 +1,6 @@
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'dart:async';
 
 import 'firebase_emulator_config.dart';
 
@@ -83,20 +83,47 @@ class FirebaseStaffInvitations implements StaffInvitations {
     void Function(StaffRedeemStage)? onStage,
   }) async {
     onStage?.call(StaffRedeemStage.callableConfig);
-    if (!FirebaseEmulatorConfig.enabled ||
-        !FirebaseEmulatorConfig.staffDemo ||
-        Firebase.app().options.projectId != 'demo-velora-staff') {
+    if (!FirebaseEmulatorConfig.invitationsAvailable) {
       throw StateError(
         'Invitations are available in the verified local emulator environment only.',
       );
     }
-    final callable =
-        (functions ?? FirebaseFunctions.instanceFor(region: 'asia-southeast1'))
-            .httpsCallable(name);
-    onStage?.call(StaffRedeemStage.callableInvocation);
-    final result = await callable.call<Map<String, dynamic>>(data);
-    onStage?.call(StaffRedeemStage.callableResponse);
-    return result.data;
+    final transport =
+        functions ?? FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+    if (!FirebaseEmulatorConfig.invitationProfileAllows(
+      transport.app.options.projectId,
+    )) {
+      throw StateError('Invitation transport project mismatch.');
+    }
+    transport.useFunctionsEmulator(
+      '127.0.0.1',
+      FirebaseEmulatorConfig.invitationFunctionsPort,
+      automaticHostMapping: false,
+    );
+    final identity = auth ?? FirebaseAuth.instance;
+    final uid = identity.currentUser?.uid;
+    if (uid == null) throw StateError('Sign in required.');
+    var changed = false;
+    final subscription = identity.authStateChanges().listen(
+      (user) {
+        if (user?.uid != uid) changed = true;
+      },
+      onError: (Object _) {
+        changed = true;
+      },
+    );
+    try {
+      final callable = transport.httpsCallable(name);
+      onStage?.call(StaffRedeemStage.callableInvocation);
+      final result = await callable.call<Map<String, dynamic>>(data);
+      if (changed || identity.currentUser?.uid != uid) {
+        throw StateError('Session changed.');
+      }
+      onStage?.call(StaffRedeemStage.callableResponse);
+      return result.data;
+    } finally {
+      await subscription.cancel();
+    }
   }
 
   @override
@@ -129,9 +156,10 @@ class FirebaseStaffInvitations implements StaffInvitations {
   @override
   Future<void> redeem(String code) async {
     var stage = StaffRedeemStage.emulatorConfig;
+    StreamSubscription<User?>? subscription;
+    var changed = false;
     try {
-      if (!FirebaseEmulatorConfig.enabled ||
-          !FirebaseEmulatorConfig.staffDemo) {
+      if (!FirebaseEmulatorConfig.invitationsAvailable) {
         throw StaffInvitationFailure._(stage, 'emulator-required');
       }
       stage = StaffRedeemStage.authSession;
@@ -140,10 +168,18 @@ class FirebaseStaffInvitations implements StaffInvitations {
         throw StaffInvitationFailure._(stage, 'unauthenticated');
       }
       stage = StaffRedeemStage.authReload;
+      subscription = (auth ?? FirebaseAuth.instance).authStateChanges().listen(
+        (current) {
+          if (current?.uid != user.uid) changed = true;
+        },
+        onError: (Object _) {
+          changed = true;
+        },
+      );
       await user.reload();
       stage = StaffRedeemStage.authSession;
       final current = (auth ?? FirebaseAuth.instance).currentUser;
-      if (current?.uid != user.uid) {
+      if (changed || current?.uid != user.uid) {
         throw StaffInvitationFailure._(stage, 'session-changed');
       }
       stage = StaffRedeemStage.emailVerification;
@@ -152,6 +188,13 @@ class FirebaseStaffInvitations implements StaffInvitations {
       }
       stage = StaffRedeemStage.tokenRefresh;
       await current!.getIdToken(true);
+      if (changed ||
+          (auth ?? FirebaseAuth.instance).currentUser?.uid != user.uid) {
+        throw StaffInvitationFailure._(
+          StaffRedeemStage.authSession,
+          'session-changed',
+        );
+      }
       await _call('redeemStaffInvitation', {
         'code': code.trim(),
       }, onStage: (value) => stage = value);
@@ -159,6 +202,8 @@ class FirebaseStaffInvitations implements StaffInvitations {
       rethrow;
     } catch (error) {
       throw StaffInvitationFailure.fromError(stage, error);
+    } finally {
+      await subscription?.cancel();
     }
   }
 }

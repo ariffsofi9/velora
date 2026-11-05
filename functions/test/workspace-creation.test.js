@@ -47,7 +47,7 @@ class MemoryStore {
 
 function invoke({uid = 'owner-a', data = validData, store, id = 'cafe-a'} = {}) {
   return createWorkspace({
-    auth: uid ? {uid} : null,
+    auth: uid ? {uid, token: {email_verified: true}} : null,
     data,
     store: store ?? new MemoryStore(),
     idFactory: () => id,

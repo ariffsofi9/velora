@@ -8,6 +8,7 @@ const {getFirestore, FieldValue, Timestamp, FieldPath} = require('firebase-admin
 const {menuOperation} = require('./menu-service');
 const {MenuError} = require('./menu-model');
 const {onCall, HttpsError} = require('firebase-functions/v2/https');
+const {createStaffRemovalHandler, MembershipRemovalError} = require('./membership-removal');
 const {createWorkspace, WorkspaceCreationError} = require('./workspace-creation');
 const {
   createInventoryItem,
@@ -38,6 +39,7 @@ const store = {
       },
       create: (path, data) => adminTransaction.create(db.doc(path), data),
       update: (path, data) => adminTransaction.update(db.doc(path), data),
+      set: (path, data) => adminTransaction.set(db.doc(path), data),
       members: async (cafeId, limit) => {
         const snapshot = await adminTransaction.get(db.collection(`cafes/${cafeId}/members`).limit(limit));
         return snapshot.docs.map(doc => ({id: doc.id, data: doc.data()}));
@@ -54,6 +56,19 @@ const store = {
     return operation(transaction);
   }),
 };
+
+const staffRemovalHandler = createStaffRemovalHandler({
+  enabled: false, // D3B.1C foundation only; no cloud activation authorized.
+  store, account: uid => getAuth().getUser(uid), timestamp: () => FieldValue.serverTimestamp(),
+});
+exports.removeStaffMember = onCall({region: 'asia-southeast1', timeoutSeconds: 30}, async request => {
+  try {
+    return await staffRemovalHandler(request);
+  } catch (error) {
+    if (error instanceof MembershipRemovalError) throw new HttpsError(error.code, error.message);
+    throw new HttpsError('unavailable', 'Staff removal could not be completed.');
+  }
+});
 
 for (const [name, operation] of Object.entries({createMenuItem: 'create', getMenuItem: 'get',
   listMenuItems: 'list', updateMenuItem: 'update', setMenuItemLifecycle: 'lifecycle'})) {

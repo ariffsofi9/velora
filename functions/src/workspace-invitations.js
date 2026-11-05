@@ -1,4 +1,6 @@
 'use strict';
+const {activeMembershipGeneration} = require('./membership-generation');
+const {removedStaff, applyStaffRejoin} = require('./membership-rejoin');
 
 const {randomBytes, createHash, timingSafeEqual} = require('node:crypto');
 class InvitationError extends Error {
@@ -31,7 +33,8 @@ async function owner(tx, uid) {
   const cafe = await tx.get(`cafes/${cafeId}`);
   const member = await tx.get(`cafes/${cafeId}/members/${uid}`);
   if (cafe?.ownerUid !== uid || cafe.status !== 'active' || cafe.schemaVersion !== 1 ||
-      !active(member, uid, cafeId) || member.role !== 'owner') {
+      !active(member, uid, cafeId) || member.role !== 'owner' ||
+      activeMembershipGeneration(map, member, uid, cafeId, uid) === null) {
     fail('permission-denied', 'Verified workspace owner required.');
   }
   return cafeId;
@@ -45,15 +48,35 @@ function requestId(value) {
 const millis = (value) => value instanceof Date ? value.getTime() : value?.toMillis?.();
 
 async function createStaffInvitation({auth, data, store, now = () => new Date(),
-  toTimestamp = (d) => d, random = randomBytes}) {
+  toTimestamp = (d) => d, random = randomBytes, allowRejoin = false, resolveAccount}) {
   const uid = actor(auth); input(data, ['email', 'requestId']);
   const targetEmail = email(data.email); const request = requestId(data.requestId);
+  // Internal dependency only, never accepted in request data. Existing callable
+  // wiring supplies neither option, so rejoin issuance remains disabled.
+  let target;
+  if (allowRejoin === true) {
+    if (typeof resolveAccount !== 'function') fail('failed-precondition', 'Rejoin account lookup unavailable.');
+    target = await resolveAccount(targetEmail);
+    if (target && (!id(target.uid) || target.disabled || !target.emailVerified || email(target.email) !== targetEmail)) {
+      fail('failed-precondition', 'Invitation target could not be verified.');
+    }
+  }
   const invitationId = random(16).toString('hex');
   const secret = random(32).toString('hex');
   const code = `${invitationId}.${secret}`;
   const time = now(); const expires = new Date(time.getTime() + 24 * 60 * 60 * 1000);
   await store.runTransaction(async (tx) => {
     const cafeId = await owner(tx, uid);
+    let binding = {};
+    if (target) {
+      const mapping = await tx.get(`user_cafe_memberships/${target.uid}`);
+      if (mapping) {
+        const old = await removedStaff(tx, target.uid, fail);
+        binding = {bindingVersion: 1, targetUid: target.uid,
+          targetGeneration: old.mapping.membershipGeneration,
+          previousCafeId: old.mapping.cafeId, removalEventId: old.mapping.removalEventId};
+      }
+    }
     const receipt = `workspace_invite_requests/${hash(`${uid}\0${request}`)}`;
     const ratePath = `workspace_invite_limits/${hash(`${uid}\0create\0${Math.floor(time.getTime() / 3600000)}`)}`;
     const previous = await tx.get(receipt); const rate = await tx.get(ratePath);
@@ -65,7 +88,7 @@ async function createStaffInvitation({auth, data, store, now = () => new Date(),
     if (await tx.get(invitePath)) fail('unavailable', 'Please create a new invitation request.');
     tx.create(invitePath, {cafeId, ownerUid: uid, email: targetEmail, role: 'staff',
       tokenHash: hash(code), status: 'pending', schemaVersion: 1,
-      createdAt: toTimestamp(time), expiresAt: toTimestamp(expires)});
+      createdAt: toTimestamp(time), expiresAt: toTimestamp(expires), ...binding});
     tx.create(receipt, {uid, cafeId, invitationId, createdAt: toTimestamp(time)});
     const counter = {count: (rate?.count ?? 0) + 1, updatedAt: toTimestamp(time)};
     if (rate) tx.update(ratePath, counter); else tx.create(ratePath, counter);
@@ -88,7 +111,7 @@ async function revokeStaffInvitation({auth, data, store, now = () => new Date(),
   });
   return {revoked: true};
 }
-async function redeemStaffInvitation({auth, data, store, now = () => new Date(), toTimestamp = (d) => d}) {
+async function redeemStaffInvitation({auth, data, store, now = () => new Date(), toTimestamp = (d) => d, allowRejoin = false}) {
   const uid = actor(auth); input(data, ['code']);
   if (auth.token?.email_verified !== true) fail('failed-precondition', 'Verify your email and sign in again before joining.');
   const address = email(auth.token.email);
@@ -121,7 +144,17 @@ async function redeemStaffInvitation({auth, data, store, now = () => new Date(),
     const mapPath = `user_cafe_memberships/${uid}`;
     const memberPath = `cafes/${invite.cafeId}/members/${uid}`;
     const mapping = await tx.get(mapPath); const member = await tx.get(memberPath);
-    if (mapping || member) fail('already-exists', 'This account already has a membership.');
+    if (mapping || member) {
+      if (allowRejoin === true && mapping?.status === 'inactive' && invite.bindingVersion === 1) {
+        return applyStaffRejoin({tx, uid, invite, invitationId, mapping, destinationMember: member,
+          time: toTimestamp(now()), deny: fail});
+      }
+      fail('already-exists', 'This account already has a membership.');
+    }
+    // Bound invitations must never turn into first-time joins if the tombstone
+    // is missing, deleted, or belongs to a different identity.
+    if (Object.hasOwn(invite, 'bindingVersion') || Object.hasOwn(invite, 'targetUid') ||
+        Object.hasOwn(invite, 'targetGeneration')) fail('permission-denied', 'Invitation binding is invalid.');
     const timestamp = toTimestamp(now());
     const link = {uid, cafeId: invite.cafeId, status: 'active', schemaVersion: 1,
       createdAt: timestamp, updatedAt: timestamp};

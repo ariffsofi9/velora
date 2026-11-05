@@ -10,6 +10,7 @@ const net = require('node:net');
 const {randomBytes} = require('node:crypto');
 const {PROJECT, HOSTS} = require('./recipe-service');
 const {createGroqProvider, serveProvider} = require('./groq-provider');
+const {protectRelaySecret} = require('./relay-credential');
 const {PREFIX, SAFE_CODES, safeTitles} = require('./live-smoke');
 
 function childEnvironment(source = process.env) {
@@ -54,13 +55,16 @@ async function main() {
       FUNCTIONS_EMULATOR: 'true', ...HOSTS, AI_RECIPE_PROVIDER: 'groq',
       GROQ_API_KEY: process.env.GROQ_API_KEY}});
     const pipe = '\\\\.\\pipe\\velora-ai2-' + randomBytes(16).toString('hex');
-    broker = serveProvider(pipe, async (input) => { liveCalls++; return provider(input); });
+    const relaySecret = randomBytes(32).toString('hex');
+    const relayCredential = protectRelaySecret(relaySecret);
+    broker = serveProvider(pipe, async (input) => { liveCalls++; return provider(input); }, relaySecret);
     await new Promise((resolve, reject) => {
       broker.once('error', () => reject(Error('Local provider relay could not start.')));
       broker.listen(pipe, resolve);
     });
     env.AI_RECIPE_PROVIDER = 'groq';
     env.AI2_PROVIDER_PIPE = pipe;
+    env.AI2_RELAY_CREDENTIAL = relayCredential;
   } else {
     env.AI_RECIPE_PROVIDER = 'fake';
   }
@@ -116,6 +120,7 @@ async function main() {
       process.exitCode = passed ? 0 : 1;
     } else process.exitCode = interrupted ? 130 : code ?? 1;
   });
+  if (mode === 'test') watchdog = setTimeout(() => { interrupted = true; stop(); }, 180000);
   if (liveTest) {
     // Raw Firebase CLI/provider output is never printed by the live test mode.
     child.stdout.resume(); child.stderr.resume();

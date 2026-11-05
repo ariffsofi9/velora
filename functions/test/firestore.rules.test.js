@@ -11,6 +11,8 @@ const {
 const {serverTimestamp} = require('firebase/firestore');
 
 let environment;
+// D3B.1B generation cases below require the existing deliberately isolated
+// disposable emulator. They are not executed by npm test or static checks.
 const firestorePort = Number(process.env.FIRESTORE_RULES_TEST_PORT || 8080);
 
 const link = (uid, cafeId, role) => ({
@@ -20,6 +22,45 @@ const link = (uid, cafeId, role) => ({
   status: 'active',
   schemaVersion: 1,
 });
+
+for (const uid of ['owner-a', 'staff-a']) {
+  for (const [name, mapped, joined, allowed] of [
+    ['legacy', undefined, undefined, true],
+    ['explicit zero', 0, 0, true],
+    ['explicit positive', 7, 7, true],
+    ['maximum safe', Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, true],
+    ['one-sided mapping zero', 0, undefined, false],
+    ['one-sided member zero', undefined, 0, false],
+    ['mismatch', 1, 2, false],
+    ['negative', -1, -1, false],
+    ['fractional', 0.5, 0.5, false],
+    ['string', '0', '0', false],
+    ['null', null, null, false],
+    ['unsafe', 9007199254740992, 9007199254740992, false],
+  ]) {
+    test(`generation pair ${uid}: ${name}`, async () => {
+      await environment.withSecurityRulesDisabled(async context => {
+        const db = context.firestore();
+        if (mapped !== undefined) await db.doc(`user_cafe_memberships/${uid}`).update({membershipGeneration: mapped});
+        if (joined !== undefined) await db.doc(`cafes/cafe-a/members/${uid}`).update({membershipGeneration: joined});
+      });
+      const staff = environment.authenticatedContext('staff-a').firestore();
+      const owner = environment.authenticatedContext('owner-a').firestore();
+      // A bad owner pair blocks staff as well; a bad staff pair must not
+      // revoke an independently valid owner's access.
+      const check = allowed ? assertSucceeds : assertFails;
+      await check(staff.doc('cafes/cafe-a/inventory/item-a').get());
+      await (uid === 'owner-a' ? check : assertSucceeds)(owner.doc('cafes/cafe-a/inventory/item-a').get());
+      if (allowed) {
+        for (const forbidden of [
+          'user_cafe_memberships/staff-a', 'cafes/cafe-a/members/staff-a',
+          'cafes/cafe-a/activities/forged', 'cafes/cafe-a/membership_events/forged',
+          'cafes/cafe-a/membership_requests/forged',
+        ]) await assertFails(owner.doc(forbidden).set({membershipGeneration: 8}));
+      }
+    });
+  }
+}
 
 test.before(async () => {
   environment = await initializeTestEnvironment({

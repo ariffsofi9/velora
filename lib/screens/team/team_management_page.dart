@@ -227,9 +227,7 @@ class _TeamHeader extends StatelessWidget {
           child: FilledButton.icon(
             key: const ValueKey('invite-staff-button'),
             onPressed:
-                role == 'Owner' &&
-                    FirebaseEmulatorConfig.enabled &&
-                    FirebaseEmulatorConfig.staffDemo
+                role == 'Owner' && FirebaseEmulatorConfig.invitationsAvailable
                 ? () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (_) =>

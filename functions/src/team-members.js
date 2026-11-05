@@ -1,4 +1,5 @@
 'use strict';
+const {activeMembershipGeneration} = require('./membership-generation');
 
 class TeamMembersError extends Error {
   constructor(code) { super('Team members could not be verified.'); this.code = code; }
@@ -22,7 +23,9 @@ async function context(tx, uid) {
   if (!link(member, uid, cafeId) || !['owner', 'staff'].includes(member.role) ||
       (member.role === 'owner') !== (uid === ownerUid) ||
       !link(owner, ownerUid, cafeId) || owner.role !== 'owner' ||
-      !link(ownerMap, ownerUid, cafeId)) deny();
+      !link(ownerMap, ownerUid, cafeId) ||
+      activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid) === null ||
+      activeMembershipGeneration(ownerMap, owner, ownerUid, cafeId, ownerUid) === null) deny();
   return {cafeId, ownerUid, role: member.role};
 }
 
@@ -44,7 +47,10 @@ async function readTeam(tx, uid) {
         !['owner', 'staff'].includes(data.role) ||
         (data.role === 'owner') !== (id === scope.ownerUid)) continue;
     const mapping = await tx.get(`user_cafe_memberships/${id}`);
-    if (link(mapping, id, scope.cafeId)) members.push({uid: id, role: data.role});
+    if (link(mapping, id, scope.cafeId) &&
+        activeMembershipGeneration(mapping, data, id, scope.cafeId, scope.ownerUid) !== null) {
+      members.push({uid: id, role: data.role});
+    }
   }
   return {...scope, members};
 }

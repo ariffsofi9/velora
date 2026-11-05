@@ -36,7 +36,7 @@ class Store {
 const input = (extra={}) => ({idempotencyKey:'menu-request-00001',name:'Flat White',category:'Coffee',priceMinor:1200,isAvailable:true,...extra});
 const fixture = () => {
   const store=new Store();
-  const invoke=(operation,data,uid='owner')=>menuOperation({operation,data,auth:uid?{uid}:null,store,
+  const invoke=(operation,data,uid='owner')=>menuOperation({operation,data: !['get','list'].includes(operation) && data && !Array.isArray(data) && typeof data === 'object' ? {expectedCafeId:uid === 'foreign' ? 'b' : 'a',expectedMembershipGeneration:0,...data} : data,auth:uid?{uid}:null,store,
     timestamp:()=>new Date('2030-01-01T00:00:00Z')});
   return {store,invoke};
 };

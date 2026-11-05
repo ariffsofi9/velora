@@ -1,4 +1,6 @@
 'use strict';
+const {mutationEpisode, assertMutationEpisode} = require('./mutation-episode');
+const {activeMembershipGeneration} = require('./membership-generation');
 
 const {createHash} = require('node:crypto');
 const {MenuError, validId, parseRequest, menuDocument} = require('./menu-model');
@@ -20,20 +22,24 @@ async function authorize(tx, uid, ownerOnly) {
   if (!active(member, uid, cafeId) || !['owner', 'staff'].includes(member.role) ||
       (member.role === 'owner') !== (uid === ownerUid) || !active(owner, ownerUid, cafeId) ||
       owner.role !== 'owner' || !active(ownerMap, ownerUid, cafeId) ||
-      (ownerOnly && member.role !== 'owner')) deny();
-  return cafeId;
+      (ownerOnly && member.role !== 'owner') ||
+      activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid) === null ||
+      activeMembershipGeneration(ownerMap, owner, ownerUid, cafeId, ownerUid) === null) deny();
+  return {cafeId, generation: activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid)};
 }
 
 async function menuOperation({operation, auth, data, store, timestamp}) {
   const uid = auth?.uid;
   if (!validId(uid)) throw new MenuError('unauthenticated', 'Sign in to continue.');
-  const input = parseRequest(operation, data);
   const mutation = !['get', 'list'].includes(operation);
+  const {episode, payload} = mutation ? mutationEpisode(data, MenuError) : {payload: data};
+  const input = parseRequest(operation, payload);
   // Strict parsed field set, never a client role/flag or a comparison of values.
   const availabilityOnly = operation === 'update' &&
     Object.keys(input.changes).length === 1 && Object.hasOwn(input.changes, 'isAvailable');
   return store.runTransaction(async tx => {
-    const cafeId = await authorize(tx, uid, mutation && !availabilityOnly);
+    const {cafeId, generation} = await authorize(tx, uid, mutation && !availabilityOnly);
+    if (mutation) assertMutationEpisode(episode, cafeId, generation, MenuError);
     if (operation === 'get') {
       const doc = await tx.get(`cafes/${cafeId}/menu_items/${input.itemId}`);
       if (!doc) throw new MenuError('not-found', 'Menu item not found.');
@@ -50,7 +56,7 @@ async function menuOperation({operation, auth, data, store, timestamp}) {
         nextCursor: hasMore ? rows[input.limit - 1].id : null};
     }
     const requestHash = hash(`${uid}\0${cafeId}\0${input.idempotencyKey}`);
-    const payloadHash = hash(JSON.stringify({operation, input}));
+    const payloadHash = hash(JSON.stringify({operation, input, episode}));
     const receiptPath = `cafes/${cafeId}/menu_requests/${requestHash}`;
     const receipt = await tx.get(receiptPath);
     if (receipt) {

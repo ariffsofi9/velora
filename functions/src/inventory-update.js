@@ -1,4 +1,6 @@
 'use strict';
+const {mutationEpisode, assertMutationEpisode} = require('./mutation-episode');
+const {activeMembershipGeneration} = require('./membership-generation');
 
 const {createHash} = require('node:crypto');
 
@@ -169,7 +171,8 @@ async function resolveActiveMembership(transaction, uid) {
     cafe.schemaVersion !== 1 ||
     !activeLink(member, uid, cafeId) ||
     !['owner', 'staff'].includes(member.role) ||
-    (member.role === 'owner') !== (uid === ownerUid)
+    (member.role === 'owner') !== (uid === ownerUid) ||
+    activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid) === null
   ) {
     throw new InventoryUpdateError(
       'permission-denied',
@@ -185,14 +188,15 @@ async function resolveActiveMembership(transaction, uid) {
   if (
     !activeLink(ownerMember, ownerUid, cafeId) ||
     ownerMember.role !== 'owner' ||
-    !activeLink(ownerMapping, ownerUid, cafeId)
+    !activeLink(ownerMapping, ownerUid, cafeId) ||
+    activeMembershipGeneration(ownerMapping, ownerMember, ownerUid, cafeId, ownerUid) === null
   ) {
     throw new InventoryUpdateError(
       'failed-precondition',
       'Workspace ownership is inconsistent.',
     );
   }
-  return {cafeId};
+  return {cafeId, generation: activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid)};
 }
 
 function hash(value) {
@@ -225,12 +229,15 @@ async function updateInventoryItem({auth, data, store, timestamp, toTimestamp}) 
       'Authentication is required.',
     );
   }
-  const input = validateInput(data);
+  const {episode, payload} = mutationEpisode(data, InventoryUpdateError);
+  const input = validateInput(payload);
 
   return store.runTransaction(async (transaction) => {
-    const {cafeId} = await resolveActiveMembership(transaction, uid);
+    const {cafeId, generation} = await resolveActiveMembership(transaction, uid);
+    assertMutationEpisode(episode, cafeId, generation, InventoryUpdateError);
     const requestHash = hash(`${uid}\u0000${cafeId}\u0000${input.idempotencyKey}`);
     const inputHash = hash(JSON.stringify({
+      episode,
       itemId: input.itemId,
       expectedVersion: input.expectedVersion,
       changes: normalizedChanges(input.changes),

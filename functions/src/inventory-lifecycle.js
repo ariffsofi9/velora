@@ -1,4 +1,6 @@
 'use strict';
+const {mutationEpisode, assertMutationEpisode} = require('./mutation-episode');
+const {activeMembershipGeneration} = require('./membership-generation');
 
 const {createHash} = require('node:crypto');
 
@@ -70,18 +72,20 @@ async function resolveActiveMembership(transaction, uid) {
   if (!validId(ownerUid) || !cafe || cafe.status !== 'active' ||
       cafe.schemaVersion !== 1 || !activeLink(member, uid, cafeId) ||
       !['owner', 'staff'].includes(member.role) ||
-      (member.role === 'owner') !== (uid === ownerUid)) {
+      (member.role === 'owner') !== (uid === ownerUid) ||
+      activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid) === null) {
     throw new InventoryLifecycleError('permission-denied',
       'Workspace membership could not be verified.');
   }
   const ownerMember = await transaction.get(`cafes/${cafeId}/members/${ownerUid}`);
   const ownerMapping = await transaction.get(`user_cafe_memberships/${ownerUid}`);
   if (!activeLink(ownerMember, ownerUid, cafeId) || ownerMember.role !== 'owner' ||
-      !activeLink(ownerMapping, ownerUid, cafeId)) {
+      !activeLink(ownerMapping, ownerUid, cafeId) ||
+      activeMembershipGeneration(ownerMapping, ownerMember, ownerUid, cafeId, ownerUid) === null) {
     throw new InventoryLifecycleError('failed-precondition',
       'Workspace ownership is inconsistent.');
   }
-  return cafeId;
+  return {cafeId, generation: activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid)};
 }
 
 function hash(value) {
@@ -104,11 +108,14 @@ async function setInventoryLifecycle({
   if (!validId(uid)) {
     throw new InventoryLifecycleError('unauthenticated', 'Authentication is required.');
   }
-  const input = validateInput(data);
+  const {episode, payload} = mutationEpisode(data, InventoryLifecycleError);
+  const input = validateInput(payload);
   return store.runTransaction(async (transaction) => {
-    const cafeId = await resolveActiveMembership(transaction, uid);
+    const {cafeId, generation} = await resolveActiveMembership(transaction, uid);
+    assertMutationEpisode(episode, cafeId, generation, InventoryLifecycleError);
     const requestHash = hash(`${uid}\u0000${cafeId}\u0000${input.idempotencyKey}`);
     const payloadHash = hash(JSON.stringify({
+      episode,
       itemId: input.itemId,
       action: input.action,
       expectedVersion: input.expectedVersion,

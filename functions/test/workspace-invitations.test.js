@@ -95,14 +95,14 @@ test('new business types constrained; historical records preserved; second creat
   const data={businessName:'Cafe One',businessType:'Restaurant',address:'',inventoryUnit:'kg',lowStockAlerts:true,expiryReminders:true,reminderDays:3};
   for(const [type,expected] of [['cafe','Caf\u00e9'],['Caf\u00e9','Caf\u00e9'],['restaurant','Restaurant'],['bakery','Bakery']]){
     const store=new Store({});
-    await createWorkspace({auth:{uid:'owner'},data:{...data,businessType:type},store,idFactory:()=> 'a',timestamp:()=>new Date()});
+    await createWorkspace({auth:{uid:'owner',token:{email_verified:true}},data:{...data,businessType:type},store,idFactory:()=> 'a',timestamp:()=>new Date()});
     assert.equal(store.docs.get('cafes/a').businessType,expected);
   }
   for(const type of ['Catering','Cloud Kitchen','Other']){
-    const store=new Store({});await assert.rejects(createWorkspace({auth:{uid:'owner'},data:{...data,businessType:type},store,idFactory:()=> 'a',timestamp:()=>new Date()}),code('invalid-argument'));
+    const store=new Store({});await assert.rejects(createWorkspace({auth:{uid:'owner',token:{email_verified:true}},data:{...data,businessType:type},store,idFactory:()=> 'a',timestamp:()=>new Date()}),code('invalid-argument'));
     assert.equal(store.docs.size,0);
   }
-  const store=new Store({});const args={auth:{uid:'owner'},data,store,idFactory:()=> 'a',timestamp:()=>new Date()};
+  const store=new Store({});const args={auth:{uid:'owner',token:{email_verified:true}},data,store,idFactory:()=> 'a',timestamp:()=>new Date()};
   await createWorkspace(args);await assert.rejects(createWorkspace({...args,data:{...data,businessName:'Second'}}),code('already-exists'));
   store.docs.get('cafes/a').businessType='Catering';
   assert.equal((await createWorkspace({...args,data:{...data,businessType:'Catering'}})).created,false);

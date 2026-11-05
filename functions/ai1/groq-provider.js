@@ -1,6 +1,8 @@
 'use strict';
 
 const net = require('node:net');
+const {createHmac, randomBytes, timingSafeEqual} = require('node:crypto');
+const {unprotectRelaySecret} = require('./relay-credential');
 const {RecipeError, assertIsolated, validateRecipes} = require('./recipe-service');
 const MODEL = 'openai/gpt-oss-20b';
 const LIMIT = 65536;
@@ -142,60 +144,99 @@ function createGroqProvider({env = process.env, fetchImpl = globalThis.fetch,
 }
 
 const pipePattern = /^\\\\\.\\pipe\\velora-ai2-[a-f0-9]{32}$/;
-function pipeProvider(pipe) {
+const hex = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+function relaySecret(secret) {
+  if (!hex(secret)) throw failure('failed-precondition');
+}
+const mac = (secret, ...parts) => createHmac('sha256', Buffer.from(secret, 'hex')).update(JSON.stringify(parts)).digest('hex');
+const equal = (a, b) => hex(a) && hex(b) && timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
+function pipeProvider(pipe, secret) {
   if (!pipePattern.test(pipe ?? '')) throw failure('failed-precondition');
+  relaySecret(secret);
   return async ({items, maxRecipes}) => {
     context(items, maxRecipes);
     return new Promise((resolve, reject) => {
       const socket = net.createConnection(pipe); socket.setEncoding('utf8'); let buffer = ''; let bytes = 0;
-      socket.setTimeout(17000, () => { reject(failure('deadline-exceeded')); socket.destroy(); });
+      const clientNonce = randomBytes(32).toString('hex');
+      let serverNonce, stage = 'challenge';
+      const timer = setTimeout(() => { reject(failure('deadline-exceeded')); socket.destroy(); }, 17000);
       socket.on('error', () => reject(failure('unavailable')));
-      socket.on('close', () => reject(failure('unavailable')));
-      socket.on('connect', () => socket.write(JSON.stringify({items, maxRecipes}) + '\n'));
+      socket.on('close', () => { clearTimeout(timer); reject(failure('unavailable')); });
+      socket.on('connect', () => socket.write(JSON.stringify({clientNonce}) + '\n'));
       socket.on('data', (chunk) => {
         bytes += Buffer.byteLength(chunk);
         if (bytes > LIMIT) { socket.destroy(); return; }
         buffer += chunk.toString('utf8');
         if (!buffer.includes('\n')) return;
         try {
-          const result = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
-          if (result.error) reject(failure(result.error));
-          else resolve(validateRecipes(result.recipes, items, maxRecipes, 'groq'));
+          const line = buffer.slice(0, buffer.indexOf('\n'));
+          buffer = buffer.slice(buffer.indexOf('\n') + 1);
+          const result = JSON.parse(line);
+          if (stage === 'challenge') {
+            if (!hex(result.serverNonce) || !equal(result.proof, mac(secret, 'server', clientNonce, result.serverNonce)) || buffer) throw Error();
+            serverNonce = result.serverNonce;
+            stage = 'response';
+            const payload = JSON.stringify({items, maxRecipes});
+            socket.write(JSON.stringify({payload, proof: mac(secret, 'request', clientNonce, serverNonce, payload)}) + '\n');
+            return;
+          }
+          if (typeof result.payload !== 'string' || buffer ||
+              !equal(result.proof, mac(secret, 'response', clientNonce, serverNonce, result.payload))) throw Error();
+          const response = JSON.parse(result.payload);
+          if (response.error) reject(failure(response.error));
+          else resolve(validateRecipes(response.recipes, items, maxRecipes, 'groq'));
         } catch (_) { reject(failure('internal')); }
         socket.destroy();
       });
     });
   };
 }
-function serveProvider(pipe, provider) {
+function serveProvider(pipe, provider, secret) {
   if (!pipePattern.test(pipe ?? '')) throw failure('failed-precondition');
+  relaySecret(secret);
   let busy = 0;
   return net.createServer((socket) => {
-    if (busy >= 8) { socket.end(JSON.stringify({error: 'resource-exhausted'}) + '\n'); return; }
+    if (busy >= 8) { socket.destroy(); return; }
     socket.setEncoding('utf8');
     busy++;
     let released = false;
     const release = () => { if (!released) { released = true; busy--; } };
-    socket.setTimeout(17000, () => socket.destroy());
+    const timer = setTimeout(() => socket.destroy(), 17000);
     socket.on('error', () => {});
     let buffer = ''; let bytes = 0; let started = false;
-    socket.once('close', () => { if (!started) release(); });
+    let clientNonce, serverNonce;
+    socket.once('close', () => { clearTimeout(timer); if (!started) release(); });
     socket.on('data', async (chunk) => {
       if (started) return;
       bytes += Buffer.byteLength(chunk);
       if (bytes > LIMIT) { socket.destroy(); return; }
       buffer += chunk.toString('utf8');
       if (!buffer.includes('\n')) return;
-      started = true;
       try {
-        const input = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
+        const message = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
+        buffer = buffer.slice(buffer.indexOf('\n') + 1);
+        if (buffer) { socket.destroy(); return; }
+        if (!clientNonce) {
+          if (!hex(message.clientNonce) || Object.keys(message).length !== 1) { socket.destroy(); return; }
+          clientNonce = message.clientNonce;
+          serverNonce = randomBytes(32).toString('hex');
+          socket.write(JSON.stringify({serverNonce, proof: mac(secret, 'server', clientNonce, serverNonce)}) + '\n');
+          return;
+        }
+        if (typeof message.payload !== 'string' ||
+            !equal(message.proof, mac(secret, 'request', clientNonce, serverNonce, message.payload))) { socket.destroy(); return; }
+        started = true;
+        const input = JSON.parse(message.payload);
         context(input.items, input.maxRecipes);
         const recipes = await provider(input);
-        socket.end(JSON.stringify({recipes: validateRecipes(recipes, input.items, input.maxRecipes, 'groq')}) + '\n');
+        const payload = JSON.stringify({recipes: validateRecipes(recipes, input.items, input.maxRecipes, 'groq')});
+        socket.end(JSON.stringify({payload, proof: mac(secret, 'response', clientNonce, serverNonce, payload)}) + '\n');
       } catch (error) {
-        socket.end(JSON.stringify({error: error instanceof RecipeError &&
-          Object.hasOwn(messages, error.code) ? error.code : 'unavailable'}) + '\n');
-      } finally { release(); }
+        if (!started) { socket.destroy(); return; }
+        const payload = JSON.stringify({error: error instanceof RecipeError &&
+          Object.hasOwn(messages, error.code) ? error.code : 'unavailable'});
+        socket.end(JSON.stringify({payload, proof: mac(secret, 'response', clientNonce, serverNonce, payload)}) + '\n');
+      } finally { if (started) release(); }
     });
   });
 }
@@ -204,6 +245,6 @@ function selectProvider({env = process.env, fakeProvider}) {
   const mode = env.AI_RECIPE_PROVIDER ?? 'fake';
   if (mode === 'fake') return {providerName: 'fake', provider: fakeProvider};
   if (mode !== 'groq') throw failure('failed-precondition');
-  return {providerName: 'groq', provider: pipeProvider(env.AI2_PROVIDER_PIPE)};
+  return {providerName: 'groq', provider: pipeProvider(env.AI2_PROVIDER_PIPE, unprotectRelaySecret(env.AI2_RELAY_CREDENTIAL))};
 }
 module.exports = {createGroqProvider, selectProvider, serveProvider, pipeProvider};

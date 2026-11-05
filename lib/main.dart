@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
-import 'firebase_options.dart';
+import 'package:flutter/foundation.dart';
+import 'services/firebase_startup_config.dart';
 import 'core/theme/app_theme.dart';
 
 // SERVICES
@@ -23,14 +24,31 @@ import 'screens/suggestions/suggestions_page.dart';
 import 'screens/alerts/alerts_page.dart';
 import 'screens/business_setup/business_setup_page.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: FirebaseEmulatorConfig.optionsFor(
-      DefaultFirebaseOptions.currentPlatform,
-    ),
-  );
+  FirebaseOptions options;
+  try {
+    options = FirebaseStartupConfig.current.resolve(
+      isWeb: kIsWeb,
+      platform: defaultTargetPlatform,
+    );
+  } on FirebaseConfigurationException catch (error) {
+    runApp(
+      MaterialApp(
+        home: Scaffold(
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(error.toString()),
+            ),
+          ),
+        ),
+      ),
+    );
+    return;
+  }
+  await Firebase.initializeApp(options: options);
   await FirebaseEmulatorConfig.connectIfEnabled();
 
   await LocalNotificationService.init();

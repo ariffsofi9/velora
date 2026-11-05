@@ -71,8 +71,7 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
   }
 
   bool get _available =>
-      widget.invitations != null ||
-      (FirebaseEmulatorConfig.enabled && FirebaseEmulatorConfig.staffDemo);
+      widget.invitations != null || FirebaseEmulatorConfig.invitationsAvailable;
 
   @override
   Widget build(BuildContext context) => Scaffold(

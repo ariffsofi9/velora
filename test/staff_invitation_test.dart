@@ -1,6 +1,7 @@
 // Offline Firebase interface doubles only.
 // ignore_for_file: subtype_of_sealed_class
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
@@ -8,6 +9,7 @@ import 'package:velora/screens/team/staff_invitation_page.dart';
 import 'package:velora/services/staff_invitation_service.dart';
 import 'package:velora/services/firebase_emulator_config.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'helpers/invitation_firebase.dart';
 
 class _Invites implements StaffInvitations {
   int creates = 0;
@@ -42,6 +44,8 @@ class _Auth extends Fake implements FirebaseAuth {
   User? user;
   @override
   User? get currentUser => user;
+  @override
+  Stream<User?> authStateChanges() => const Stream.empty();
 }
 
 class _User extends Fake implements User {
@@ -68,6 +72,7 @@ class _User extends Fake implements User {
 }
 
 void main() {
+  setUp(installInvitationFirebase);
   test('diagnostics retain only stage and allowlisted Firebase error code', () {
     final error = FirebaseAuthException(
       code: 'network-request-failed',
@@ -154,7 +159,11 @@ void main() {
         if (scenario == 'token') expect(user.refreshed, true);
       },
       skip:
-          !FirebaseEmulatorConfig.staffDemo || !FirebaseEmulatorConfig.enabled,
+          !((FirebaseEmulatorConfig.staffDemo ||
+                  FirebaseEmulatorConfig.ai1Mock) &&
+              FirebaseEmulatorConfig.enabled &&
+              !FirebaseEmulatorConfig.conflictingProfiles &&
+              FirebaseEmulatorConfig.host == '127.0.0.1'),
     );
   }
   testWidgets(
@@ -238,9 +247,12 @@ void main() {
         messagingSenderId: 'public-placeholder',
         projectId: 'normal-placeholder',
       );
-      if (FirebaseEmulatorConfig.staffDemo) {
+      if (FirebaseEmulatorConfig.staffDemo ||
+          FirebaseEmulatorConfig.ai1Mock ||
+          FirebaseEmulatorConfig.recipeConnectivity) {
         if (!FirebaseEmulatorConfig.enabled ||
-            FirebaseEmulatorConfig.host != '127.0.0.1') {
+            FirebaseEmulatorConfig.host != '127.0.0.1' ||
+            FirebaseEmulatorConfig.conflictingProfiles) {
           expect(
             () => FirebaseEmulatorConfig.optionsFor(normal),
             throwsStateError,
@@ -248,11 +260,28 @@ void main() {
           return;
         }
         final options = FirebaseEmulatorConfig.optionsFor(normal);
-        expect(options.projectId, 'demo-velora-staff');
+        expect(
+          options.projectId,
+          FirebaseEmulatorConfig.ai1Mock
+              ? 'demo-velora-ai1'
+              : FirebaseEmulatorConfig.recipeConnectivity
+              ? FirebaseEmulatorConfig.recipeProject
+              : 'demo-velora-staff',
+        );
         expect(FirebaseEmulatorConfig.enabled, true);
         expect(FirebaseEmulatorConfig.host, '127.0.0.1');
       } else {
-        expect(FirebaseEmulatorConfig.optionsFor(normal), same(normal));
+        if (FirebaseEmulatorConfig.enabled) {
+          expect(
+            FirebaseEmulatorConfig.optionsFor(normal).projectId,
+            'demo-velora-workspaces',
+          );
+        } else {
+          expect(
+            () => FirebaseEmulatorConfig.optionsFor(normal),
+            throwsStateError,
+          );
+        }
       }
     },
   );

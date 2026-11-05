@@ -77,7 +77,7 @@ const archive = {
 function invoke({uid = 'staff-a', data = archive, store} = {}) {
   return setInventoryLifecycle({
     auth: uid ? {uid} : null,
-    data,
+    data: data && !Array.isArray(data) && typeof data === 'object' ? {expectedCafeId: 'cafe-a', expectedMembershipGeneration: 0, ...data} : data,
     store: store ?? new MemoryStore(seed()),
     timestamp: () => 'server-time',
     deleteValue: () => deleted,

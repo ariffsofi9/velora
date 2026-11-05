@@ -7,6 +7,7 @@ const {getAuth} = require('firebase-admin/auth');
 const {PROJECT, RecipeError, assertIsolated, createRecipeService} = require('./recipe-service');
 const {fakeProvider} = require('./fake-provider');
 const {selectProvider} = require('./groq-provider');
+const {verifyRequestIdentity} = require('./request-identity');
 
 let service;
 let auth;
@@ -20,10 +21,7 @@ function localService() {
     auth = getAuth(app);
     service = createRecipeService({
       ...selected,
-      verifyIdentity: async (uid) => {
-        const user = await auth.getUser(uid);
-        if (user.disabled) throw new RecipeError('unauthenticated', 'Disposable identity disabled.');
-      },
+      verifyIdentity: (uid, identity) => verifyRequestIdentity(auth, uid, identity),
       store: {runTransaction: (operation) => db.runTransaction(async (transaction) => operation({
         get: async (path) => {
           const doc = await transaction.get(db.doc(path));
@@ -47,12 +45,7 @@ exports.suggestRecipes = onCall({region: 'asia-southeast1', timeoutSeconds: 30,
     if (!request.auth || typeof header !== 'string' || !header.startsWith('Bearer ')) {
       throw new RecipeError('unauthenticated', 'Authentication required.');
     }
-    const token = await auth.verifyIdToken(header.slice(7));
-    if (token.uid !== request.auth.uid || token.aud !== PROJECT ||
-        token.iss !== `https://securetoken.google.com/${PROJECT}`) {
-      throw new RecipeError('unauthenticated', 'Invalid disposable identity.');
-    }
-    return await invoke({auth: {uid: token.uid}, data: request.data});
+    return await invoke({auth: {uid: request.auth.uid, bearer: header.slice(7)}, data: request.data});
   } catch (error) {
     if (error instanceof RecipeError) throw new HttpsError(error.code, error.message);
     // No raw errors, auth tokens, inventory or provider data in logs/responses.

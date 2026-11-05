@@ -1,0 +1,8 @@
+warning: in the working copy of 'functions/src/team-members.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'functions/test/ai1-emulator.integration.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'functions/test/ai2-groq-provider.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'functions/test/firestore.rules.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'functions/test/workspace-creation.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'functions/test/workspace-invitations.test.js', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'test/staff_invitation_test.dart', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'test/team_management_test.dart', LF will be replaced by CRLF the next time Git touches it

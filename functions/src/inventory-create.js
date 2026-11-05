@@ -1,4 +1,6 @@
 'use strict';
+const {mutationEpisode, assertMutationEpisode} = require('./mutation-episode');
+const {activeMembershipGeneration} = require('./membership-generation');
 
 const {createHash} = require('node:crypto');
 
@@ -117,9 +119,10 @@ function requestHash(uid, cafeId, idempotencyKey) {
     .digest('hex');
 }
 
-function payloadHash(input) {
+function payloadHash(input, episode) {
   return createHash('sha256')
     .update(JSON.stringify({
+      episode,
       name: input.name,
       category: input.category,
       quantity: input.quantity,
@@ -150,7 +153,8 @@ async function resolveActiveMembership(transaction, uid) {
     cafe.schemaVersion !== 1 ||
     !activeLink(member, uid, cafeId) ||
     !['owner', 'staff'].includes(member.role) ||
-    (member.role === 'owner') !== (uid === ownerUid)
+    (member.role === 'owner') !== (uid === ownerUid) ||
+    activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid) === null
   ) {
     throw new InventoryCreationError(
       'permission-denied',
@@ -167,7 +171,8 @@ async function resolveActiveMembership(transaction, uid) {
   if (
     !activeLink(ownerMember, ownerUid, cafeId) ||
     ownerMember.role !== 'owner' ||
-    !activeLink(ownerMapping, ownerUid, cafeId)
+    !activeLink(ownerMapping, ownerUid, cafeId) ||
+    activeMembershipGeneration(ownerMapping, ownerMember, ownerUid, cafeId, ownerUid) === null
   ) {
     throw new InventoryCreationError(
       'failed-precondition',
@@ -175,7 +180,7 @@ async function resolveActiveMembership(transaction, uid) {
     );
   }
 
-  return {cafeId, role: member.role};
+  return {cafeId, role: member.role, generation: activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid)};
 }
 
 async function createInventoryItem({auth, data, store, timestamp, toTimestamp}) {
@@ -186,12 +191,14 @@ async function createInventoryItem({auth, data, store, timestamp, toTimestamp}) 
       'Authentication is required.',
     );
   }
-  const input = validateInput(data);
+  const {episode, payload} = mutationEpisode(data, InventoryCreationError);
+  const input = validateInput(payload);
 
   return store.runTransaction(async (transaction) => {
-    const {cafeId} = await resolveActiveMembership(transaction, uid);
+    const {cafeId, generation} = await resolveActiveMembership(transaction, uid);
+    assertMutationEpisode(episode, cafeId, generation, InventoryCreationError);
     const hash = requestHash(uid, cafeId, input.idempotencyKey);
-    const inputHash = payloadHash(input);
+    const inputHash = payloadHash(input, episode);
     const itemId = `item_${hash}`;
     const movementId = `create_${hash}`;
     const activityId = `inventory_create_${hash}`;

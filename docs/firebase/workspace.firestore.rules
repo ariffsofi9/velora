@@ -8,6 +8,21 @@ service cloud.firestore {
       return data.uid == uid && data.cafeId == cafeId &&
         data.status == 'active' && data.schemaVersion == 1;
     }
+    // Active-link and role checks remain mandatory in member(); this helper
+    // checks generation consistency only, never authorizes inactive history.
+    function matchingGeneration(mapping, membership) {
+      return (!('membershipGeneration' in mapping) &&
+              !('membershipGeneration' in membership)) ||
+        (('membershipGeneration' in mapping) &&
+         ('membershipGeneration' in membership) &&
+         mapping.membershipGeneration is int &&
+         membership.membershipGeneration is int &&
+         mapping.membershipGeneration >= 0 &&
+         mapping.membershipGeneration <= 9007199254740991 &&
+         membership.membershipGeneration >= 0 &&
+         membership.membershipGeneration <= 9007199254740991 &&
+         mapping.membershipGeneration == membership.membershipGeneration);
+    }
     function member(cafeId) {
       let uid = request.auth.uid;
       let mapping = get(/databases/$(database)/documents/user_cafe_memberships/$(uid)).data;
@@ -17,12 +32,14 @@ service cloud.firestore {
       let ownerMember = get(/databases/$(database)/documents/cafes/$(cafeId)/members/$(owner)).data;
       let ownerMapping = get(/databases/$(database)/documents/user_cafe_memberships/$(owner)).data;
       return link(mapping, uid, cafeId) && link(membership, uid, cafeId) &&
+        matchingGeneration(mapping, membership) &&
         cafe.status == 'active' && cafe.schemaVersion == 1 && owner is string &&
         membership.role in ['owner', 'staff'] &&
         ((membership.role == 'owner' && uid == owner) ||
          (membership.role == 'staff' && uid != owner)) &&
         link(ownerMember, owner, cafeId) && ownerMember.role == 'owner' &&
-        link(ownerMapping, owner, cafeId);
+        link(ownerMapping, owner, cafeId) &&
+        matchingGeneration(ownerMapping, ownerMember);
     }
     function isMember(cafeId) { return signedIn() && member(cafeId); }
     function isOwner(cafeId) {

@@ -1,4 +1,9 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:math';
+import '../../../models/fake_recipe_response.dart';
+import '../../../services/fake_recipe_client.dart';
+import '../../../services/workspace_session.dart';
 
 import '../../../core/theme/app_tokens.dart';
 import '../restock_suggestion_service.dart';
@@ -69,6 +74,18 @@ class RecipePresentation {
     this.imageDescription,
     this.metadata,
   });
+
+  factory RecipePresentation.fromFake(FakeRecipe recipe) => RecipePresentation(
+    title: recipe.title,
+    description: recipe.whyRecommended,
+    metadata:
+        'Fake emulator recipe • Not AI-generated. Quantities and units are not supplied.',
+    ingredients: [
+      for (final id in recipe.ingredientItemIds)
+        RecipeIngredientPresentation('Ingredient ID: $id', '', ''),
+    ],
+    instructions: recipe.steps,
+  );
 }
 
 class RecipeIngredientPresentation {
@@ -99,7 +116,14 @@ const sampleRecipe = RecipePresentation(
 enum RecipeDemoState { initial, loading, results, empty, error }
 
 class RecipeSuggestionsContent extends StatefulWidget {
-  const RecipeSuggestionsContent({super.key});
+  final WorkspaceSession? workspaceSession;
+  // Dependency injection for offline tests; profile/client guards still apply.
+  final FakeRecipeClient? client;
+  const RecipeSuggestionsContent({
+    super.key,
+    this.workspaceSession,
+    this.client,
+  });
 
   @override
   State<RecipeSuggestionsContent> createState() =>
@@ -108,6 +132,117 @@ class RecipeSuggestionsContent extends StatefulWidget {
 
 class _RecipeSuggestionsContentState extends State<RecipeSuggestionsContent> {
   RecipeDemoState? _demo;
+  RecipeDemoState _state = RecipeDemoState.initial;
+  List<FakeRecipe> _recipes = const [];
+  FakeRecipeClient? _client;
+  StreamSubscription<Object?>? _authSubscription;
+  int _generation = 0;
+  String? _message;
+  bool get _available => _client?.isAvailable ?? false;
+
+  @override
+  void initState() {
+    super.initState();
+    _connect();
+  }
+
+  void _connect() {
+    if (!FakeRecipeClient.profileEnabled || widget.workspaceSession == null) {
+      return;
+    }
+    final candidate =
+        widget.client ?? FakeRecipeClient(session: widget.workspaceSession!);
+    final session = widget.workspaceSession!;
+    if (candidate.session.uid != session.uid ||
+        candidate.session.cafeId != session.cafeId ||
+        candidate.session.ownerUid != session.ownerUid ||
+        candidate.session.role != session.role) {
+      return;
+    }
+    _client = candidate;
+    if (!_client!.isAvailable) return;
+    var uid = widget.workspaceSession!.uid;
+    _authSubscription = _client!.authChanges.listen(
+      (user) {
+        if (user?.uid == uid) return;
+        uid = user?.uid ?? '';
+        if (!mounted) return;
+        setState(() {
+          _generation++;
+          _recipes = const [];
+          _state = RecipeDemoState.error;
+          _message = 'Workspace access changed. Reopen Recipe Suggestions.';
+        });
+      },
+      onError: (Object _) {
+        if (!mounted) return;
+        setState(() {
+          _generation++;
+          _recipes = const [];
+          _state = RecipeDemoState.error;
+          _message =
+              'Workspace access could not be verified. Reopen Recipe Suggestions.';
+        });
+      },
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant RecipeSuggestionsContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.workspaceSession != widget.workspaceSession ||
+        oldWidget.client != widget.client) {
+      _generation++;
+      _authSubscription?.cancel();
+      _authSubscription = null;
+      _client = null;
+      _recipes = const [];
+      _state = RecipeDemoState.initial;
+      _message = null;
+      _connect();
+    }
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _authSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _generate() async {
+    if (!_available || _state == RecipeDemoState.loading) return;
+    final generation = ++_generation;
+    setState(() {
+      _demo = null;
+      _recipes = const [];
+      _message = null;
+      _state = RecipeDemoState.loading;
+    });
+    try {
+      final random = Random.secure();
+      final requestId =
+          'ui-${List.generate(24, (_) => random.nextInt(16).toRadixString(16)).join()}';
+      final response = await _client!
+          .generate(requestId: requestId)
+          .timeout(const Duration(seconds: 40));
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _recipes = response.recipes;
+        _state = _recipes.isEmpty
+            ? RecipeDemoState.empty
+            : RecipeDemoState.results;
+      });
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      setState(() {
+        _recipes = const [];
+        _state = RecipeDemoState.error;
+        _message =
+            'Fake recipes could not be loaded. Check workspace access and try again.';
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -124,15 +259,19 @@ class _RecipeSuggestionsContentState extends State<RecipeSuggestionsContent> {
                 Text('Recipes for your café', style: text.titleLarge),
                 const SizedBox(height: AppSpacing.sm),
                 Text(
-                  'Recipe generation is not available yet. Explore a sample recipe while inventory insights remain available.',
+                  _available
+                      ? 'Isolated fake recipe demo. No AI provider is called and no inventory is changed.'
+                      : 'Recipe generation is not available yet. Explore a sample recipe while inventory insights remain available.',
                   style: text.bodyMedium?.copyWith(
                     color: AppColors.textSecondary,
                   ),
                 ),
                 const SizedBox(height: AppSpacing.lg),
-                const FilledButton(
-                  onPressed: null,
-                  child: Text('Generate Recipes'),
+                FilledButton(
+                  onPressed: _available && _state != RecipeDemoState.loading
+                      ? _generate
+                      : null,
+                  child: const Text('Generate Recipes'),
                 ),
                 const SizedBox(height: AppSpacing.sm),
                 TextButton(
@@ -149,6 +288,49 @@ class _RecipeSuggestionsContentState extends State<RecipeSuggestionsContent> {
             ),
           ),
         ),
+        if (_state != RecipeDemoState.initial) ...[
+          const SizedBox(height: AppSpacing.lg),
+          if (_state == RecipeDemoState.loading)
+            const Column(
+              children: [
+                CircularProgressIndicator(),
+                Text('Loading fake recipes…'),
+              ],
+            ),
+          if (_state == RecipeDemoState.empty)
+            const Text('No fake recipes match the eligible inventory.'),
+          if (_state == RecipeDemoState.error) ...[
+            Text(_message!),
+            OutlinedButton(
+              onPressed: _available ? _generate : null,
+              child: const Text('Retry recipes'),
+            ),
+          ],
+          if (_state == RecipeDemoState.results) ...[
+            Text('Fake Recipes', style: text.titleLarge),
+            for (final recipe in _recipes)
+              Card(
+                child: ListTile(
+                  title: Text(recipe.title),
+                  subtitle: const Text(
+                    'Fake emulator recipe • Ingredient IDs only\nView recipe',
+                  ),
+                  trailing: const Icon(
+                    Icons.chevron_right,
+                    color: AppColors.primary,
+                  ),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => RecipePresentationDetails(
+                        recipe: RecipePresentation.fromFake(recipe),
+                        isDemo: false,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ],
         if (_demo != null) ...[
           const SizedBox(height: AppSpacing.xl),
           Text('Presentation demo', style: text.titleMedium),
@@ -337,7 +519,9 @@ class RecipePresentationDetails extends StatelessWidget {
                     Padding(
                       padding: const EdgeInsets.only(bottom: AppSpacing.md),
                       child: Text(
-                        '${ingredient.quantity} ${ingredient.unit} · ${ingredient.name}',
+                        ingredient.quantity.isEmpty && ingredient.unit.isEmpty
+                            ? ingredient.name
+                            : '${ingredient.quantity} ${ingredient.unit} · ${ingredient.name}',
                       ),
                     ),
                 ],

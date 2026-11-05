@@ -4,6 +4,9 @@ const {createHash} = require('node:crypto');
 const PROJECT = 'demo-velora-ai1';
 const HOSTS = {FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:19099',
   FIRESTORE_EMULATOR_HOST: '127.0.0.1:19080'};
+const CONNECTIVITY_PROJECT = 'demo-velora-ai-connectivity';
+const CONNECTIVITY_HOSTS = {FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:49099',
+  FIRESTORE_EMULATOR_HOST: '127.0.0.1:48080'};
 
 class RecipeError extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -24,6 +27,19 @@ function assertIsolated(env = process.env) {
   }
 }
 const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+function assertConnectivity(env = process.env) {
+  if (env.FUNCTIONS_EMULATOR !== 'true' || env.GCLOUD_PROJECT !== CONNECTIVITY_PROJECT ||
+      (env.GOOGLE_CLOUD_PROJECT && env.GOOGLE_CLOUD_PROJECT !== CONNECTIVITY_PROJECT) ||
+      Object.entries(CONNECTIVITY_HOSTS).some(([key,value]) => env[key] !== value) ||
+      env.AI_RECIPE_PROVIDER !== 'fake' || env.AI2_PROVIDER_PIPE) {
+    reject('failed-precondition', 'Fake connectivity requires its isolated demo emulators.');
+  }
+  if (env.FIREBASE_CONFIG) {
+    let config;
+    try {config = JSON.parse(env.FIREBASE_CONFIG);} catch (_) {reject('failed-precondition','Invalid demo configuration.');}
+    if (config.projectId !== CONNECTIVITY_PROJECT) reject('failed-precondition','Wrong demo project.');
+  }
+}
 const id = (value) => typeof value === 'string' && value.length > 0 && value.length <= 128 &&
   value.trim() === value && !/[\/\p{Cc}]/u.test(value) && !['.', '..'].includes(value);
 const text = (value, max) => typeof value === 'string' && value.trim() === value &&
@@ -143,16 +159,20 @@ function validateRecipes(value, items, max, providerName = 'fake') {
 
 // Per-process replay/concurrency protection only, deliberately no database writes.
 function createRecipeService({store, provider, verifyIdentity, env = process.env,
-  now = () => new Date(), providerName = 'fake'}) {
+  now = () => new Date(), providerName = 'fake', isolation = 'ai1'}) {
+  if (!['ai1','connectivity'].includes(isolation) || (isolation === 'connectivity' && providerName !== 'fake')) {
+    reject('failed-precondition', 'Invalid recipe isolation profile.');
+  }
+  const assertEnvironment = isolation === 'connectivity' ? assertConnectivity : assertIsolated;
   if (!['fake', 'groq'].includes(providerName)) reject('failed-precondition', 'Invalid provider mode.');
   const busy = new Set();
   const seen = new Map();
   return async ({auth, data}) => {
-    assertIsolated(env);
+    assertEnvironment(env);
     const uid = auth?.uid;
     if (!id(uid)) reject('unauthenticated', 'Authentication required.');
     const request = input(data);
-    await verifyIdentity(uid);
+    await verifyIdentity(uid, auth);
     const clock = now();
     const time = clock.getTime();
     for (const [key, expires] of seen) if (expires <= time) seen.delete(key);
@@ -174,8 +194,8 @@ function createRecipeService({store, provider, verifyIdentity, env = process.env
         items: structuredClone(before.items), maxRecipes: request.maxRecipes,
       }) : [];
       const recipes = validateRecipes(raw, before.items, request.maxRecipes, providerName);
-      assertIsolated(env);
-      await verifyIdentity(uid);
+      assertEnvironment(env);
+      await verifyIdentity(uid, auth);
       const after = await snapshot();
       if (JSON.stringify(before) !== JSON.stringify(after)) {
         reject('aborted', 'Workspace or inventory changed. Retry with a new request ID.');
@@ -185,4 +205,5 @@ function createRecipeService({store, provider, verifyIdentity, env = process.env
     } finally { busy.delete(uid); }
   };
 }
-module.exports = {PROJECT, HOSTS, RecipeError, assertIsolated, createRecipeService, validateRecipes};
+module.exports = {PROJECT, HOSTS, CONNECTIVITY_PROJECT, CONNECTIVITY_HOSTS, RecipeError,
+  assertIsolated, assertConnectivity, createRecipeService, validateRecipes};

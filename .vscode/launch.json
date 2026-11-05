@@ -6,6 +6,13 @@
       "request": "launch",
       "type": "dart",
       "deviceId": "chrome"
+    },
+    {
+      "name": "Velora Staging Web (BLOCKED: app config missing)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "chrome",
+      "args": ["--dart-define=VELORA_STAGING=true"]
     }
   ]
 }
