@@ -37,11 +37,23 @@ class FirestoreWorkspaceInventoryDataSource
 
   @override
   Stream<List<WorkspaceInventoryDocument>> watchCollection(String path) =>
-      _firestore.collection(path).snapshots().map(_documents);
+      _firestore
+          .collection(path)
+          .snapshots(includeMetadataChanges: true)
+          .where(
+            (snapshot) =>
+                !snapshot.metadata.isFromCache &&
+                !snapshot.metadata.hasPendingWrites,
+          )
+          .map(_documents);
 
   @override
   Future<List<WorkspaceInventoryDocument>> readCollection(String path) async =>
-      _documents(await _firestore.collection(path).get());
+      _documents(
+        await _firestore
+            .collection(path)
+            .get(const GetOptions(source: Source.server)),
+      );
 
   @override
   Future<List<WorkspaceInventoryDocument>> readServerCollection(
@@ -69,7 +81,10 @@ class WorkspaceInventoryRepository {
     WorkspaceInventoryDataSource? dataSource,
   }) : _dataSource = dataSource ?? FirestoreWorkspaceInventoryDataSource();
 
-  String get collectionPath => 'cafes/${session.cafeId}/inventory';
+  String get collectionPath {
+    session.requireActive();
+    return 'cafes/${session.cafeId}/inventory';
+  }
 
   Stream<List<InventoryItem>> watchItems() => _dataSource
       .watchCollection(collectionPath)
@@ -98,6 +113,7 @@ class WorkspaceInventoryRepository {
     List<WorkspaceInventoryDocument> documents, {
     required bool archived,
   }) {
+    session.requireActive();
     try {
       return documents
           .map((doc) => InventoryItem.fromMap(doc.id, doc.data))
@@ -109,6 +125,7 @@ class WorkspaceInventoryRepository {
   }
 
   List<InventoryItem> _allItems(List<WorkspaceInventoryDocument> documents) {
+    session.requireActive();
     try {
       return documents
           .map((doc) => InventoryItem.fromMap(doc.id, doc.data))

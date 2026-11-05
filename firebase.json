@@ -27,5 +27,8 @@
         }
       }
     }
+  },
+  "firestore": {
+    "rules": "docs/firebase/workspace.firestore.rules"
   }
 }

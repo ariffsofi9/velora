@@ -71,6 +71,72 @@ class CallableDouble implements MenuCallable {
 }
 
 void main() {
+  test(
+    'same-UID generation change rejects old menu repository before dispatch',
+    () async {
+      final auth = AuthDouble();
+      final resolver = ResolverDouble();
+      final callable = CallableDouble();
+      final repo = FirebaseMenuRepository(
+        auth: auth,
+        resolver: resolver,
+        callable: callable,
+      );
+      await repo.resolve();
+      resolver.workspace = const CafeWorkspace(
+        cafeId: 'cafe-a',
+        uid: 'staff-a',
+        ownerUid: 'owner-a',
+        role: CafeRole.staff,
+        membershipGeneration: 2,
+      );
+      await expectLater(
+        repo.availability(
+          MenuItem.fromMap(menuData()),
+          false,
+          'generation-key-0001',
+        ),
+        throwsA(isA<MenuException>()),
+      );
+      expect(callable.calls, isEmpty);
+      await auth.changes.close();
+    },
+  );
+  test('late menu result cannot publish after same-UID rejoin', () async {
+    final auth = AuthDouble();
+    final resolver = ResolverDouble();
+    final callable = CallableDouble();
+    final repo = FirebaseMenuRepository(
+      auth: auth,
+      resolver: resolver,
+      callable: callable,
+    );
+    callable.handler = (_, data) async {
+      resolver.workspace = const CafeWorkspace(
+        cafeId: 'cafe-a',
+        uid: 'staff-a',
+        ownerUid: 'owner-a',
+        role: CafeRole.staff,
+        membershipGeneration: 2,
+      );
+      return {
+        'cafeId': 'cafe-a',
+        'itemId': 'menu-a',
+        'version': 2,
+        'changed': true,
+      };
+    };
+    await expectLater(
+      repo.availability(
+        MenuItem.fromMap(menuData()),
+        false,
+        'generation-key-0001',
+      ),
+      throwsA(isA<MenuException>()),
+    );
+    expect(callable.calls.single.$2['expectedMembershipGeneration'], 0);
+    await auth.changes.close();
+  });
   late AuthDouble auth;
   late ResolverDouble resolver;
   late CallableDouble callable;
@@ -98,6 +164,8 @@ void main() {
       );
       expect(callable.calls.single.$1, 'updateMenuItem');
       expect(callable.calls.single.$2, {
+        'expectedCafeId': 'cafe-a',
+        'expectedMembershipGeneration': 0,
         'itemId': 'menu-a',
         'expectedVersion': 1,
         'idempotencyKey': 'availability-key-0001',
@@ -165,6 +233,8 @@ void main() {
       );
       expect(callable.calls.single.$1, 'createMenuItem');
       expect(callable.calls.single.$2, {
+        'expectedCafeId': 'cafe-a',
+        'expectedMembershipGeneration': 0,
         'idempotencyKey': 'create-request-0001',
         'name': 'New Latte',
         'category': 'Coffee',

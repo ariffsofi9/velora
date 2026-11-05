@@ -154,6 +154,9 @@ async function setInventoryLifecycle({
         `Inventory item is already ${resultState}.`);
     }
     const resultVersion = currentVersion + 1;
+    if (!Number.isSafeInteger(resultVersion)) {
+      throw new InventoryLifecycleError('failed-precondition', 'Inventory item version cannot advance safely.');
+    }
     const now = timestamp();
     const changes = {
       lifecycleState: resultState,

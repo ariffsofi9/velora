@@ -1,3 +1,4 @@
+import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 enum StockDirection { stockIn, stockOut }
@@ -105,9 +106,11 @@ class FirebaseWorkspaceInventoryStockCallable
 
 class FirebaseWorkspaceInventoryStockAdjuster
     implements WorkspaceInventoryStockAdjuster {
+  final WorkspaceSession? session;
   final WorkspaceInventoryStockCallable _callable;
 
   FirebaseWorkspaceInventoryStockAdjuster({
+    this.session,
     FirebaseFunctions? functions,
     WorkspaceInventoryStockCallable? callable,
   }) : _callable =
@@ -119,7 +122,10 @@ class FirebaseWorkspaceInventoryStockAdjuster
     WorkspaceInventoryStockRequest request,
   ) async {
     try {
-      final data = await _callable.call(request.toCallableData());
+      final captured = captureMutationSession(request, session);
+      final payload = {...request.toCallableData(), ...captured.mutationData};
+      final data = await _callable.call(payload);
+      captured.requireActive();
       final direction = switch (data['direction']) {
         'in' => StockDirection.stockIn,
         'out' => StockDirection.stockOut,
@@ -144,6 +150,13 @@ class FirebaseWorkspaceInventoryStockAdjuster
         adjusted: data['adjusted'] as bool,
       );
     } on FirebaseFunctionsException catch (error) {
+      if (error.code == 'failed-precondition' &&
+          error.details is Map &&
+          (error.details as Map)['reason'] == 'insufficient-stock') {
+        throw const WorkspaceInventoryStockException(
+          WorkspaceInventoryStockFailure.insufficientStock,
+        );
+      }
       throw WorkspaceInventoryStockException(_mapCode(error.code));
     } on WorkspaceInventoryStockException {
       rethrow;
@@ -161,7 +174,7 @@ class FirebaseWorkspaceInventoryStockAdjuster
     'not-found' => WorkspaceInventoryStockFailure.notFound,
     'already-exists' => WorkspaceInventoryStockFailure.conflict,
     'aborted' => WorkspaceInventoryStockFailure.stale,
-    'failed-precondition' => WorkspaceInventoryStockFailure.insufficientStock,
+    'failed-precondition' => WorkspaceInventoryStockFailure.unavailable,
     'out-of-range' => WorkspaceInventoryStockFailure.outOfRange,
     'unavailable' ||
     'deadline-exceeded' => WorkspaceInventoryStockFailure.unavailable,

@@ -401,21 +401,37 @@ void main() {
       expect(find.text('Exported 1 inventory items.'), findsOneWidget);
     },
   );
-  test(
-    'export requires server source while normal reads keep default source',
-    () async {
-      final db = TestFirestore();
-      final repository = WorkspaceInventoryRepository(
-        session: session('cafe-a'),
-        dataSource: FirestoreWorkspaceInventoryDataSource(firestore: db),
-      );
-      await repository.getItems();
-      await repository.getAllItems();
-      expect(db.target.options.first, isNull);
-      expect(db.target.options.last!.source, firestore.Source.server);
-      expect(db.paths, ['cafes/cafe-a/inventory', 'cafes/cafe-a/inventory']);
-    },
-  );
+  test('workspace reads and exports require server source', () async {
+    final db = TestFirestore();
+    final repository = WorkspaceInventoryRepository(
+      session: session('cafe-a'),
+      dataSource: FirestoreWorkspaceInventoryDataSource(firestore: db),
+    );
+    await repository.getItems();
+    await repository.getAllItems();
+    expect(db.target.options.first!.source, firestore.Source.server);
+    expect(db.target.options.last!.source, firestore.Source.server);
+    expect(db.paths, ['cafes/cafe-a/inventory', 'cafes/cafe-a/inventory']);
+  });
+
+  test('invalidated episode cannot begin an export', () async {
+    final oldSession = session('cafe-a')..invalidate();
+    final downloader = Downloader();
+    final service = InventoryCsvExportService(
+      repository: WorkspaceInventoryRepository(
+        session: oldSession,
+        dataSource: Source([]),
+      ),
+      auth: auth,
+      resolver: resolver,
+      downloader: downloader,
+    );
+    await expectLater(
+      service.export(InventoryCsvScope.activeOnly),
+      throwsA(isA<InventoryCsvSessionChangedException>()),
+    );
+    expect(downloader.bytes, isNull);
+  });
 
   for (final change in [
     'sign-out',

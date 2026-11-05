@@ -67,7 +67,7 @@ class FirestoreWorkspaceActivityDataSource
       }
       query = query.startAfterDocument(startAfter);
     }
-    final snapshot = await query.get();
+    final snapshot = await query.get(const GetOptions(source: Source.server));
     return snapshot.docs
         .map(
           (doc) => WorkspaceActivityDocument(
@@ -107,6 +107,7 @@ class WorkspaceActivityRepository implements WorkspaceActivityReader {
         WorkspaceActivityFailure.invalidData,
       );
     }
+    session.requireActive();
     try {
       final documents = await _dataSource.fetchPage(
         path: collectionPath,
@@ -114,6 +115,7 @@ class WorkspaceActivityRepository implements WorkspaceActivityReader {
         descending: true,
         startAfter: cursor?._token,
       );
+      session.requireActive();
       final activities = documents
           .map((document) {
             final activity = WorkspaceActivity.fromMap(

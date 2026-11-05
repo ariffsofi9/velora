@@ -97,7 +97,15 @@ exports.listTeamMembers = onCall({region: 'asia-southeast1', timeoutSeconds: 30}
 });
 
 exports.createWorkspace = onCall(
-  {region: 'asia-southeast1', timeoutSeconds: 30},
+  {
+    region: 'asia-southeast1',
+    memory: '256MiB',
+    cpu: 1,
+    timeoutSeconds: 30,
+    minInstances: 0,
+    maxInstances: 1,
+    concurrency: 1,
+  },
   async (request) => {
     try {
       return await createWorkspace({
@@ -177,7 +185,8 @@ exports.adjustInventoryStock = onCall(
       });
     } catch (error) {
       if (error instanceof InventoryStockError) {
-        throw new HttpsError(error.code, error.message);
+        throw new HttpsError(error.code, error.message,
+          error.reason === 'insufficient-stock' ? {reason: 'insufficient-stock'} : undefined);
       }
       console.error(
         'Stock adjustment failed without exposing request data.',

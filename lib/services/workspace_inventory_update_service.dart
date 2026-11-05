@@ -1,3 +1,4 @@
+import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 class WorkspaceInventoryUpdateRequest {
@@ -102,9 +103,11 @@ class FirebaseWorkspaceInventoryUpdateCallable
 }
 
 class FirebaseWorkspaceInventoryUpdater implements WorkspaceInventoryUpdater {
+  final WorkspaceSession? session;
   final WorkspaceInventoryUpdateCallable _callable;
 
   FirebaseWorkspaceInventoryUpdater({
+    this.session,
     FirebaseFunctions? functions,
     WorkspaceInventoryUpdateCallable? callable,
   }) : _callable =
@@ -116,7 +119,10 @@ class FirebaseWorkspaceInventoryUpdater implements WorkspaceInventoryUpdater {
     WorkspaceInventoryUpdateRequest request,
   ) async {
     try {
-      final data = await _callable.call(request.toCallableData());
+      final captured = captureMutationSession(request, session);
+      final payload = {...request.toCallableData(), ...captured.mutationData};
+      final data = await _callable.call(payload);
+      captured.requireActive();
       if (data['itemId'] is! String ||
           data['updated'] is! bool ||
           data['version'] is! int) {

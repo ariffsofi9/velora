@@ -90,9 +90,14 @@ class _Auth extends Fake implements FirebaseAuth {
 class _Profiles extends Fake implements UserProfileService {
   final List<String> events;
   Future<void> Function()? save;
+  String? submittedName;
   _Profiles(this.events);
   @override
-  Future<void> createUserProfileIfNeeded(User user) async {
+  Future<void> createUserProfileIfNeeded(
+    User user, {
+    String? initialUsername,
+  }) async {
+    submittedName = initialUsername;
     events.add('profile');
     await save?.call();
     events.add('profileSaved');
@@ -126,6 +131,7 @@ void main() {
     expect(auth.currentUser?.displayName, 'Cafe Owner');
     save.complete();
     await registration;
+    expect(profiles.submittedName, 'Cafe Owner');
     expect(events, ['create', 'name', 'profile', 'profileSaved', 'signOut']);
     expect(auth.currentUser, isNull);
     expect(await service.canRestoreSession(), isFalse);

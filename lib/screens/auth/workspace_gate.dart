@@ -6,6 +6,9 @@ import '../../services/workspace_resolver.dart';
 import '../../services/workspace_session.dart';
 import '../business_setup/business_setup_page.dart';
 import '../home/home_page.dart';
+import 'workspace_session_boundary.dart';
+import 'owner_email_verification_page.dart';
+import '../../services/owner_email_verification.dart';
 
 /// Resolves trusted membership before exposing any workspace-backed home UI.
 class WorkspaceGate extends StatefulWidget {
@@ -13,12 +16,16 @@ class WorkspaceGate extends StatefulWidget {
   final Widget Function(BuildContext context, WorkspaceSession session)?
   homeBuilder;
   final WidgetBuilder? setupBuilder;
+  final bool initiallyBlocked;
+  final OwnerEmailVerification? ownerVerification;
 
   const WorkspaceGate({
     super.key,
     this.resolver,
     this.homeBuilder,
     this.setupBuilder,
+    this.initiallyBlocked = false,
+    this.ownerVerification,
   });
 
   @override
@@ -33,7 +40,14 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
   @override
   void initState() {
     super.initState();
-    _resolve();
+    if (widget.initiallyBlocked) {
+      _loading = false;
+      _failure = const WorkspaceResolutionException(
+        WorkspaceFailure.sessionChanged,
+      );
+    } else {
+      _resolve();
+    }
   }
 
   Future<void> _resolve() async {
@@ -50,16 +64,18 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
       _replace(
         (context) =>
             widget.homeBuilder?.call(context, session) ??
-            HomePage(workspaceSession: session),
+            (widget.resolver == null
+                ? WorkspaceSessionBoundary(
+                    session: session,
+                    child: HomePage(workspaceSession: session),
+                  )
+                : HomePage(workspaceSession: session)),
         '/workspace-home',
       );
     } on WorkspaceResolutionException catch (error) {
       if (!mounted) return;
       if (error.failure == WorkspaceFailure.missingMembership) {
-        _replace(
-          widget.setupBuilder ?? (_) => const BusinessSetupPage(),
-          '/business-setup',
-        );
+        _replace(widget.setupBuilder ?? _ownerSetup, '/business-setup');
         return;
       }
       setState(() {
@@ -75,6 +91,19 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
         );
       });
     }
+  }
+
+  Widget _ownerSetup(BuildContext context) {
+    final verification =
+        widget.ownerVerification ?? FirebaseOwnerEmailVerification();
+    return OwnerEmailVerificationPage(
+      verification: verification,
+      verifiedBuilder: (_) => WorkspaceGate(
+        resolver: widget.resolver,
+        homeBuilder: widget.homeBuilder,
+        setupBuilder: (_) => BusinessSetupPage(verification: verification),
+      ),
+    );
   }
 
   void _replace(WidgetBuilder builder, String name) {

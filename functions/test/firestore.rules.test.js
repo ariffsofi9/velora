@@ -371,3 +371,60 @@ test('profile updates cannot change email, role or creation time', async () => {
     email: 'different@example.test',
   }));
 });
+
+test('menu items enforce cafe isolation and deny client mutations', async () => {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().doc('cafes/cafe-a/menu_items/menu-a').set({
+      name: 'Latte',
+    });
+  });
+
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const staff = environment.authenticatedContext('staff-a').firestore();
+  const outsider = environment.authenticatedContext('owner-b').firestore();
+  const anonymous = environment.unauthenticatedContext().firestore();
+
+  const path = 'cafes/cafe-a/menu_items/menu-a';
+
+  await assertSucceeds(owner.doc(path).get());
+  await assertSucceeds(staff.collection('cafes/cafe-a/menu_items').get());
+  await assertFails(outsider.doc(path).get());
+  await assertFails(outsider.collection('cafes/cafe-a/menu_items').get());
+  await assertFails(anonymous.doc(path).get());
+
+  await assertFails(owner.doc('cafes/cafe-a/menu_items/new-menu').set({
+    name: 'Tea',
+  }));
+  await assertFails(staff.doc(path).update({name: 'Changed'}));
+  await assertFails(owner.doc(path).delete());
+
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().doc('cafes/cafe-a/members/staff-a').update({
+      status: 'disabled',
+    });
+  });
+  await assertFails(staff.doc(path).get());
+});
+
+test('all client menu requests access remains denied', async () => {
+  await environment.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().doc('cafes/cafe-a/menu_requests/request-a').set({
+      name: 'Latte',
+    });
+  });
+
+  const owner = environment.authenticatedContext('owner-a').firestore();
+  const staff = environment.authenticatedContext('staff-a').firestore();
+  const anonymous = environment.unauthenticatedContext().firestore();
+  const path = 'cafes/cafe-a/menu_requests/request-a';
+
+  await assertFails(owner.doc(path).get());
+  await assertFails(staff.collection('cafes/cafe-a/menu_requests').get());
+  await assertFails(anonymous.doc(path).get());
+
+  await assertFails(owner.doc('cafes/cafe-a/menu_requests/new-request').set({
+    name: 'Tea',
+  }));
+  await assertFails(staff.doc(path).update({name: 'Changed'}));
+  await assertFails(owner.doc(path).delete());
+});

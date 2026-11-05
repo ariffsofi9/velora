@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'helpers/owner_verification_fake.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,9 +7,12 @@ import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/main.dart' show VeloraApp;
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/screens/business_setup/business_setup_page.dart';
+import 'package:velora/screens/auth/login_page.dart';
+import 'package:velora/screens/auth/workspace_session_boundary.dart';
 import 'package:velora/screens/business_setup/business_setup_widgets.dart';
 import 'package:velora/services/workspace_provisioning_service.dart';
 import 'package:velora/services/workspace_resolver.dart';
+import 'package:velora/services/owner_email_verification.dart';
 
 class _Provisioner implements WorkspaceProvisioner {
   final Future<WorkspaceCreationResult> Function(WorkspaceCreationRequest)
@@ -49,6 +53,7 @@ Widget setupApp({
   double keyboard = 0,
   WorkspaceProvisioner? provisioner,
   WorkspaceResolver? resolver,
+  OwnerEmailVerification? verification,
 }) => MaterialApp(
   theme: AppTheme.light,
   builder: (context, child) => MediaQuery(
@@ -59,8 +64,11 @@ Widget setupApp({
     child: child!,
   ),
   home: BusinessSetupPage(
+    verification: verification ?? VerifiedOwnerFake(),
     provisioner: provisioner,
     resolver: resolver,
+    sessionIdentities: Stream.value(_workspace.uid),
+    sessionAuthority: Stream.value(true),
     homeBuilder: (_, session) =>
         Scaffold(body: Text('Verified Dashboard ${session.cafeId}')),
   ),
@@ -96,6 +104,209 @@ SetupChoices choices(WidgetTester tester, String group) =>
     );
 
 void main() {
+  testWidgets(
+    'verification round trip preserves draft and requires explicit Create tap',
+    (tester) async {
+      final verification = VerifiedOwnerFake(verified: false);
+      final provisioner = _Provisioner(
+        (_) async => const WorkspaceCreationResult(created: true),
+      );
+      await tester.pumpWidget(
+        setupApp(
+          verification: verification,
+          provisioner: provisioner,
+          resolver: _Resolver(() async => _workspace),
+        ),
+      );
+      await enterBusiness(tester);
+      await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+      await tester.tap(find.byKey(const ValueKey('setup-dashboard')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('setup-dashboard')))
+            .onPressed,
+        isNull,
+      );
+      await tester.tap(find.text('Verify email'));
+      await tester.pumpAndSettle();
+      verification.verified = true;
+      await tester.tap(find.byKey(const ValueKey('owner-check-verification')));
+      await tester.pumpAndSettle();
+      expect(provisioner.requests, isEmpty);
+      await tester.tap(find.byKey(const ValueKey('setup-dashboard')));
+      await tester.pumpAndSettle();
+      expect(provisioner.requests.single.businessName, 'Sunrise Cafe');
+    },
+  );
+  testWidgets('unverified Owner cannot submit even an injected provisioner', (
+    tester,
+  ) async {
+    final provisioner = _Provisioner(
+      (_) async => const WorkspaceCreationResult(created: true),
+    );
+    await tester.pumpWidget(
+      setupApp(
+        provisioner: provisioner,
+        verification: VerifiedOwnerFake(verified: false),
+      ),
+    );
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+    await tester.tap(find.byKey(const ValueKey('setup-dashboard')));
+    await tester.pumpAndSettle();
+    expect(provisioner.requests, isEmpty);
+    expect(find.text('Verify email'), findsOneWidget);
+    expect(
+      find.textContaining('Verify your email, then sign in again'),
+      findsOneWidget,
+    );
+  });
+  testWidgets(
+    'backend-invalid form bounds reject before navigation and preserve text',
+    (tester) async {
+      await tester.pumpWidget(setupApp());
+      await tester.enterText(find.byKey(const ValueKey('business-name')), 'a');
+      await tapSetup(tester, find.byKey(const ValueKey('type-Bakery')));
+      await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+      expect(
+        find.text('Business name must be between 2 and 80 characters.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<TextFormField>(find.byKey(const ValueKey('business-name')))
+            .controller!
+            .text,
+        'a',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('business-name')),
+        'Valid Cafe',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('business-address')),
+        'x' * 201,
+      );
+      await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+      expect(
+        find.text('Business address must be 200 characters or fewer.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const ValueKey('business-address')),
+            )
+            .controller!
+            .text,
+        'x' * 201,
+      );
+    },
+  );
+  testWidgets(
+    'Root setup Back is visible and exits to Login without provisioning',
+    (tester) async {
+      final provisioner = _Provisioner(
+        (_) async => throw StateError('must not create'),
+      );
+      await tester.pumpWidget(setupApp(provisioner: provisioner));
+      final back = find.byKey(const ValueKey('setup-header-back'));
+      expect(back, findsOneWidget);
+      expect(tester.getSize(back).width, greaterThanOrEqualTo(48));
+      expect(tester.widget<IconButton>(back).tooltip, 'Back');
+      await tapSetup(tester, back);
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.byType(BusinessSetupPage), findsNothing);
+      expect(provisioner.requests, isEmpty);
+    },
+  );
+  testWidgets('Step one Back pops existing onboarding route once', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const BusinessSetupPage(),
+                ),
+              ),
+              child: const Text('Previous onboarding'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Previous onboarding'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('setup-header-back')));
+    await tester.tap(
+      find.byKey(const ValueKey('setup-header-back')),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Previous onboarding'), findsOneWidget);
+    expect(find.byType(BusinessSetupPage), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('Visible Back returns through steps preserving entered values', (
+    tester,
+  ) async {
+    final provisioner = _Provisioner(
+      (_) async => throw StateError('must not create'),
+    );
+    await tester.pumpWidget(setupApp(provisioner: provisioner));
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+    await tapSetup(tester, find.byKey(const ValueKey('setup-header-back')));
+    expect(find.text('Set Up Your Inventory'), findsOneWidget);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-header-back')));
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const ValueKey('business-name')))
+          .controller!
+          .text
+          .trim(),
+      'Sunrise Cafe',
+    );
+    expect(
+      tester
+          .widget<TextFormField>(find.byKey(const ValueKey('business-address')))
+          .controller!
+          .text,
+      '12 Market Street',
+    );
+    expect(choices(tester, 'type').selected, 'Bakery');
+    expect(provisioner.requests, isEmpty);
+  });
+  testWidgets('Back is disabled during a pending creation', (tester) async {
+    final pending = Completer<WorkspaceCreationResult>();
+    await tester.pumpWidget(
+      setupApp(
+        provisioner: _Provisioner((_) => pending.future),
+        resolver: _Resolver(() async => _workspace),
+      ),
+    );
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+    await tester.tap(find.byKey(const ValueKey('setup-dashboard')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('setup-header-back')))
+          .onPressed,
+      isNull,
+    );
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byType(BusinessSetupPage), findsOneWidget);
+    pending.complete(const WorkspaceCreationResult(created: true));
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('Successful creation verifies membership before Dashboard', (
     tester,
   ) async {
@@ -116,8 +327,9 @@ void main() {
     expect(request.businessType, 'Bakery');
     expect(request.address, '12 Market Street');
     expect(request.inventoryUnit, 'kg');
-    expect(resolver.calls, 1);
+    expect(resolver.calls, greaterThanOrEqualTo(1));
     expect(find.text('Verified Dashboard cafe-a'), findsOneWidget);
+    expect(find.byType(WorkspaceSessionBoundary), findsOneWidget);
   });
 
   testWidgets('Duplicate submit taps create only one callable request', (
@@ -142,8 +354,119 @@ void main() {
     completion.complete(const WorkspaceCreationResult(created: true));
     await tester.pumpAndSettle();
     expect(find.text('Verified Dashboard cafe-a'), findsOneWidget);
+    expect(find.byType(WorkspaceSessionBoundary), findsOneWidget);
   });
 
+  for (final entry in {
+    WorkspaceProvisioningFailure.emailUnverified: 'Verify your email',
+    WorkspaceProvisioningFailure.existingMembership:
+        'existing workspace membership',
+  }.entries) {
+    testWidgets('setup feedback distinguishes ${entry.key}', (tester) async {
+      await tester.pumpWidget(
+        setupApp(
+          provisioner: _Provisioner(
+            (_) async => throw WorkspaceProvisioningException(entry.key),
+          ),
+          resolver: _Resolver(() async => _workspace),
+        ),
+      );
+      await enterBusiness(tester);
+      await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+      await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+      expect(find.textContaining(entry.value), findsOneWidget);
+      expect(find.textContaining('Verified Dashboard'), findsNothing);
+    });
+  }
+  testWidgets('newly provisioned home is removed on authority revocation', (
+    tester,
+  ) async {
+    final authority = StreamController<bool>.broadcast();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: BusinessSetupPage(
+          verification: VerifiedOwnerFake(),
+          provisioner: _Provisioner(
+            (_) async => const WorkspaceCreationResult(created: true),
+          ),
+          resolver: _Resolver(() async => _workspace),
+          sessionIdentities: Stream.value(_workspace.uid),
+          sessionAuthority: authority.stream,
+          homeBuilder: (_, session) =>
+              const Scaffold(body: Text('Protected created home')),
+        ),
+      ),
+    );
+    await enterBusiness(tester);
+    await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+    await tester.tap(find.byKey(const ValueKey('setup-dashboard')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(find.text('Protected created home'), findsNothing);
+    authority.add(true);
+    await tester.pumpAndSettle();
+    expect(find.text('Protected created home'), findsOneWidget);
+    authority.add(false);
+    await tester.pumpAndSettle();
+    expect(find.text('Protected created home'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await authority.close();
+  });
+
+  for (final failure in [
+    WorkspaceProvisioningFailure.unavailable,
+    WorkspaceProvisioningFailure.timedOut,
+    WorkspaceProvisioningFailure.internal,
+  ]) {
+    testWidgets(
+      'uncertain $failure permits resolution only, never reprovisions',
+      (tester) async {
+        final provisioner = _Provisioner(
+          (_) async => throw WorkspaceProvisioningException(failure),
+        );
+        final resolver = _Resolver(
+          () async => throw const WorkspaceResolutionException(
+            WorkspaceFailure.missingMembership,
+          ),
+        );
+        await tester.pumpWidget(
+          setupApp(provisioner: provisioner, resolver: resolver),
+        );
+        await enterBusiness(tester);
+        await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+        await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+        expect(find.text('Recheck Workspace'), findsOneWidget);
+        expect(provisioner.requests, hasLength(1));
+        await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+        await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+        expect(provisioner.requests, hasLength(1));
+        expect(resolver.calls, 2);
+        expect(find.textContaining('outcome is still unknown'), findsOneWidget);
+        expect(find.textContaining('Verified Dashboard'), findsNothing);
+      },
+    );
+  }
+  for (final entry in {
+    WorkspaceProvisioningFailure.callableNotFound:
+        'creation service was not found',
+    WorkspaceProvisioningFailure.permissionDenied: 'creation was denied',
+    WorkspaceProvisioningFailure.unauthenticated: 'Please sign in again',
+  }.entries) {
+    testWidgets('classified feedback ${entry.key}', (tester) async {
+      await tester.pumpWidget(
+        setupApp(
+          provisioner: _Provisioner(
+            (_) async => throw WorkspaceProvisioningException(entry.key),
+          ),
+          resolver: _Resolver(() async => _workspace),
+        ),
+      );
+      await enterBusiness(tester);
+      await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+      await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+      expect(find.textContaining(entry.value), findsOneWidget);
+    });
+  }
   testWidgets('Callable error stays fail-closed and allows retry', (
     tester,
   ) async {
@@ -202,8 +525,9 @@ void main() {
     failVerification = false;
     await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
     expect(provisioner.requests, hasLength(1));
-    expect(resolver.calls, 2);
+    expect(resolver.calls, greaterThanOrEqualTo(2));
     expect(find.text('Verified Dashboard cafe-a'), findsOneWidget);
+    expect(find.byType(WorkspaceSessionBoundary), findsOneWidget);
   });
 
   testWidgets('Disabled reminders are accurately reported in the summary', (
@@ -253,7 +577,10 @@ void main() {
   ) async {
     await tester.pumpWidget(setupApp());
     await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
-    expect(find.text('Please enter your business name.'), findsOneWidget);
+    expect(
+      find.text('Business name must be between 2 and 80 characters.'),
+      findsOneWidget,
+    );
     expect(find.text('Please select a business type.'), findsOneWidget);
     await enterBusiness(tester, address: false);
     expect(find.text('Set Up Your Inventory'), findsOneWidget);

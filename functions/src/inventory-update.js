@@ -299,6 +299,9 @@ async function updateInventoryItem({auth, data, store, timestamp, toTimestamp}) 
     }
     const updated = Object.keys(changes).length > 0;
     const resultVersion = updated ? currentVersion + 1 : currentVersion;
+    if (!Number.isSafeInteger(resultVersion)) {
+      throw new InventoryUpdateError('failed-precondition', 'Inventory item version cannot advance safely.');
+    }
     const now = timestamp();
     if (updated) {
       const persistedChanges = {...changes};

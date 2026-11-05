@@ -7,15 +7,22 @@ import '../../services/workspace_provisioning_service.dart';
 import '../../services/workspace_resolver.dart';
 import '../../services/workspace_session.dart';
 import '../home/home_page.dart';
+import '../auth/workspace_session_boundary.dart';
+import '../auth/login_page.dart';
 import 'business_information_step.dart';
 import 'business_setup_draft.dart';
 import 'business_setup_widgets.dart';
 import 'inventory_preferences_step.dart';
 import 'setup_complete_step.dart';
+import '../../services/owner_email_verification.dart';
+import '../auth/owner_email_verification_page.dart';
 
 class BusinessSetupPage extends StatefulWidget {
   final WorkspaceProvisioner? provisioner;
   final WorkspaceResolver? resolver;
+  final OwnerEmailVerification? verification;
+  final Stream<String?>? sessionIdentities;
+  final Stream<bool>? sessionAuthority;
   final Widget Function(BuildContext context, WorkspaceSession session)?
   homeBuilder;
 
@@ -23,6 +30,9 @@ class BusinessSetupPage extends StatefulWidget {
     super.key,
     this.provisioner,
     this.resolver,
+    this.verification,
+    this.sessionIdentities,
+    this.sessionAuthority,
     this.homeBuilder,
   });
   @override
@@ -37,8 +47,13 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   final _scroll = ScrollController();
   int _step = 0;
   bool _submitting = false;
+  bool _leaving = false;
   bool _creationAccepted = false;
+  bool _creationUncertain = false;
   String? _submissionError;
+  late final OwnerEmailVerification _verification =
+      widget.verification ?? FirebaseOwnerEmailVerification();
+  bool _needsVerification = false;
 
   @override
   void dispose() {
@@ -52,6 +67,30 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
     FocusScope.of(context).unfocus();
     setState(() => _step = step);
     if (_scroll.hasClients) _scroll.jumpTo(0);
+  }
+
+  void _back() {
+    if (_submitting || _leaving) return;
+    FocusScope.of(context).unfocus();
+    if (_step > 0) {
+      _goToStep(_step - 1);
+      return;
+    }
+    _leaving = true;
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.pop();
+    } else {
+      // Setup replaces WorkspaceGate on normal entry. Login is the existing
+      // safe entry screen; returning to the gate would redirect back to setup.
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute<void>(
+          builder: (_) => const LoginPage(),
+          settings: const RouteSettings(name: '/login'),
+        ),
+        (_) => false,
+      );
+    }
   }
 
   void _next() {
@@ -80,9 +119,16 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
       _submissionError = null;
     });
     try {
-      if (!_creationAccepted) {
+      if (!_creationAccepted && !_creationUncertain) {
+        _request.normalized();
+        if (!await _verification.refreshVerified()) {
+          throw const WorkspaceProvisioningException(
+            WorkspaceProvisioningFailure.emailUnverified,
+          );
+        }
+        if (!mounted) return;
         await (widget.provisioner ?? FirebaseWorkspaceProvisioner())
-            .createWorkspace(_request);
+            .createWorkspace(_request.normalized());
         if (!mounted) return;
         setState(() => _creationAccepted = true);
       }
@@ -93,19 +139,47 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (context) =>
-              widget.homeBuilder?.call(context, session) ??
-              HomePage(workspaceSession: session),
+          builder: (context) => WorkspaceSessionBoundary(
+            session: session,
+            identities: widget.sessionIdentities,
+            authority: widget.sessionAuthority,
+            resolve: widget.resolver?.resolve,
+            child:
+                widget.homeBuilder?.call(context, session) ??
+                HomePage(workspaceSession: session),
+          ),
           settings: const RouteSettings(name: '/workspace-home'),
         ),
       );
     } on WorkspaceProvisioningException catch (error) {
       if (!mounted) return;
-      setState(() => _submissionError = _provisioningMessage(error.failure));
+      setState(() {
+        // A lost/invalid response does not establish that the transaction failed.
+        _creationUncertain = switch (error.failure) {
+          WorkspaceProvisioningFailure.unavailable ||
+          WorkspaceProvisioningFailure.timedOut ||
+          WorkspaceProvisioningFailure.internal => true,
+          _ => false,
+        };
+        _submissionError = _provisioningMessage(error.failure);
+        _needsVerification =
+            error.failure == WorkspaceProvisioningFailure.emailUnverified;
+      });
+    } on OwnerVerificationException catch (error) {
+      if (!mounted) return;
+      setState(
+        () => _submissionError =
+            error.failure == OwnerVerificationFailure.signedOut ||
+                error.failure == OwnerVerificationFailure.changed
+            ? 'Your session could not be verified. Please sign in again.'
+            : 'Email verification is unavailable. Check your connection and try again.',
+      );
     } on WorkspaceResolutionException {
       if (!mounted) return;
       setState(() {
-        _submissionError = _creationAccepted
+        _submissionError = _creationUncertain
+            ? 'The creation outcome is still unknown. Recheck access or contact support before submitting another creation request.'
+            : _creationAccepted
             ? 'Workspace creation was accepted, but secure access could not yet be verified. Recheck without creating another workspace.'
             : 'Workspace access could not be verified. Please try again.';
       });
@@ -120,11 +194,34 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
     }
   }
 
+  Future<void> _openVerification() async {
+    final verified = await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(
+        builder: (_) => OwnerEmailVerificationPage(verification: _verification),
+      ),
+    );
+    if (mounted && verified == true) {
+      setState(() {
+        _needsVerification = false;
+        _submissionError = null;
+      });
+    }
+  }
+
   String _provisioningMessage(
     WorkspaceProvisioningFailure failure,
   ) => switch (failure) {
-    WorkspaceProvisioningFailure.emulatorRequired =>
-      'Workspace setup is enabled only with the local Firebase emulators in this phase.',
+    WorkspaceProvisioningFailure.callableNotFound =>
+      'Workspace creation service was not found. Ask the administrator to verify createWorkspace in asia-southeast1 for velora-73222.',
+    WorkspaceProvisioningFailure.permissionDenied =>
+      'Workspace creation was denied. Check your account access or contact support.',
+    WorkspaceProvisioningFailure.timedOut =>
+      'The request timed out; creation may have completed. Recheck Workspace before another creation attempt.',
+
+    WorkspaceProvisioningFailure.invalidProfile =>
+      'Workspace setup requires a valid explicitly selected Firebase profile.',
+    WorkspaceProvisioningFailure.emailUnverified =>
+      'Verify your email, then sign in again before creating a workspace.',
     WorkspaceProvisioningFailure.unauthenticated =>
       'Your session could not be verified. Please sign in again.',
     WorkspaceProvisioningFailure.invalidInput =>
@@ -132,9 +229,9 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
     WorkspaceProvisioningFailure.existingMembership =>
       'An existing workspace membership could not be safely confirmed. Recheck access or contact support.',
     WorkspaceProvisioningFailure.unavailable =>
-      'The local workspace service is unavailable. Check the emulators and try again.',
+      'The workspace service could not be reached. Creation may have completed. Recheck Workspace before another creation attempt.',
     WorkspaceProvisioningFailure.internal =>
-      'Workspace setup could not be completed safely. Please try again.',
+      'The workspace service returned an unexpected result. Creation may have completed. Recheck Workspace or contact support.',
   };
 
   Widget _stepBody() => switch (_step) {
@@ -155,8 +252,12 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
     ),
     _ => SetupCompleteStep(
       draft: _draft,
-      onEditBusiness: _creationAccepted ? null : () => _goToStep(0),
-      onEditPreferences: _creationAccepted ? null : () => _goToStep(1),
+      onEditBusiness: (_creationAccepted || _creationUncertain)
+          ? null
+          : () => _goToStep(0),
+      onEditPreferences: (_creationAccepted || _creationUncertain)
+          ? null
+          : () => _goToStep(1),
     ),
   };
 
@@ -191,14 +292,16 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
       children: [
         FilledButton(
           key: const ValueKey('setup-dashboard'),
-          onPressed: _submitting ? null : _submit,
+          onPressed: _submitting || _needsVerification ? null : _submit,
           child: _submitting
               ? const SizedBox.square(
                   dimension: 20,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : Text(
-                  _creationAccepted ? 'Recheck Workspace' : 'Create Workspace',
+                  (_creationAccepted || _creationUncertain)
+                      ? 'Recheck Workspace'
+                      : 'Create Workspace',
                 ),
         ),
         if (_submissionError != null) ...[
@@ -216,6 +319,11 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
               ),
             ),
           ),
+          if (_needsVerification)
+            TextButton(
+              onPressed: _submitting ? null : _openVerification,
+              child: const Text('Verify email'),
+            ),
         ],
       ],
     ),
@@ -223,9 +331,10 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
 
   @override
   Widget build(BuildContext context) => PopScope(
-    canPop: _step == 0,
+    canPop:
+        !_submitting && !_leaving && _step == 0 && Navigator.canPop(context),
     onPopInvokedWithResult: (didPop, result) {
-      if (!didPop && _step > 0) _goToStep(_step - 1);
+      if (!didPop) _back();
     },
     child: Scaffold(
       backgroundColor: AppColors.background,
@@ -266,19 +375,14 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
                             SizedBox(
                               width: 48,
                               height: 48,
-                              child: _step > 0 || Navigator.canPop(context)
-                                  ? IconButton(
-                                      tooltip: 'Back',
-                                      icon: const Icon(Icons.arrow_back),
-                                      onPressed: () {
-                                        if (_step > 0) {
-                                          _goToStep(_step - 1);
-                                        } else {
-                                          Navigator.pop(context);
-                                        }
-                                      },
-                                    )
-                                  : null,
+                              child: IconButton(
+                                key: const ValueKey('setup-header-back'),
+                                tooltip: 'Back',
+                                icon: const Icon(Icons.arrow_back),
+                                onPressed: _submitting || _leaving
+                                    ? null
+                                    : _back,
+                              ),
                             ),
                             Expanded(child: SetupProgress(step: _step)),
                             SizedBox(

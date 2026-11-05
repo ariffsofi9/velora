@@ -55,7 +55,9 @@ class _EditItemPageState extends State<EditItemPage> {
     _nameController = TextEditingController();
     _categoryController = TextEditingController();
     _imageUrlController = TextEditingController();
-    _updater = widget.updater ?? FirebaseWorkspaceInventoryUpdater();
+    _updater =
+        widget.updater ??
+        FirebaseWorkspaceInventoryUpdater(session: widget.workspaceSession);
     _repository = widget.repository;
     _loadForm(_item);
   }
@@ -170,9 +172,7 @@ class _EditItemPageState extends State<EditItemPage> {
         _repository ??
         (widget.workspaceSession == null
             ? null
-            : WorkspaceInventoryRepository(
-                session: widget.workspaceSession!,
-              ));
+            : WorkspaceInventoryRepository(session: widget.workspaceSession!));
     if (repository == null || _isRefreshing) return;
     setState(() => _isRefreshing = true);
     try {

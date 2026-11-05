@@ -1,3 +1,5 @@
+import 'package:velora/models/cafe_workspace.dart';
+import 'package:velora/services/workspace_session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/services/workspace_inventory_create_service.dart';
 
@@ -15,7 +17,17 @@ class _Callable implements WorkspaceInventoryCreateCallable {
 void main() {
   test('maps the exact callable payload with canonical UTC expiry', () async {
     final callable = _Callable();
-    final creator = FirebaseWorkspaceInventoryCreator(callable: callable);
+    final creator = FirebaseWorkspaceInventoryCreator(
+      session: WorkspaceSession.fromVerified(
+        const CafeWorkspace(
+          cafeId: 'cafe-a',
+          uid: 'owner',
+          ownerUid: 'owner',
+          role: CafeRole.owner,
+        ),
+      ),
+      callable: callable,
+    );
     final request = WorkspaceInventoryCreateRequest(
       idempotencyKey: 'request-00000001',
       name: 'Fresh Milk',
@@ -30,6 +42,8 @@ void main() {
     expect(result.itemId, 'item-a');
     expect(result.created, isTrue);
     expect(callable.payload, {
+      'expectedCafeId': 'cafe-a',
+      'expectedMembershipGeneration': 0,
       'idempotencyKey': 'request-00000001',
       'name': 'Fresh Milk',
       'category': 'Dairy',
@@ -45,7 +59,17 @@ void main() {
 
   test('rejects malformed callable results', () async {
     final callable = _Callable()..result = {'created': true};
-    final creator = FirebaseWorkspaceInventoryCreator(callable: callable);
+    final creator = FirebaseWorkspaceInventoryCreator(
+      session: WorkspaceSession.fromVerified(
+        const CafeWorkspace(
+          cafeId: 'cafe-a',
+          uid: 'owner',
+          ownerUid: 'owner',
+          role: CafeRole.owner,
+        ),
+      ),
+      callable: callable,
+    );
 
     await expectLater(
       creator.createItem(

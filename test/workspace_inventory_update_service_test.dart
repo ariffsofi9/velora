@@ -1,3 +1,5 @@
+import 'package:velora/models/cafe_workspace.dart';
+import 'package:velora/services/workspace_session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/services/workspace_inventory_update_service.dart';
 
@@ -19,7 +21,17 @@ class _Callable implements WorkspaceInventoryUpdateCallable {
 void main() {
   test('maps only supported metadata with canonical UTC expiry', () async {
     final callable = _Callable();
-    final updater = FirebaseWorkspaceInventoryUpdater(callable: callable);
+    final updater = FirebaseWorkspaceInventoryUpdater(
+      session: WorkspaceSession.fromVerified(
+        const CafeWorkspace(
+          cafeId: 'cafe-a',
+          uid: 'owner',
+          ownerUid: 'owner',
+          role: CafeRole.owner,
+        ),
+      ),
+      callable: callable,
+    );
     final result = await updater.updateItem(
       WorkspaceInventoryUpdateRequest(
         idempotencyKey: 'update-request-0001',
@@ -35,6 +47,8 @@ void main() {
 
     expect(result.version, 2);
     expect(callable.payload, {
+      'expectedCafeId': 'cafe-a',
+      'expectedMembershipGeneration': 0,
       'idempotencyKey': 'update-request-0001',
       'itemId': 'item-a',
       'expectedVersion': 1,
@@ -58,7 +72,17 @@ void main() {
 
   test('rejects malformed callable results', () async {
     final callable = _Callable()..result = {'updated': true, 'version': 2};
-    final updater = FirebaseWorkspaceInventoryUpdater(callable: callable);
+    final updater = FirebaseWorkspaceInventoryUpdater(
+      session: WorkspaceSession.fromVerified(
+        const CafeWorkspace(
+          cafeId: 'cafe-a',
+          uid: 'owner',
+          ownerUid: 'owner',
+          role: CafeRole.owner,
+        ),
+      ),
+      callable: callable,
+    );
 
     await expectLater(
       updater.updateItem(

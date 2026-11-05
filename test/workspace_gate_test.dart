@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'helpers/owner_verification_fake.dart';
+import 'package:velora/screens/auth/owner_email_verification_page.dart';
+import 'package:velora/screens/business_setup/business_setup_page.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/cafe_workspace.dart';
@@ -57,6 +60,33 @@ Widget _app(_Resolver resolver) => MaterialApp(
 );
 
 void main() {
+  testWidgets(
+    'missing workspace resumes verification then resolves again to setup without loops',
+    (tester) async {
+      final verification = VerifiedOwnerFake(verified: false);
+      final resolver = _Resolver(
+        () async => throw const WorkspaceResolutionException(
+          WorkspaceFailure.missingMembership,
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WorkspaceGate(
+            resolver: resolver,
+            ownerVerification: verification,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(OwnerEmailVerificationPage), findsOneWidget);
+      verification.verified = true;
+      await tester.tap(find.byKey(const ValueKey('owner-check-verification')));
+      await tester.pumpAndSettle();
+      expect(find.byType(BusinessSetupPage), findsOneWidget);
+      expect(find.byType(OwnerEmailVerificationPage), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   testWidgets('successful Login enters the shared gate, not Home directly', (
     tester,
   ) async {

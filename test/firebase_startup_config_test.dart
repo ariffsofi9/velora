@@ -34,6 +34,81 @@ FirebaseOptions resolve(
 }) => config.resolve(isWeb: isWeb, platform: platform, webOptions: web);
 void main() {
   const cloud = FirebaseStartupConfig(cloudProject: 'velora-73222');
+  test(
+    'explicit Web profile selects checked-in options without initialization',
+    () {
+      expect(
+        cloud.resolve(isWeb: true, platform: TargetPlatform.windows),
+        same(DefaultFirebaseOptions.web),
+      );
+    },
+  );
+  test('Web profile rejects missing and mismatched configuration fields', () {
+    const approved = DefaultFirebaseOptions.web;
+    for (final field in [
+      'missing',
+      'project',
+      'app',
+      'sender',
+      'domain',
+      'bucket',
+      'key',
+    ]) {
+      final value = field == 'missing'
+          ? null
+          : FirebaseOptions(
+              apiKey: field == 'key' ? '' : approved.apiKey,
+              appId: field == 'app'
+                  ? DefaultFirebaseOptions.windows.appId
+                  : approved.appId,
+              messagingSenderId: field == 'sender'
+                  ? '123'
+                  : approved.messagingSenderId,
+              projectId: field == 'project' ? 'other' : approved.projectId,
+              authDomain: field == 'domain'
+                  ? 'other.firebaseapp.com'
+                  : approved.authDomain,
+              storageBucket: field == 'bucket'
+                  ? 'other'
+                  : approved.storageBucket,
+            );
+      expect(
+        () => cloud.resolve(
+          isWeb: true,
+          platform: TargetPlatform.windows,
+          webOptions: value,
+        ),
+        throwsStateError,
+      );
+    }
+  });
+  test(
+    'Web rejects wrong project and conflicting flags without initialization',
+    () {
+      for (final config in [
+        const FirebaseStartupConfig(cloudProject: 'other'),
+        const FirebaseStartupConfig(cloudProject: ' velora-73222'),
+        const FirebaseStartupConfig(
+          cloudProject: 'velora-73222',
+          stagingFlagPresent: true,
+        ),
+        const FirebaseStartupConfig(
+          cloudProject: 'velora-73222',
+          emulatorFlagPresent: true,
+        ),
+        const FirebaseStartupConfig(
+          cloudProject: 'velora-73222',
+          ai1Live: true,
+        ),
+        const FirebaseStartupConfig(stagingFlagPresent: true),
+      ]) {
+        expect(
+          () => config.resolve(isWeb: true, platform: TargetPlatform.windows),
+          throwsStateError,
+        );
+      }
+    },
+  );
   FirebaseOptions androidCloud(
     FirebaseStartupConfig config, {
     FirebaseOptions value = DefaultFirebaseOptions.android,
@@ -186,19 +261,16 @@ void main() {
           isA<FirebaseConfigurationException>().having(
             (e) => e.message,
             'message',
-            contains('missing'),
+            contains('Staging is retired'),
           ),
         ),
       );
     },
   );
-  test(
-    'explicit staging accepts only structurally matching Web options without I/O',
-    () {
-      final fixture = options();
-      expect(resolve(staging, web: fixture), same(fixture));
-    },
-  );
+  test('retired staging rejects even structurally matching Web options', () {
+    final fixture = options();
+    expect(() => resolve(staging, web: fixture), throwsStateError);
+  });
   for (final project in ['velora-73222', 'demo-velora-ai1', 'other-staging']) {
     test(
       'staging rejects project $project',
@@ -252,7 +324,7 @@ void main() {
           isA<FirebaseConfigurationException>().having(
             (e) => e.message,
             'message',
-            contains('Android staging is BLOCKED'),
+            contains('Staging is retired'),
           ),
         ),
       );

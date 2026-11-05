@@ -1,3 +1,4 @@
+import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 enum InventoryLifecycleAction { archive, restore }
@@ -62,20 +63,32 @@ abstract interface class WorkspaceInventoryLifecycleManager {
 
 class FirebaseWorkspaceInventoryLifecycleManager
     implements WorkspaceInventoryLifecycleManager {
-  final FirebaseFunctions _functions;
-  FirebaseWorkspaceInventoryLifecycleManager({FirebaseFunctions? functions})
-    : _functions =
-          functions ?? FirebaseFunctions.instanceFor(region: 'asia-southeast1');
+  final FirebaseFunctions? _functions;
+  final Future<Map<String, dynamic>> Function(Map<String, Object>)? invoke;
+  final WorkspaceSession? session;
+  FirebaseWorkspaceInventoryLifecycleManager({
+    FirebaseFunctions? functions,
+    this.session,
+    this.invoke,
+  }) : _functions = functions;
 
   @override
   Future<WorkspaceInventoryLifecycleResult> setLifecycle(
     WorkspaceInventoryLifecycleRequest request,
   ) async {
     try {
-      final response = await _functions
-          .httpsCallable('setInventoryLifecycle')
-          .call<Map<String, dynamic>>(request.toCallableData());
-      final data = response.data;
+      final captured = captureMutationSession(request, session);
+      final payload = {...request.toCallableData(), ...captured.mutationData};
+      final data = invoke != null
+          ? await invoke!(payload)
+          : (await (_functions ??
+                        FirebaseFunctions.instanceFor(
+                          region: 'asia-southeast1',
+                        ))
+                    .httpsCallable('setInventoryLifecycle')
+                    .call<Map<String, dynamic>>(payload))
+                .data;
+      captured.requireActive();
       if (data['itemId'] is! String ||
           data['lifecycleState'] is! String ||
           data['version'] is! int ||

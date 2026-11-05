@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/cafe_workspace.dart';
 import 'workspace_store.dart';
 
-/// Not wired into production routing. This service never provisions membership.
+/// Read-only membership resolution. This service never provisions membership.
 /// Firestore Rules remain responsible for authorization on every request.
 class WorkspaceResolver {
   final FirebaseAuth? _auth;
@@ -127,11 +127,14 @@ class WorkspaceResolver {
       _validateLink(ownerMapping, ownerUid, cafeId);
       if (ownerMember['role'] != 'owner') _invalid();
 
+      final generation = validateGenerationPair(mapping, member);
+      validateGenerationPair(ownerMapping, ownerMember);
       final result = CafeWorkspace(
         cafeId: cafeId,
         uid: uid,
         ownerUid: ownerUid,
         role: role,
+        membershipGeneration: generation,
       );
       operation = 'verify-session-unchanged';
       if (_uid != uid) {
@@ -217,6 +220,29 @@ class WorkspaceResolver {
       data['cafeId'] == cafeId &&
       data['status'] == 'active' &&
       data['schemaVersion'] == 1;
+
+  static int validateGenerationPair(
+    Map<String, dynamic> mapping,
+    Map<String, dynamic> member,
+  ) {
+    if (mapping['status'] != 'active' || member['status'] != 'active') {
+      _invalid();
+    }
+    final hasMapping = mapping.containsKey('membershipGeneration');
+    final hasMember = member.containsKey('membershipGeneration');
+    if (!hasMapping && !hasMember) return 0;
+    final value = mapping['membershipGeneration'];
+    if (!hasMapping ||
+        !hasMember ||
+        value is! int ||
+        value < 0 ||
+        value > 9007199254740991 ||
+        member['membershipGeneration'] is! int ||
+        member['membershipGeneration'] != value) {
+      _invalid();
+    }
+    return value;
+  }
 
   static Never _invalid() => throw const WorkspaceResolutionException(
     WorkspaceFailure.inconsistentMembership,

@@ -148,3 +148,36 @@ test('concurrent archive requests cannot create duplicate lifecycle events', asy
   assert.equal(results.filter((r) => r.status === 'rejected').length, 1);
   assert.equal([...store.docs.keys()].filter((p) => p.includes('/activities/')).length, 1);
 });
+
+
+test('safe-integer version exhaustion rejects without item or audit writes', async () => {
+  const store = new MemoryStore(seed());
+  store.docs.get('cafes/cafe-a/inventory/item-a').version = Number.MAX_SAFE_INTEGER;
+  const before = structuredClone(store.docs);
+  await assert.rejects(invoke({store, data: {...archive, expectedVersion: Number.MAX_SAFE_INTEGER}}),
+    {code: 'failed-precondition'});
+  assert.deepEqual(store.docs, before);
+});
+
+
+for (const action of ['archive', 'restore']) {
+  test(`last safe lifecycle ${action} increment is idempotent and rejects the next transition`, async () => {
+    const store = new MemoryStore(seed({version: Number.MAX_SAFE_INTEGER - 1,
+      lifecycleState: action === 'archive' ? 'active' : 'archived'}));
+    const data = {...archive, action, expectedVersion: Number.MAX_SAFE_INTEGER - 1};
+    const first = await invoke({store, data});
+    assert.equal(first.version, Number.MAX_SAFE_INTEGER);
+    assert.equal(first.lifecycleState, action === 'archive' ? 'archived' : 'active');
+    assert.equal(first.changed, true);
+    const committed = structuredClone(store.docs);
+    const retry = await invoke({store, data});
+    assert.equal(retry.changed, false);
+    assert.equal(retry.version, first.version);
+    assert.equal(retry.lifecycleState, first.lifecycleState);
+    assert.deepEqual(store.docs, committed);
+    await assert.rejects(invoke({store, data: {...data, idempotencyKey: 'exhausted-lifecycle-01',
+      expectedVersion: Number.MAX_SAFE_INTEGER, action: action === 'archive' ? 'restore' : 'archive'}}),
+      {code: 'failed-precondition'});
+    assert.deepEqual(store.docs, committed);
+  });
+}

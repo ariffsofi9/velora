@@ -70,6 +70,11 @@ class _SignUpPageState extends State<SignUpPage> {
       return;
     }
 
+    if (name.length > 80) {
+      showMessage('Full name must be 80 characters or fewer.', true);
+      return;
+    }
+
     setState(() => isLoading = true);
 
     try {

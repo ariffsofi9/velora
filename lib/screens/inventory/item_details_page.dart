@@ -234,6 +234,7 @@ class ItemDetailsPage extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               InventoryLifecycleActionButton(
+                workspaceSession: workspaceSession,
                 item: item,
                 manager: lifecycleManager,
                 onChanged: () => Navigator.pop(context, true),

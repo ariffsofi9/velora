@@ -71,7 +71,10 @@ class AuthService {
       }
       created = true;
       await user.updateDisplayName(name);
-      await _profiles.createUserProfileIfNeeded(user);
+      await _profiles.createUserProfileIfNeeded(
+        user,
+        initialUsername: name.trim(),
+      );
       profileSaved = true;
       await _auth.signOut();
       if (_auth.currentUser != null) {

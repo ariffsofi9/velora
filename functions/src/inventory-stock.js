@@ -33,10 +33,11 @@ const FORBIDDEN_FIELDS = new Set([
 ]);
 
 class InventoryStockError extends Error {
-  constructor(code, message) {
+  constructor(code, message, reason) {
     super(message);
     this.name = 'InventoryStockError';
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -281,12 +282,16 @@ async function adjustInventoryStock({auth, data, store, timestamp}) {
         throw new InventoryStockError(
           'failed-precondition',
           'Stock out quantity exceeds available stock.',
+          'insufficient-stock',
         );
       }
       resultingQuantity = item.quantity - input.quantity;
     }
 
     const resultVersion = currentVersion + 1;
+    if (!Number.isSafeInteger(resultVersion)) {
+      throw new InventoryStockError('failed-precondition', 'Inventory item version cannot advance safely.');
+    }
     const now = timestamp();
     transaction.update(itemPath, {
       quantity: resultingQuantity,

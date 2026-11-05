@@ -82,6 +82,48 @@ Matcher _failure(WorkspaceFailure failure) =>
     );
 
 void main() {
+  for (final uid in ['owner-a', 'staff-a']) {
+    for (final value in [0, 4, 9007199254740991]) {
+      test('verified $uid generation $value', () async {
+        final store = _fixture();
+        store.docs['user_cafe_memberships/$uid']!['membershipGeneration'] =
+            value;
+        store.docs['cafes/cafe-a/members/$uid']!['membershipGeneration'] =
+            value;
+        final result = await WorkspaceResolver(
+          auth: _Auth(uid),
+          store: store,
+        ).resolve();
+        expect(result.membershipGeneration, value);
+      });
+    }
+    for (final value in [-1, 0.5, '0', null, 9007199254740992]) {
+      test('reject malformed $uid generation $value', () async {
+        final store = _fixture();
+        store.docs['user_cafe_memberships/$uid']!['membershipGeneration'] =
+            value;
+        store.docs['cafes/cafe-a/members/$uid']!['membershipGeneration'] =
+            value;
+        await expectLater(
+          WorkspaceResolver(auth: _Auth('staff-a'), store: store).resolve(),
+          throwsA(_failure(WorkspaceFailure.inconsistentMembership)),
+        );
+      });
+    }
+  }
+  for (final oneSided in [true, false]) {
+    test('partial or mismatched generation denied $oneSided', () async {
+      final store = _fixture();
+      store.docs['user_cafe_memberships/staff-a']!['membershipGeneration'] = 0;
+      if (!oneSided) {
+        store.docs['cafes/cafe-a/members/staff-a']!['membershipGeneration'] = 2;
+      }
+      await expectLater(
+        WorkspaceResolver(auth: _Auth('staff-a'), store: store).resolve(),
+        throwsA(_failure(WorkspaceFailure.inconsistentMembership)),
+      );
+    });
+  }
   for (final role in CafeRole.values) {
     test('Resolves valid ${role.name} links in one read transaction', () async {
       final uid = role == CafeRole.owner ? 'owner-a' : 'staff-a';

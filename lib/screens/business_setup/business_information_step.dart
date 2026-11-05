@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 import 'business_setup_draft.dart';
 import 'business_setup_widgets.dart';
+import '../../services/workspace_provisioning_service.dart';
 
 class BusinessInformationStep extends StatelessWidget {
   final GlobalKey<FormState> formKey;
@@ -36,9 +37,8 @@ class BusinessInformationStep extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.w400),
           textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(hintText: 'e.g. Tasty Bites'),
-          validator: (value) => value == null || value.trim().isEmpty
-              ? 'Please enter your business name.'
-              : null,
+          validator: (value) =>
+              WorkspaceCreationRequest.validateBusinessName(value ?? ''),
         ),
         const SizedBox(height: 24),
         const SetupLabel('Business Type'),
@@ -81,6 +81,8 @@ class BusinessInformationStep extends StatelessWidget {
         TextFormField(
           key: const ValueKey('business-address'),
           controller: address,
+          validator: (value) =>
+              WorkspaceCreationRequest.validateAddress(value ?? ''),
           style: const TextStyle(fontWeight: FontWeight.w400),
           decoration: const InputDecoration(
             hintText: 'Enter address',

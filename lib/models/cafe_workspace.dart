@@ -6,12 +6,14 @@ class CafeWorkspace {
   final String uid;
   final String ownerUid;
   final CafeRole role;
+  final int membershipGeneration;
 
   const CafeWorkspace({
     required this.cafeId,
     required this.uid,
     required this.ownerUid,
     required this.role,
+    this.membershipGeneration = 0,
   });
 }
 

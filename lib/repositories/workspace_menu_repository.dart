@@ -111,6 +111,8 @@ class FirebaseMenuRepository implements MenuRepository {
               (current.uid != expected.uid ||
                   current.cafeId != expected.cafeId ||
                   current.ownerUid != expected.ownerUid ||
+                  current.membershipGeneration !=
+                      expected.membershipGeneration ||
                   current.role != expected.role))) {
         throw const MenuException(MenuFailure.session);
       }
@@ -151,10 +153,13 @@ class FirebaseMenuRepository implements MenuRepository {
       if (ownerOnly && workspace.role != CafeRole.owner) {
         throw const MenuException(MenuFailure.permission);
       }
-      final dataResult = await (callable ?? FirebaseMenuCallable()).call(
-        name,
-        data,
-      );
+      final dataResult = await (callable ?? FirebaseMenuCallable()).call(name, {
+        ...data,
+        if (!['getMenuItem', 'listMenuItems'].contains(name)) ...{
+          'expectedCafeId': workspace.cafeId,
+          'expectedMembershipGeneration': workspace.membershipGeneration,
+        },
+      });
       await resolve();
       if (invalidated) throw const MenuException(MenuFailure.session);
       return dataResult;

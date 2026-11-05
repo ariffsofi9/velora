@@ -14,6 +14,8 @@ import '../../logic/suggestion_helper.dart';
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 import '../../services/workspace_session.dart';
+import '../../services/secure_ai_service.dart';
+import 'widgets_suggestions/secure_ai_suggestions.dart';
 import '../../services/firebase_emulator_config.dart';
 import 'widgets_suggestions/ai1_mock_recipe_content.dart';
 
@@ -32,8 +34,14 @@ part 'suggestions_generation.dart';
 class SuggestionsPage extends StatefulWidget {
   final WorkspaceSession? workspaceSession;
   final WorkspaceInventoryRepository? repository;
+  final SecureAiService? aiService;
 
-  const SuggestionsPage({super.key, this.workspaceSession, this.repository});
+  const SuggestionsPage({
+    super.key,
+    this.workspaceSession,
+    this.repository,
+    this.aiService,
+  });
 
   @override
   State<SuggestionsPage> createState() => _SuggestionsPageState();
@@ -211,7 +219,12 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
                     children: [
                       const SuggestionPageTitle(),
                       const SizedBox(height: 18),
-                      if (FirebaseEmulatorConfig.ai1Mock)
+                      if (widget.aiService != null)
+                        SecureAiSuggestions(
+                          workspaceSession: widget.workspaceSession,
+                          service: widget.aiService!,
+                        )
+                      else if (FirebaseEmulatorConfig.ai1Mock)
                         Ai1MockRecipeContent(
                           workspaceSession: widget.workspaceSession,
                         )

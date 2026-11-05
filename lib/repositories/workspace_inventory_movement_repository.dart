@@ -71,7 +71,7 @@ class FirestoreWorkspaceMovementDataSource
       }
       query = query.startAfterDocument(startAfter);
     }
-    final snapshot = await query.get();
+    final snapshot = await query.get(const GetOptions(source: Source.server));
     return snapshot.docs
         .map(
           (doc) => WorkspaceMovementDocument(
@@ -118,6 +118,7 @@ class WorkspaceInventoryMovementRepository
         WorkspaceMovementFailure.invalidData,
       );
     }
+    session.requireActive();
     try {
       final documents = await _dataSource.fetchPage(
         path: collectionPath,
@@ -126,6 +127,7 @@ class WorkspaceInventoryMovementRepository
         descending: true,
         startAfter: cursor?._token,
       );
+      session.requireActive();
       final movements = documents
           .map((document) {
             final movement = InventoryMovement.fromMap(

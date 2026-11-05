@@ -1,4 +1,4 @@
-// DRAFT ONLY. Not referenced by firebase.json; never deploy as a replacement.
+// DRAFT ONLY. Referenced by firebase.json; do not deploy until authorization is verified.
 // Admin SDK bypasses these rules: trusted provisioning must validate every write.
 rules_version = '2';
 service cloud.firestore {

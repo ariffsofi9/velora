@@ -47,6 +47,7 @@ class FirebaseTeamMembers implements TeamMembers {
         current.uid != workspace.uid ||
         current.cafeId != workspace.cafeId ||
         current.ownerUid != workspace.ownerUid ||
+        current.membershipGeneration != workspace.membershipGeneration ||
         current.role != workspace.role ||
         data['cafeId'] != workspace.cafeId ||
         data['viewerRole'] != role ||

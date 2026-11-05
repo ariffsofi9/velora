@@ -49,7 +49,9 @@ class _AddItemPageState extends State<AddItemPage> {
   @override
   void initState() {
     super.initState();
-    _creator = widget.creator ?? FirebaseWorkspaceInventoryCreator();
+    _creator =
+        widget.creator ??
+        FirebaseWorkspaceInventoryCreator(session: widget.workspaceSession);
   }
 
   @override

@@ -313,3 +313,43 @@ test('transaction failure leaves item and audit unchanged', async () => {
     false,
   );
 });
+
+
+test('safe-integer version exhaustion rejects without item or audit writes', async () => {
+  const store = new MemoryStore(seed());
+  store.docs.get('cafes/cafe-a/inventory/item-a').version = Number.MAX_SAFE_INTEGER;
+  const before = structuredClone(store.docs);
+  await assert.rejects(invoke({store, data: {...validData, expectedVersion: Number.MAX_SAFE_INTEGER}}),
+    {code: 'failed-precondition'});
+  assert.deepEqual(store.docs, before);
+});
+
+
+test('metadata no-op at maximum version retains its valid version', async () => {
+  const store = new MemoryStore(seed());
+  const item = store.docs.get('cafes/cafe-a/inventory/item-a');
+  item.version = Number.MAX_SAFE_INTEGER;
+  const result = await invoke({store, data: {idempotencyKey: 'max-version-noop-01',
+    itemId: 'item-a', expectedVersion: item.version, name: item.name}});
+  assert.equal(result.updated, false);
+  assert.equal(result.version, Number.MAX_SAFE_INTEGER);
+});
+
+
+test('last safe metadata increment is idempotent and further edits reject without writes', async () => {
+  const store = new MemoryStore(seed());
+  store.docs.get('cafes/cafe-a/inventory/item-a').version = Number.MAX_SAFE_INTEGER - 1;
+  const data = {...validData, expectedVersion: Number.MAX_SAFE_INTEGER - 1};
+  const first = await invoke({store, data});
+  assert.equal(first.version, Number.MAX_SAFE_INTEGER);
+  assert.equal(first.updated, true);
+  assert.equal(store.docs.get('cafes/cafe-a/inventory/item-a').version, Number.MAX_SAFE_INTEGER);
+  const committed = structuredClone(store.docs);
+  const retry = await invoke({store, data});
+  assert.equal(retry.version, first.version);
+  assert.equal(retry.updated, first.updated); // Receipt reports the original outcome.
+  assert.deepEqual(store.docs, committed);
+  await assert.rejects(invoke({store, data: {...data, idempotencyKey: 'exhausted-update-01',
+    expectedVersion: Number.MAX_SAFE_INTEGER, name: 'Another name'}}), {code: 'failed-precondition'});
+  assert.deepEqual(store.docs, committed);
+});

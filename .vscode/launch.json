@@ -8,11 +8,11 @@
       "deviceId": "chrome"
     },
     {
-      "name": "Velora Staging Web (BLOCKED: app config missing)",
+      "name": "Velora Chrome (explicit velora-73222 cloud)",
       "request": "launch",
       "type": "dart",
       "deviceId": "chrome",
-      "args": ["--dart-define=VELORA_STAGING=true"]
+      "args": ["--dart-define=VELORA_FIREBASE_PROJECT=velora-73222"]
     }
   ]
 }

@@ -1,3 +1,4 @@
+import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
 class WorkspaceInventoryCreateRequest {
@@ -96,9 +97,11 @@ class FirebaseWorkspaceInventoryCreateCallable
 }
 
 class FirebaseWorkspaceInventoryCreator implements WorkspaceInventoryCreator {
+  final WorkspaceSession? session;
   final WorkspaceInventoryCreateCallable _callable;
 
   FirebaseWorkspaceInventoryCreator({
+    this.session,
     FirebaseFunctions? functions,
     WorkspaceInventoryCreateCallable? callable,
   }) : _callable =
@@ -110,7 +113,10 @@ class FirebaseWorkspaceInventoryCreator implements WorkspaceInventoryCreator {
     WorkspaceInventoryCreateRequest request,
   ) async {
     try {
-      final data = await _callable.call(request.toCallableData());
+      final captured = captureMutationSession(request, session);
+      final payload = {...request.toCallableData(), ...captured.mutationData};
+      final data = await _callable.call(payload);
+      captured.requireActive();
       if (data['itemId'] is! String || data['created'] is! bool) {
         throw const WorkspaceInventoryCreateException(
           WorkspaceInventoryCreateFailure.internal,
@@ -138,6 +144,7 @@ class FirebaseWorkspaceInventoryCreator implements WorkspaceInventoryCreator {
         'permission-denied' || 'failed-precondition' =>
           WorkspaceInventoryCreateFailure.permissionDenied,
         'already-exists' => WorkspaceInventoryCreateFailure.conflict,
+        'aborted' => WorkspaceInventoryCreateFailure.conflict,
         'unavailable' ||
         'deadline-exceeded' => WorkspaceInventoryCreateFailure.unavailable,
         _ => WorkspaceInventoryCreateFailure.internal,

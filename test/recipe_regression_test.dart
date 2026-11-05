@@ -1,11 +1,6 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:velora/logic/ai_recipe_save_service.dart';
-import 'package:velora/logic/groq_service.dart';
 import 'package:velora/logic/suggestion_helper.dart';
 import 'package:velora/screens/suggestions/logic_suggestions/groq_recipe_formatter.dart';
 import 'package:velora/screens/suggestions/utils_suggestions/recipe_parser.dart';
@@ -117,96 +112,4 @@ void main() {
       expect(GroqRecipeFormatter.isEmptyResult(text), isFalse);
     },
   );
-
-  Map<String, dynamic> recipe(List<String> ingredients) => {
-    'title': 'Omelette',
-    'ingredientsUsed': ingredients,
-    'missingIngredients': ['Salt'],
-    'steps': ['Cook the egg.'],
-    'whyRecommended': 'Use available stock.',
-  };
-  final tomorrow = DateTime.now().add(const Duration(days: 1));
-  final items = <Map<String, dynamic>>[
-    {'name': 'Egg', 'quantity': 4, 'expiryDate': tomorrow},
-    {
-      'name': 'Expired Milk',
-      'quantity': 3,
-      'expiryDate': DateTime.now().subtract(const Duration(days: 2)),
-    },
-    {'name': 'Rice', 'quantity': 0, 'expiryDate': tomorrow},
-    {'name': 'Unknown Date', 'quantity': 3},
-  ];
-  GroqService groq(List<Map<String, dynamic>> recipes) => GroqService(
-    apiKey: 'unit-test-placeholder',
-    client: MockClient(
-      (_) async => http.Response(
-        jsonEncode({
-          'choices': [
-            {
-              'message': {
-                'content': jsonEncode({'recipes': recipes}),
-              },
-            },
-          ],
-        }),
-        200,
-      ),
-    ),
-  );
-
-  for (final invalid in [
-    'Invented Cheese',
-    'Expired Milk',
-    'Rice',
-    'Unknown Date',
-    'Eggplant',
-    '2 Egg',
-  ]) {
-    test('Rejects recipe claiming unavailable ingredient: $invalid', () async {
-      final result = await groq([
-        recipe(['Egg', invalid]),
-      ]).generateRecipes(inventoryItems: items);
-      expect(result['status'], 'error');
-      expect(result['recipes'], isEmpty);
-    });
-  }
-
-  test(
-    'Case/whitespace normalize to actual inventory names; optional missing items stay separate',
-    () async {
-      final result = await groq([
-        recipe(['  EGG  ', 'egg']),
-      ]).generateRecipes(inventoryItems: items);
-      expect(result['status'], 'success');
-      expect(result['recipes'][0]['ingredientsUsed'], ['Egg']);
-      expect(result['recipes'][0]['missingIngredients'], ['Salt']);
-    },
-  );
-
-  test(
-    'One invalid recipe rejects the whole response instead of inventing a replacement',
-    () async {
-      final result = await groq([
-        recipe(['Egg']),
-        recipe(['Invented Cheese']),
-      ]).generateRecipes(inventoryItems: items);
-      expect(result['status'], 'error');
-      expect(result['recipes'], isEmpty);
-    },
-  );
-
-  test('No dated usable stock means no provider request', () async {
-    final service = GroqService(
-      apiKey: 'unit-test-placeholder',
-      client: MockClient((_) async {
-        fail('Undated stock is not safe input');
-      }),
-    );
-    final result = await service.generateRecipes(
-      inventoryItems: [
-        {'name': 'Egg', 'quantity': 4},
-      ],
-    );
-    expect(result['recipes'], isEmpty);
-  });
 }

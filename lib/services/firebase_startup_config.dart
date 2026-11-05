@@ -1,7 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show appFlavor;
-import '../firebase_staging_options.dart';
 import '../firebase_options.dart';
 
 class FirebaseConfigurationException extends StateError {
@@ -59,16 +58,15 @@ class FirebaseStartupConfig {
   FirebaseOptions resolve({
     required bool isWeb,
     required TargetPlatform platform,
-    FirebaseOptions? webOptions = StagingFirebaseOptions.web,
-    FirebaseOptions? androidOptions = StagingFirebaseOptions.android,
+    FirebaseOptions? webOptions = DefaultFirebaseOptions.web,
+    FirebaseOptions? androidOptions,
     String? androidFlavor = appFlavor,
     FirebaseOptions cloudOptions = DefaultFirebaseOptions.android,
   }) {
     if (cloudProject.isNotEmpty) {
       if (cloudProject != 'velora-73222' ||
-          isWeb ||
-          platform != TargetPlatform.android ||
-          androidFlavor != null ||
+          (!isWeb && platform != TargetPlatform.android) ||
+          (!isWeb && androidFlavor != null) ||
           stagingFlagPresent ||
           staging ||
           emulatorFlagPresent ||
@@ -79,8 +77,25 @@ class FirebaseStartupConfig {
           ai1Live ||
           host != 'localhost') {
         _fail(
-          'Explicit cloud profile requires unflavored Android, velora-73222, and no staging/emulator/demo/AI defines.',
+          'Explicit cloud profile requires Web or unflavored Android, velora-73222, and no staging/emulator/demo/AI defines.',
         );
+      }
+      if (isWeb) {
+        final options = webOptions;
+        const approved = DefaultFirebaseOptions.web;
+        if (options == null ||
+            options.projectId != 'velora-73222' ||
+            options.appId != '1:384873169563:web:80da212022315171b63c3e' ||
+            options.messagingSenderId != approved.messagingSenderId ||
+            options.authDomain != approved.authDomain ||
+            options.storageBucket != approved.storageBucket ||
+            options.apiKey.isEmpty ||
+            options.apiKey != approved.apiKey) {
+          _fail(
+            'Web Firebase configuration does not match the approved project/app.',
+          );
+        }
+        return options;
       }
       if (cloudOptions.projectId != 'velora-73222' ||
           cloudOptions.appId !=
@@ -96,73 +111,19 @@ class FirebaseStartupConfig {
       // Native package and Google Services identity are checked by Gradle.
       return cloudOptions;
     }
-    if (!isWeb && platform == TargetPlatform.android) {
-      if ((androidFlavor == 'staging') != staging) {
-        _fail('Android staging flavor and VELORA_STAGING=true must match.');
-      }
-      if (staging && androidOptions == null) {
-        _fail(
-          'Android staging is BLOCKED: registered staging configuration is missing.',
-        );
-      }
-      if (staging &&
-          androidOptions!.projectId != StagingFirebaseOptions.projectId) {
-        _fail(
-          'Android staging project must be exactly velora-fyp-staging; protected fallback forbidden.',
-        );
-      }
+    // Retired profile flags are rejected rather than rerouted to cloud.
+    if (staging || stagingFlagPresent) {
+      _fail(
+        'Staging is retired. Select VELORA_FIREBASE_PROJECT=velora-73222 explicitly.',
+      );
     }
-    if (staging) {
-      if (emulatorFlagPresent ||
-          emulators ||
-          staffDemo ||
-          ai1Mock ||
-          recipeConnectivity ||
-          ai1Live) {
-        _fail(
-          'Staging cannot be combined with any emulator/demo/live-AI define, including false-valued defines.',
-        );
-      }
-      if (!isWeb) {
-        _fail(
-          platform == TargetPlatform.android
-              ? 'Android staging is BLOCKED until separate native Firebase configuration is registered and isolated.'
-              : 'Staging is prepared for Web/Android only; this platform is blocked.',
-        );
-      }
-      final options = webOptions;
-      if (options == null) {
-        _fail(
-          'Register the velora-fyp-staging Web app first; staging configuration is missing.',
-        );
-      }
-      if (options.projectId != StagingFirebaseOptions.projectId) {
-        _fail(
-          'Staging project must be exactly velora-fyp-staging. Protected/default fallback is forbidden.',
-        );
-      }
-      final sender = options.messagingSenderId;
-      if (options.apiKey.trim().isEmpty ||
-          ['placeholder', 'demo-only'].contains(options.apiKey) ||
-          !RegExp(r'^[0-9]+$').hasMatch(sender) ||
-          !options.appId.startsWith('1:$sender:web:') ||
-          options.appId.split(':').last.isEmpty ||
-          options.authDomain !=
-              '${StagingFirebaseOptions.projectId}.firebaseapp.com' ||
-          (options.storageBucket != null &&
-              !options.storageBucket!.startsWith(
-                '${StagingFirebaseOptions.projectId}.',
-              ))) {
-        _fail(
-          'Staging Web configuration is incomplete or mismatched. Copy exact registered app values; do not use defaults.',
-        );
-      }
-      return options;
+    if (!isWeb && platform == TargetPlatform.android && androidFlavor != null) {
+      _fail('Only unflavored Android is supported.');
     }
     if (ai1Live) _fail('Live AI is not approved or configured.');
     if (!emulators) {
       _fail(
-        'Select an explicit emulator profile or VELORA_STAGING=true. No default cloud project is allowed.',
+        'Select VELORA_FIREBASE_PROJECT=velora-73222 explicitly or an explicit emulator profile. No default cloud project is allowed.',
       );
     }
     final count = [

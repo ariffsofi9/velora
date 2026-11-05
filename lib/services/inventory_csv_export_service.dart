@@ -52,6 +52,7 @@ class InventoryCsvExportService {
       var lastUid = auth.currentUser?.uid;
       void check() {
         if (invalidated ||
+            !expected.isActive ||
             auth.currentUser?.uid != expected.uid ||
             (isSessionCurrent != null && !isSessionCurrent())) {
           throw const InventoryCsvSessionChangedException();
@@ -76,6 +77,7 @@ class InventoryCsvExportService {
         if (workspace.uid != expected.uid ||
             workspace.cafeId != expected.cafeId ||
             workspace.ownerUid != expected.ownerUid ||
+            workspace.membershipGeneration != expected.membershipGeneration ||
             workspace.role != expected.role) {
           throw const InventoryCsvSessionChangedException();
         }

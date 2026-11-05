@@ -4,6 +4,13 @@ import 'package:flutter/foundation.dart';
 
 import '../models/user_profile.dart';
 
+class ProfileValidationException implements Exception {
+  final String message;
+  const ProfileValidationException(this.message);
+  @override
+  String toString() => message;
+}
+
 class UserProfileService {
   final FirebaseFirestore? _instance;
   final void Function(String message)? _debugLog;
@@ -20,7 +27,10 @@ class UserProfileService {
     return _firestore.collection('users');
   }
 
-  Future<void> createUserProfileIfNeeded(User user) async {
+  Future<void> createUserProfileIfNeeded(
+    User user, {
+    String? initialUsername,
+  }) async {
     var operation = 'read-self-profile';
     try {
       final docRef = _usersRef.doc(user.uid);
@@ -28,11 +38,24 @@ class UserProfileService {
 
       if (doc.exists) return;
 
+      final displayName = initialUsername ?? user.displayName;
+      final username = displayName == null || displayName.trim().isEmpty
+          ? 'Velora User'
+          : displayName;
+      final photoUrl = user.photoURL ?? '';
+      _validate(username, photoUrl);
+      // Email remains Auth-owned, with no trimming or fabricated fallback.
+      if (user.email == null) {
+        throw const ProfileValidationException(
+          'An account email is required to create your profile.',
+        );
+      }
+
       operation = 'create-self-profile';
       await docRef.set({
-        'username': user.displayName ?? 'Velora User',
+        'username': username,
         'email': user.email ?? '',
-        'photoUrl': user.photoURL ?? '',
+        'photoUrl': photoUrl,
         // Display metadata only; workspace membership is authoritative.
         'role': 'owner',
         'createdAt': FieldValue.serverTimestamp(),
@@ -73,10 +96,27 @@ class UserProfileService {
     required String username,
     required String photoUrl,
   }) async {
+    _validate(username, photoUrl);
     await _usersRef.doc(uid).update({
       'username': username,
       'photoUrl': photoUrl,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  static void _validate(String username, String photoUrl) {
+    if (username.trim().isEmpty) {
+      throw const ProfileValidationException('Please enter a name.');
+    }
+    if (username.length > 80) {
+      throw const ProfileValidationException(
+        'Name must be 80 characters or fewer.',
+      );
+    }
+    if (photoUrl.length > 2048) {
+      throw const ProfileValidationException(
+        'Photo URL must be 2048 characters or fewer.',
+      );
+    }
   }
 }

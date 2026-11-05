@@ -123,7 +123,11 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   void initState() {
     super.initState();
     item = widget.item;
-    adjuster = widget.adjuster ?? FirebaseWorkspaceInventoryStockAdjuster();
+    adjuster =
+        widget.adjuster ??
+        FirebaseWorkspaceInventoryStockAdjuster(
+          session: widget.workspaceSession,
+        );
   }
 
   @override

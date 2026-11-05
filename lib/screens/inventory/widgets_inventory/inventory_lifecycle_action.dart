@@ -1,3 +1,4 @@
+import '../../../services/workspace_session.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import '../../../services/workspace_inventory_lifecycle_service.dart';
 
 class InventoryLifecycleActionButton extends StatefulWidget {
   final InventoryItem item;
+  final WorkspaceSession? workspaceSession;
   final WorkspaceInventoryLifecycleManager? manager;
   final VoidCallback onChanged;
 
@@ -15,6 +17,7 @@ class InventoryLifecycleActionButton extends StatefulWidget {
     required this.item,
     required this.onChanged,
     this.manager,
+    this.workspaceSession,
   });
 
   @override
@@ -68,7 +71,10 @@ class _InventoryLifecycleActionButtonState
     setState(() => _loading = true);
     try {
       final manager =
-          widget.manager ?? FirebaseWorkspaceInventoryLifecycleManager();
+          widget.manager ??
+          FirebaseWorkspaceInventoryLifecycleManager(
+            session: widget.workspaceSession,
+          );
       _key ??= _newKey();
       await manager.setLifecycle(
         WorkspaceInventoryLifecycleRequest(

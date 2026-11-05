@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "names": {"issue": "issueWorkspaceAiTicket", "generate": "generateWorkspaceAiRecipes"},
+  "maxResponseBytes": 65536,
+  "maxRequestBytes": 2048,
+  "issueRequest": {"operation": "issue", "expectedCafeId": "a", "expectedMembershipGeneration": 0, "maxRecipes": 1},
+  "generateRequest": {"operation": "generate", "expectedCafeId": "a", "expectedMembershipGeneration": 0, "maxRecipes": 1, "ticketId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "issueResponse": {"schemaVersion": 2, "ticketId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "expiresAt": 1900000000000},
+  "generateResponse": {
+    "schemaVersion": 2, "provider": "groq",
+    "ticketId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "status": "ok", "recipes": [{"title": "Sample dish", "ingredients": [{"itemId": "item-1", "quantity": 1, "unit": "pcs"}], "steps": ["Cook safely."], "whyRecommended": "Uses stock."}],
+    "inventorySelection": {"eligibleCount": 1, "usedCount": 1}
+  },
+  "errors": [
+    {"code": "unauthenticated", "reason": "sign-in-required", "failure": "signInRequired"},
+    {"code": "unauthenticated", "reason": "email-unverified", "failure": "emailUnverified"},
+    {"code": "unauthenticated", "reason": "account-disabled", "failure": "accountDisabled"},
+    {"code": "permission-denied", "reason": "access-denied", "failure": "denied"},
+    {"code": "aborted", "reason": "workspace-changed", "failure": "denied"},
+    {"code": "invalid-argument", "reason": "invalid-request", "failure": "invalidRequest"},
+    {"code": "resource-exhausted", "reason": "quota-exhausted", "failure": "quota"},
+    {"code": "resource-exhausted", "reason": "workspace-busy", "failure": "workspaceBusy"},
+    {"code": "resource-exhausted", "reason": "inventory-capacity", "failure": "inventoryLimit"},
+    {"code": "failed-precondition", "reason": "ticket-expired", "failure": "ticketExpired"},
+    {"code": "failed-precondition", "reason": "service-unavailable", "failure": "unavailable"},
+    {"code": "already-exists", "reason": "ticket-replayed", "failure": "replayed"},
+    {"code": "unavailable", "reason": "service-unavailable", "failure": "unavailable"},
+    {"code": "deadline-exceeded", "reason": "provider-timeout", "failure": "timeout"},
+    {"code": "unavailable", "reason": "outcome-unknown", "failure": "outcomeUnknown"},
+    {"code": "internal", "reason": "service-unavailable", "failure": "unavailable"},
+    {"code": "data-loss", "reason": "invalid-response", "failure": "invalidResponse"}
+  ]
+}

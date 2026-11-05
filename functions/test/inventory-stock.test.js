@@ -304,3 +304,43 @@ test('invalid stored quantity, version and unit fail closed', async () => {
     errorCode('failed-precondition'),
   );
 });
+
+
+test('safe-integer version exhaustion rejects without item or audit writes', async () => {
+  const store = new MemoryStore(seed());
+  store.docs.get('cafes/cafe-a/inventory/item-a').version = Number.MAX_SAFE_INTEGER;
+  const before = structuredClone(store.docs);
+  await assert.rejects(invoke({store, data: {...validData, expectedVersion: Number.MAX_SAFE_INTEGER}}),
+    {code: 'failed-precondition'});
+  assert.deepEqual(store.docs, before);
+});
+
+
+test('only insufficient stock emits the explicit insufficient-stock reason', async () => {
+  await assert.rejects(invoke({data: {...validData, direction: 'out', quantity: 100}}),
+    error => error.code === 'failed-precondition' && error.reason === 'insufficient-stock');
+  await assert.rejects(invoke({store: new MemoryStore(seed({lifecycleState: 'archived'}))}),
+    error => error.code === 'failed-precondition' && error.reason === undefined);
+});
+
+
+for (const direction of ['in', 'out']) {
+  test(`last safe stock ${direction} increment preserves movement/audit on retry and rejects exhaustion`, async () => {
+    const store = new MemoryStore(seed({version: Number.MAX_SAFE_INTEGER - 1, quantity: 4}));
+    const data = {...validData, direction, quantity: 1, expectedVersion: Number.MAX_SAFE_INTEGER - 1};
+    const first = await invoke({store, data});
+    assert.equal(first.version, Number.MAX_SAFE_INTEGER);
+    assert.equal(first.resultingQuantity, direction === 'in' ? 5 : 3);
+    const committed = structuredClone(store.docs);
+    const retry = await invoke({store, data});
+    assert.equal(retry.adjusted, false);
+    assert.equal(retry.version, first.version);
+    assert.equal(retry.resultingQuantity, first.resultingQuantity);
+    assert.deepEqual(store.docs, committed);
+    assert.equal(auditDocs(store, 'inventory_movements').length, 1);
+    assert.equal(auditDocs(store, 'activities').length, 1);
+    await assert.rejects(invoke({store, data: {...data, idempotencyKey: 'exhausted-stock-01',
+      expectedVersion: Number.MAX_SAFE_INTEGER}}), {code: 'failed-precondition'});
+    assert.deepEqual(store.docs, committed);
+  });
+}
