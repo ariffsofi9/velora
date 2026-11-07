@@ -46,6 +46,54 @@ service cloud.firestore {
       return isMember(cafeId) &&
         get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == request.auth.uid;
     }
+    // S2 LOCAL DRAFT: create-only Owner bootstrap. No lifecycle activation.
+    function bootstrapKeys(data, keys) {
+      return data.keys().hasAll(keys) && data.keys().hasOnly(keys);
+    }
+    function bootstrapBase(data) {
+      return data.status == 'active' && data.schemaVersion is int && data.schemaVersion == 1 &&
+        data.createdAt == request.time && data.updatedAt == request.time;
+    }
+    function bootstrapCafe(data, uid) {
+      let prefs = data.inventoryPreferences;
+      return bootstrapKeys(data, ['ownerUid', 'name', 'businessType', 'address',
+          'inventoryPreferences', 'status', 'schemaVersion', 'createdAt', 'updatedAt']) &&
+        bootstrapBase(data) && data.ownerUid == uid &&
+        data.name is string && data.name.size() >= 2 && data.name.size() <= 80 &&
+        data.name.matches('[^\\x00-\\x1f\\x7f-\\x9f]*') &&
+        data.businessType in ['Restaurant', 'Café', 'Bakery'] &&
+        data.address is string && data.address.size() <= 200 &&
+        data.address.matches('[^\\x00-\\x1f\\x7f-\\x9f]*') &&
+        prefs is map && bootstrapKeys(prefs,
+          ['unit', 'lowStockAlerts', 'expiryReminders', 'reminderDays']) &&
+        prefs.unit in ['kg', 'g', 'L', 'ml', 'pcs'] &&
+        prefs.lowStockAlerts is bool && prefs.expiryReminders is bool &&
+        prefs.reminderDays is int && prefs.reminderDays in [1, 3, 7];
+    }
+    function bootstrapMapping(data, uid, cafeId) {
+      return bootstrapKeys(data,
+          ['uid', 'cafeId', 'status', 'schemaVersion', 'createdAt', 'updatedAt']) &&
+        bootstrapBase(data) && data.uid == uid && data.cafeId == cafeId;
+    }
+    function bootstrapMember(data, uid, cafeId) {
+      return bootstrapKeys(data,
+          ['uid', 'cafeId', 'role', 'status', 'schemaVersion', 'createdAt', 'updatedAt']) &&
+        bootstrapBase(data) && data.uid == uid && data.cafeId == cafeId && data.role == 'owner';
+    }
+    function ownerBootstrap(cafeId) {
+      let uid = request.auth.uid;
+      let cafePath = /databases/$(database)/documents/cafes/$(cafeId);
+      let memberPath = /databases/$(database)/documents/cafes/$(cafeId)/members/$(uid);
+      let mappingPath = /databases/$(database)/documents/user_cafe_memberships/$(uid);
+      // At most 3 exists + 3 getAfter per write, 18 for the three creates,
+      // without assuming cache savings. Reads have their own existing predicates.
+      return request.auth.token.email_verified == true &&
+        cafeId is string && cafeId.size() > 0 && cafeId.size() <= 128 &&
+        !exists(cafePath) && !exists(memberPath) && !exists(mappingPath) &&
+        bootstrapCafe(getAfter(cafePath).data, uid) &&
+        bootstrapMember(getAfter(memberPath).data, uid, cafeId) &&
+        bootstrapMapping(getAfter(mappingPath).data, uid, cafeId);
+    }
     function validProfileCreate(uid) {
       let data = request.resource.data;
       return signedIn() && request.auth.uid == uid &&
@@ -81,17 +129,21 @@ service cloud.firestore {
       allow get: if signedIn() && (request.auth.uid == uid ||
         (isMember(resource.data.cafeId) &&
          get(/databases/$(database)/documents/cafes/$(resource.data.cafeId)).data.ownerUid == uid));
-      allow list, write: if false;
+      allow create: if signedIn() && request.auth.uid == uid &&
+        ownerBootstrap(request.resource.data.cafeId);
+      allow list, update, delete: if false;
     }
     match /cafes/{cafeId} {
       allow get: if isMember(cafeId);
-      allow list, write: if false;
+      allow create: if signedIn() && ownerBootstrap(cafeId);
+      allow list, update, delete: if false;
       match /members/{uid} {
         allow get: if isMember(cafeId) && (request.auth.uid == uid ||
           isOwner(cafeId) ||
           get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == uid);
         allow list: if isOwner(cafeId);
-        allow write: if false;
+        allow create: if signedIn() && request.auth.uid == uid && ownerBootstrap(cafeId);
+        allow update, delete: if false;
       }
       match /inventory/{itemId} {
         allow get, list: if isMember(cafeId);

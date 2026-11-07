@@ -1,0 +1,1 @@
+{"name":"velora-offline-worker-feasibility","private":true,"type":"module","scripts":{"test":"node --test runtime.test.mjs"},"devDependencies":{"wrangler":"4.100.0","miniflare":"4.20260611.0","esbuild":"0.27.3"}}

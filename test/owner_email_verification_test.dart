@@ -1,6 +1,7 @@
 // Offline Auth SDK doubles; no Firebase initialization or mail delivery.
 // ignore_for_file: subtype_of_sealed_class
 import 'dart:async';
+import 'helpers/workspace_bootstrap_fake.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -61,15 +62,6 @@ class _Auth extends Fake implements FirebaseAuth {
   @override
   Future<void> signOut() async {
     user = null;
-  }
-}
-
-class _Callable implements WorkspaceCreationCallable {
-  int calls = 0;
-  @override
-  Future<Map<String, dynamic>> call(Map<String, Object> data) async {
-    calls++;
-    return {'created': true, 'cafeId': 'a'};
   }
 }
 
@@ -343,12 +335,12 @@ void main() {
     expect(find.text('Safe Login'), findsOneWidget);
   });
   test(
-    'real provisioner rejects unverified user without callable invocation',
+    'real provisioner rejects unverified user without transaction invocation',
     () async {
       final auth = _Auth();
-      final callable = _Callable();
+      final callable = BootstrapFake();
       final provisioner = FirebaseWorkspaceProvisioner(
-        callable: callable,
+        store: callable,
         currentUid: () => auth.currentUser?.uid,
         verification: FirebaseOwnerEmailVerification(auth: auth),
         resolveProfile: () => const FirebaseStartupConfig(

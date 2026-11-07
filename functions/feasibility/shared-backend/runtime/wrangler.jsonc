@@ -1,0 +1,7 @@
+{
+  "name": "velora-offline-feasibility",
+  "main": "entry.mjs",
+  "compatibility_date": "2026-06-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false
+}

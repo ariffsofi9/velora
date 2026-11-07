@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show appFlavor;
 import '../firebase_options.dart';
+import '../firebase_spark_test_options.dart';
 
 class FirebaseConfigurationException extends StateError {
   FirebaseConfigurationException(super.message);
@@ -62,7 +63,46 @@ class FirebaseStartupConfig {
     FirebaseOptions? androidOptions,
     String? androidFlavor = appFlavor,
     FirebaseOptions cloudOptions = DefaultFirebaseOptions.android,
+    FirebaseOptions? sparkTestWebOptions = SparkTestFirebaseOptions.web,
   }) {
+    if (cloudProject == SparkTestFirebaseOptions.projectId) {
+      // Separate Web-only acceptance target. Native Android remains blocked
+      // until its project registration/Google Services identity is reviewed.
+      final options = sparkTestWebOptions;
+      if (!isWeb ||
+          stagingFlagPresent ||
+          staging ||
+          emulatorFlagPresent ||
+          emulators ||
+          staffDemo ||
+          ai1Mock ||
+          recipeConnectivity ||
+          ai1Live ||
+          host != 'localhost' ||
+          options == null ||
+          options.projectId != SparkTestFirebaseOptions.projectId ||
+          !RegExp(r'^[0-9]+$').hasMatch(options.messagingSenderId) ||
+          options.messagingSenderId ==
+              DefaultFirebaseOptions.web.messagingSenderId ||
+          !options.appId.startsWith('1:${options.messagingSenderId}:web:') ||
+          options.appId.split(':').length != 4 ||
+          options.appId.split(':').last.isEmpty ||
+          options.apiKey.isEmpty ||
+          options.apiKey == DefaultFirebaseOptions.web.apiKey ||
+          options.apiKey == DefaultFirebaseOptions.android.apiKey ||
+          options.authDomain !=
+              '${SparkTestFirebaseOptions.projectId}.firebaseapp.com' ||
+          (options.storageBucket != null &&
+              options.storageBucket !=
+                  '${SparkTestFirebaseOptions.projectId}.firebasestorage.app' &&
+              options.storageBucket !=
+                  '${SparkTestFirebaseOptions.projectId}.appspot.com')) {
+        _fail(
+          'Spark test profile blocked: verified separate Web app configuration required; no production fallback.',
+        );
+      }
+      return options;
+    }
     if (cloudProject.isNotEmpty) {
       if (cloudProject != 'velora-73222' ||
           (!isWeb && platform != TargetPlatform.android) ||

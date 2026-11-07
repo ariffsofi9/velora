@@ -413,6 +413,55 @@ void main() {
     await authority.close();
   });
 
+  testWidgets(
+    'definite preflight failure permits explicit retry without recheck-only trap',
+    (tester) async {
+      final provisioner = _Provisioner(
+        (_) async => throw const WorkspaceProvisioningException(
+          WorkspaceProvisioningFailure.unavailable,
+          outcomeUncertain: false,
+        ),
+      );
+      final resolver = _Resolver(() async => _workspace);
+      await tester.pumpWidget(
+        setupApp(provisioner: provisioner, resolver: resolver),
+      );
+      await enterBusiness(tester);
+      await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+      await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+      expect(find.textContaining('creation was not started'), findsOneWidget);
+      expect(find.text('Recheck Workspace'), findsNothing);
+      expect(resolver.calls, 0);
+      await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+      expect(provisioner.requests, hasLength(2));
+      expect(resolver.calls, 0);
+    },
+  );
+
+  testWidgets(
+    'lost create response recovers through canonical resolution without another creation',
+    (tester) async {
+      final provisioner = _Provisioner(
+        (_) async => throw const WorkspaceProvisioningException(
+          WorkspaceProvisioningFailure.timedOut,
+        ),
+      );
+      final resolver = _Resolver(() async => _workspace);
+      await tester.pumpWidget(
+        setupApp(provisioner: provisioner, resolver: resolver),
+      );
+      await enterBusiness(tester);
+      await tapSetup(tester, find.byKey(const ValueKey('setup-next')));
+      await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+      expect(find.text('Recheck Workspace'), findsOneWidget);
+      expect(provisioner.requests, hasLength(1));
+      await tapSetup(tester, find.byKey(const ValueKey('setup-dashboard')));
+      expect(find.text('Verified Dashboard cafe-a'), findsOneWidget);
+      expect(provisioner.requests, hasLength(1));
+      // Setup resolves first; the session boundary revalidates authority on entry.
+      expect(resolver.calls, 2);
+    },
+  );
   for (final failure in [
     WorkspaceProvisioningFailure.unavailable,
     WorkspaceProvisioningFailure.timedOut,

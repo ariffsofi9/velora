@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:velora/widgets/dashboard/dashboard_header.dart';
 import 'package:cloud_firestore/cloud_firestore.dart' hide Type;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,32 @@ Widget app(Widget child, {double scale = 1, NavigatorObserver? observer}) =>
     );
 
 void main() {
+  for (final entry in <String?, String>{
+    'ariff sofi': 'ariff sofi',
+    'Nur Aisyah Ahmad': 'Nur Aisyah Ahmad',
+    '  ariff sofi  ': 'ariff sofi',
+    '': 'Welcome back',
+    '   ': 'Welcome back',
+    null: 'Welcome back',
+  }.entries) {
+    testWidgets('Dashboard greeting preserves full name or fallback: ${entry.key}', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        app(
+          DashboardHeader(
+            firstName: entry.key,
+            notificationBell: const SizedBox.shrink(),
+          ),
+        ),
+      );
+      expect(find.text(entry.value), findsOneWidget);
+      if (entry.value == 'ariff sofi') {
+        expect(find.text('ariff'), findsNothing);
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
   testWidgets(
     'Loading and failed inventory stay readable at compact size and 2x text',
     (tester) async {

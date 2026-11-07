@@ -15,7 +15,7 @@ class DashboardHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final name = firstName?.trim().split(RegExp(r'\s+')).first ?? '';
+    final name = firstName?.trim() ?? '';
     final uri = Uri.tryParse(photoUrl?.trim() ?? '');
     final photo = uri != null && uri.scheme == 'https' && uri.host.isNotEmpty
         ? NetworkImage(uri.toString())

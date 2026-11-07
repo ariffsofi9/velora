@@ -155,13 +155,22 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
       if (!mounted) return;
       setState(() {
         // A lost/invalid response does not establish that the transaction failed.
-        _creationUncertain = switch (error.failure) {
-          WorkspaceProvisioningFailure.unavailable ||
-          WorkspaceProvisioningFailure.timedOut ||
-          WorkspaceProvisioningFailure.internal => true,
-          _ => false,
-        };
-        _submissionError = _provisioningMessage(error.failure);
+        _creationUncertain =
+            error.outcomeUncertain &&
+            const {
+              WorkspaceProvisioningFailure.unavailable,
+              WorkspaceProvisioningFailure.timedOut,
+              WorkspaceProvisioningFailure.internal,
+            }.contains(error.failure);
+        _submissionError =
+            !error.outcomeUncertain &&
+                const {
+                  WorkspaceProvisioningFailure.unavailable,
+                  WorkspaceProvisioningFailure.timedOut,
+                  WorkspaceProvisioningFailure.internal,
+                }.contains(error.failure)
+            ? 'Workspace creation was not started. Check your connection and try again.'
+            : _provisioningMessage(error.failure);
         _needsVerification =
             error.failure == WorkspaceProvisioningFailure.emailUnverified;
       });

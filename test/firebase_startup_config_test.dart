@@ -33,6 +33,90 @@ FirebaseOptions resolve(
   TargetPlatform platform = TargetPlatform.android,
 }) => config.resolve(isWeb: isWeb, platform: platform, webOptions: web);
 void main() {
+  const sparkOptions = FirebaseOptions(
+    apiKey: 'offline-test-key',
+    appId: '1:123456789:web:offline',
+    messagingSenderId: '123456789',
+    projectId: 'velora-spark-test',
+    authDomain: 'velora-spark-test.firebaseapp.com',
+  );
+  test(
+    'separate Spark Web profile requires verified local config and never falls back',
+    () {
+      const config = FirebaseStartupConfig(cloudProject: 'velora-spark-test');
+      expect(
+        config.resolve(isWeb: true, platform: TargetPlatform.windows).projectId,
+        'velora-spark-test',
+      );
+      expect(
+        () => config.resolve(
+          isWeb: true,
+          platform: TargetPlatform.windows,
+          sparkTestWebOptions: null,
+        ),
+        throwsA(isA<FirebaseConfigurationException>()),
+      );
+      expect(
+        config
+            .resolve(
+              isWeb: true,
+              platform: TargetPlatform.windows,
+              sparkTestWebOptions: sparkOptions,
+            )
+            .projectId,
+        'velora-spark-test',
+      );
+      expect(
+        () => config.resolve(
+          isWeb: true,
+          platform: TargetPlatform.windows,
+          sparkTestWebOptions: DefaultFirebaseOptions.web,
+        ),
+        throwsA(isA<FirebaseConfigurationException>()),
+      );
+      expect(
+        () => config.resolve(
+          isWeb: false,
+          platform: TargetPlatform.android,
+          sparkTestWebOptions: sparkOptions,
+        ),
+        throwsA(isA<FirebaseConfigurationException>()),
+      );
+    },
+  );
+  for (final config in [
+    const FirebaseStartupConfig(
+      cloudProject: 'velora-spark-test',
+      stagingFlagPresent: true,
+    ),
+    const FirebaseStartupConfig(
+      cloudProject: 'velora-spark-test',
+      emulatorFlagPresent: true,
+    ),
+    const FirebaseStartupConfig(
+      cloudProject: 'velora-spark-test',
+      staffDemo: true,
+    ),
+    const FirebaseStartupConfig(
+      cloudProject: 'velora-spark-test',
+      host: '127.0.0.1',
+    ),
+  ]) {
+    test(
+      'Spark test profile rejects conflicting selection ${config.hashCode}',
+      () {
+        expect(
+          () => config.resolve(
+            isWeb: true,
+            platform: TargetPlatform.windows,
+            sparkTestWebOptions: sparkOptions,
+          ),
+          throwsA(isA<FirebaseConfigurationException>()),
+        );
+      },
+    );
+  }
+
   const cloud = FirebaseStartupConfig(cloudProject: 'velora-73222');
   test(
     'explicit Web profile selects checked-in options without initialization',
