@@ -20,13 +20,14 @@ async function context(tx, uid) {
   const member = await tx.get(`cafes/${cafeId}/members/${uid}`);
   const owner = await tx.get(`cafes/${cafeId}/members/${ownerUid}`);
   const ownerMap = await tx.get(`user_cafe_memberships/${ownerUid}`);
+  const generation = activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid);
+  const ownerGeneration = activeMembershipGeneration(ownerMap, owner, ownerUid, cafeId, ownerUid);
   if (!link(member, uid, cafeId) || !['owner', 'staff'].includes(member.role) ||
       (member.role === 'owner') !== (uid === ownerUid) ||
       !link(owner, ownerUid, cafeId) || owner.role !== 'owner' ||
       !link(ownerMap, ownerUid, cafeId) ||
-      activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid) === null ||
-      activeMembershipGeneration(ownerMap, owner, ownerUid, cafeId, ownerUid) === null) deny();
-  return {cafeId, ownerUid, role: member.role};
+      generation === null || ownerGeneration === null) deny();
+  return {cafeId, ownerUid, role: member.role, generation, ownerGeneration};
 }
 
 // Uses the same owner-list / staff-self-and-owner visibility as repository Rules.
@@ -47,9 +48,9 @@ async function readTeam(tx, uid) {
         !['owner', 'staff'].includes(data.role) ||
         (data.role === 'owner') !== (id === scope.ownerUid)) continue;
     const mapping = await tx.get(`user_cafe_memberships/${id}`);
-    if (link(mapping, id, scope.cafeId) &&
-        activeMembershipGeneration(mapping, data, id, scope.cafeId, scope.ownerUid) !== null) {
-      members.push({uid: id, role: data.role});
+    const generation = activeMembershipGeneration(mapping, data, id, scope.cafeId, scope.ownerUid);
+    if (link(mapping, id, scope.cafeId) && generation !== null) {
+      members.push({uid: id, role: data.role, generation});
     }
   }
   return {...scope, members};
@@ -71,14 +72,19 @@ async function listTeamMembers({auth, data, store, accounts}) {
   // No Auth I/O inside Firestore transactions. Revalidate all returned links.
   const current = await store.runTransaction(tx => readTeam(tx, uid));
   if (current.cafeId !== initial.cafeId || current.ownerUid !== initial.ownerUid ||
-      current.role !== initial.role) deny();
-  const permitted = new Map(current.members.map(member => [member.uid, member.role]));
+      current.role !== initial.role || current.generation !== initial.generation ||
+      current.ownerGeneration !== initial.ownerGeneration) deny();
+  const permitted = new Map(current.members.map(member => [member.uid, member]));
   const members = initial.members.flatMap(member => {
     const user = profiles.get(member.uid);
     const email = text(user?.email, 254);
-    if (permitted.get(member.uid) !== member.role || !user || user.disabled ||
+    const finalMember = permitted.get(member.uid);
+    if (!finalMember || finalMember.role !== member.role ||
+        finalMember.generation !== member.generation || !user || user.disabled ||
         user.emailVerified !== true || !email) return [];
-    return [{...member, name: text(user.displayName, 80) || email.split('@')[0], email}];
+    // Generations are internal authorization snapshots, never roster fields.
+    return [{uid: member.uid, role: member.role,
+      name: text(user.displayName, 80) || email.split('@')[0], email}];
   });
   members.sort((a, b) => (a.role === 'owner' ? 0 : 1) - (b.role === 'owner' ? 0 : 1) ||
     a.name.localeCompare(b.name) || a.uid.localeCompare(b.uid));
