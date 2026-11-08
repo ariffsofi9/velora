@@ -1,6 +1,7 @@
 // Offline Firebase interface doubles only.
 // ignore_for_file: subtype_of_sealed_class
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -17,6 +18,10 @@ class _Invites implements StaffInvitations {
   int redeems = 0;
   String? email;
   Object? redeemError;
+  Object? revokeError;
+  Object? revokeResponse = <String, dynamic>{'revoked': true};
+  Object? redeemResponse = <String, dynamic>{'joined': true};
+  Future<void>? pending;
   @override
   Future<StaffInvitation> create(String value) async {
     creates++;
@@ -31,12 +36,21 @@ class _Invites implements StaffInvitations {
   @override
   Future<void> revoke(String id) async {
     revokes++;
+    await pending;
+    if (revokeError != null) throw revokeError!;
+    await StaffInvitationAcknowledgement.confirm('revoked', () async {
+      return revokeResponse;
+    });
   }
 
   @override
   Future<void> redeem(String code) async {
     redeems++;
+    await pending;
     if (redeemError != null) throw redeemError!;
+    await StaffInvitationAcknowledgement.confirm('joined', () async {
+      return redeemResponse;
+    });
   }
 }
 
@@ -84,7 +98,7 @@ void main() {
     );
     expect(
       failure.toString(),
-      'Redemption failed at authReload (network-request-failed).',
+      'Invitation action failed at authReload (network-request-failed).',
     );
     for (final error in [
       StateError('PRIVATE-CODE-AND-TOKEN'),
@@ -99,6 +113,136 @@ void main() {
       );
     }
   });
+  for (final field in ['revoked', 'joined']) {
+    final responses = <String, Object?>{
+      'true': <String, dynamic>{field: true},
+      'false': <String, dynamic>{field: false},
+      'missing': <String, dynamic>{},
+      'string': <String, dynamic>{field: 'true'},
+      'integer': <String, dynamic>{field: 1},
+      'null field': <String, dynamic>{field: null},
+      'list field': <String, dynamic>{field: [true]},
+      'nested field': <String, dynamic>{field: {'value': true}},
+      'nested envelope': <String, dynamic>{'data': {field: true}},
+      'null envelope': null,
+      'list envelope': [true],
+      'string envelope': 'PRIVATE-RESPONSE',
+    };
+    for (final entry in responses.entries) {
+      test('$field acknowledgement: ${entry.key}', () async {
+        var calls = 0;
+        final result = StaffInvitationAcknowledgement.confirm(field, () async {
+          calls++;
+          return entry.value;
+        });
+        if (entry.key == 'true') {
+          expect((await result)[field], true);
+        } else {
+          await expectLater(result, throwsA(isA<StaffInvitationFailure>()
+              .having((e) => e.outcomeUnknown, 'unknown completion', true)
+              .having((e) => e.code, 'code', 'invalid-acknowledgement')));
+        }
+        expect(calls, 1);
+      });
+    }
+    for (final entry in <String, Object>{
+      'permission-denied': FirebaseFunctionsException(
+        code: 'permission-denied', message: 'PRIVATE-ERROR', details: 'PRIVATE'),
+      'transport': FirebaseFunctionsException(
+        code: 'unavailable', message: 'PRIVATE-ERROR'),
+      'timeout': TimeoutException('PRIVATE-ERROR'),
+      'decoding': StateError('PRIVATE-ERROR'),
+      'cancelled': FirebaseFunctionsException(code: 'cancelled', message: 'PRIVATE-ERROR'),
+    }.entries) {
+      test('$field invocation ${entry.key} has honest sanitized outcome', () async {
+        var calls = 0;
+        try {
+          await StaffInvitationAcknowledgement.confirm(field, () async {
+            calls++;
+            throw entry.value;
+          });
+          fail('Must not accept an exception as acknowledgement');
+        } on StaffInvitationFailure catch (error) {
+          expect(error.outcomeUnknown, entry.key != 'permission-denied');
+          expect(error.toString(), isNot(contains('PRIVATE')));
+          if (entry.key == 'timeout') expect(error.code, 'deadline-exceeded');
+        }
+        expect(calls, 1);
+      });
+    }
+  }
+  test('pre-dispatch transport error does not imply a possible commit', () {
+    final failure = StaffInvitationFailure.fromError(
+      StaffRedeemStage.tokenRefresh, TimeoutException('PRIVATE'));
+    expect(failure.outcomeUnknown, false);
+    expect(failure.toString(), isNot(contains('PRIVATE')));
+  });
+  for (final ownerMode in [false, true]) {
+    for (final outcome in ['acknowledged', 'malformed', 'permission', 'timeout']) {
+      testWidgets('${ownerMode ? 'revoke' : 'redeem'} $outcome preserves pending and completion safety',
+          (tester) async {
+        final pending = Completer<void>();
+        final invites = _Invites();
+        var joined = 0;
+        await tester.pumpWidget(MaterialApp(home: StaffInvitationPage(
+          ownerMode: ownerMode, invitations: invites, onJoined: () => joined++)));
+        if (ownerMode) {
+          await tester.enterText(find.byType(TextField).first, 'staff@example.test');
+          await tester.tap(find.text('Create invitation'));
+          await tester.pumpAndSettle();
+        } else {
+          await tester.enterText(find.byType(TextField).first, 'PRIVATE-INVITE');
+        }
+        invites.pending = pending.future;
+        if (outcome == 'malformed') {
+          invites.revokeResponse = {'revoked': false};
+          invites.redeemResponse = {'joined': 'true', 'message': 'PRIVATE-ERROR'};
+        } else if (outcome == 'permission' || outcome == 'timeout') {
+          final error = outcome == 'permission'
+              ? FirebaseFunctionsException(code: 'permission-denied', message: 'PRIVATE-ERROR')
+              : TimeoutException('PRIVATE-ERROR');
+          // The same boundary used by the production transport classifies the error.
+          try {
+            await StaffInvitationAcknowledgement.confirm('joined', () async => throw error);
+          } on StaffInvitationFailure catch (failure) {
+            invites.revokeError = failure;
+            invites.redeemError = failure;
+          }
+        }
+        final label = ownerMode ? 'Revoke invitation' : 'Redeem invitation';
+        await tester.ensureVisible(find.text(label));
+        final button = ownerMode ? find.byType(OutlinedButton) : find.byType(FilledButton);
+        final callback = tester.widget<ButtonStyleButton>(button).onPressed!;
+        callback();
+        callback(); // A stale callback must still respect the synchronous busy guard.
+        await tester.pump();
+        expect(ownerMode ? invites.revokes : invites.redeems, 1);
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        expect(joined, 0);
+        pending.complete();
+        await tester.pumpAndSettle();
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+        expect(tester.widget<ButtonStyleButton>(button).onPressed, isNotNull);
+        expect(ownerMode ? invites.revokes : invites.redeems, 1);
+        final success = outcome == 'acknowledged';
+        if (ownerMode) {
+          expect(find.text('Invitation revoked.'), success ? findsOneWidget : findsNothing);
+          expect(find.text('synthetic-display-code'), success ? findsNothing : findsOneWidget);
+        } else {
+          expect(joined, success ? 1 : 0);
+          expect(tester.widget<TextField>(find.byType(TextField).first).controller!.text,
+            success ? isEmpty : 'PRIVATE-INVITE');
+          expect(find.byType(StaffInvitationPage), findsOneWidget);
+        }
+        if (outcome == 'malformed' || outcome == 'timeout') {
+          expect(find.textContaining('Outcome unknown.'), findsOneWidget);
+          expect(find.textContaining('Do not submit again blindly.'), findsOneWidget);
+        }
+        expect(find.textContaining('PRIVATE-ERROR'), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
   for (final scenario in [
     'signed-out',
     'reload',

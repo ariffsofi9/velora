@@ -18,7 +18,8 @@ enum StaffRedeemStage {
 class StaffInvitationFailure implements Exception {
   final StaffRedeemStage stage;
   final String code;
-  const StaffInvitationFailure._(this.stage, this.code);
+  final bool outcomeUnknown;
+  const StaffInvitationFailure._(this.stage, this.code, {this.outcomeUnknown = false});
 
   factory StaffInvitationFailure.fromError(
     StaffRedeemStage stage,
@@ -49,14 +50,53 @@ class StaffInvitationFailure implements Exception {
       'invalid-api-key',
       'app-not-authorized',
     };
-    final code = error is FirebaseException && allowed.contains(error.code)
+    final code = error is TimeoutException
+        ? 'deadline-exceeded'
+        : error is FirebaseException && allowed.contains(error.code)
         ? error.code
         : 'unknown';
-    return StaffInvitationFailure._(stage, code);
+    // Only explicit callable rejections establish rejection after invocation.
+    // Transport, decoding and session errors cannot rule out a server commit.
+    const rejections = {
+      'unauthenticated', 'permission-denied', 'invalid-argument',
+      'already-exists', 'failed-precondition', 'resource-exhausted', 'not-found',
+    };
+    final afterInvocation = stage == StaffRedeemStage.callableInvocation ||
+        stage == StaffRedeemStage.callableResponse;
+    final rejected = stage == StaffRedeemStage.callableInvocation &&
+        error is FirebaseFunctionsException && rejections.contains(code);
+    return StaffInvitationFailure._(stage, code,
+      outcomeUnknown: afterInvocation && !rejected);
   }
 
   @override
-  String toString() => 'Redemption failed at ${stage.name} ($code).';
+  String toString() => outcomeUnknown
+      ? 'Invitation outcome unknown at ${stage.name} ($code).'
+      : 'Invitation action failed at ${stage.name} ($code).';
+}
+
+/// The response boundary shared by real calls and offline callback tests.
+/// It never retries, logs response data or grants workspace authority.
+class StaffInvitationAcknowledgement {
+  static Future<Map<String, dynamic>> confirm(
+    String field,
+    Future<Object?> Function() invoke,
+  ) async {
+    Object? response;
+    try {
+      response = await invoke();
+    } catch (error) {
+      throw StaffInvitationFailure.fromError(
+        StaffRedeemStage.callableInvocation, error);
+    }
+    if (response is! Map<String, dynamic> ||
+        response[field] is! bool || response[field] != true) {
+      throw const StaffInvitationFailure._(
+        StaffRedeemStage.callableResponse, 'invalid-acknowledgement',
+        outcomeUnknown: true);
+    }
+    return response;
+  }
 }
 
 class StaffInvitation {
@@ -81,6 +121,7 @@ class FirebaseStaffInvitations implements StaffInvitations {
     String name,
     Map<String, Object> data, {
     void Function(StaffRedeemStage)? onStage,
+    String? acknowledgement,
   }) async {
     onStage?.call(StaffRedeemStage.callableConfig);
     if (!FirebaseEmulatorConfig.invitationsAvailable) {
@@ -115,12 +156,17 @@ class FirebaseStaffInvitations implements StaffInvitations {
     try {
       final callable = transport.httpsCallable(name);
       onStage?.call(StaffRedeemStage.callableInvocation);
-      final result = await callable.call<Map<String, dynamic>>(data);
-      if (changed || identity.currentUser?.uid != uid) {
-        throw StateError('Session changed.');
+      Future<Map<String, dynamic>> invoke() async {
+        final result = await callable.call<Map<String, dynamic>>(data);
+        if (changed || identity.currentUser?.uid != uid) {
+          throw StateError('Session changed.');
+        }
+        onStage?.call(StaffRedeemStage.callableResponse);
+        return result.data;
       }
-      onStage?.call(StaffRedeemStage.callableResponse);
-      return result.data;
+      return acknowledgement == null
+          ? await invoke()
+          : await StaffInvitationAcknowledgement.confirm(acknowledgement, invoke);
     } finally {
       await subscription.cancel();
     }
@@ -150,7 +196,15 @@ class FirebaseStaffInvitations implements StaffInvitations {
 
   @override
   Future<void> revoke(String id) async {
-    await _call('revokeStaffInvitation', {'invitationId': id});
+    var stage = StaffRedeemStage.callableConfig;
+    try {
+      await _call('revokeStaffInvitation', {'invitationId': id},
+        acknowledgement: 'revoked', onStage: (value) => stage = value);
+    } on StaffInvitationFailure {
+      rethrow;
+    } catch (error) {
+      throw StaffInvitationFailure.fromError(stage, error);
+    }
   }
 
   @override
@@ -197,7 +251,7 @@ class FirebaseStaffInvitations implements StaffInvitations {
       }
       await _call('redeemStaffInvitation', {
         'code': code.trim(),
-      }, onStage: (value) => stage = value);
+      }, acknowledgement: 'joined', onStage: (value) => stage = value);
     } on StaffInvitationFailure {
       rethrow;
     } catch (error) {

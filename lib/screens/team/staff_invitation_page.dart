@@ -52,6 +52,8 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
       if (mounted) {
         setState(
           () => _message = switch (error) {
+            StaffInvitationFailure(outcomeUnknown: true) =>
+              'Outcome unknown. The invitation action may have completed. Do not submit again blindly. Ask the owner or support to confirm the current state before another attempt.',
             StaffInvitationFailure() =>
               '$error Check your sign-in and local emulator connection. If emailVerification is shown, verify your email and sign in again.',
             FirebaseFunctionsException(code: 'already-exists') =>
