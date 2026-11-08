@@ -120,6 +120,10 @@ class StaffInvitationCreation {
   bool _pending = false;
   bool get blocked => _blocked;
 
+  // Monotonic: abandoning delivery or observing an unknown result never permits
+  // fresh issuance. This stores no response/code and provides no recovery.
+  void requireReconciliation() => _blocked = true;
+
   static StaffInvitation validate(Object? response, DateTime now) {
     if (response is Map<String, dynamic>) {
       final id = response['invitationId'];

@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/screens/team/staff_invitation_page.dart';
+import 'package:velora/screens/team/team_management_page.dart';
+import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/services/staff_invitation_service.dart';
 import 'package:velora/services/firebase_emulator_config.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -62,6 +64,77 @@ class _Auth extends Fake implements FirebaseAuth {
   Stream<User?> authStateChanges() => const Stream.empty();
 }
 
+CafeWorkspace _ownerScope([String uid = 'synthetic-staff', String cafe = 'a', int generation = 0]) =>
+    CafeWorkspace(cafeId: cafe, uid: uid, ownerUid: uid,
+      role: CafeRole.owner, membershipGeneration: generation);
+
+StaffInvitationPage _invitationPage({bool ownerMode = false,
+  required StaffInvitations invitations, FirebaseAuth? auth,
+  CafeWorkspace? workspace, VoidCallback? onJoined}) {
+  final identity = auth ?? (_Auth()..user = _User());
+  return StaffInvitationPage(ownerMode: ownerMode, invitations: invitations,
+    auth: identity, workspace: ownerMode ? (workspace ?? _ownerScope()) : workspace,
+    onJoined: onJoined);
+}
+
+class _ChangingAuth extends _Auth {
+  final changes = StreamController<User?>.broadcast(sync: true);
+  _ChangingAuth(String uid) { user = _User(uid); }
+  @override
+  Stream<User?> authStateChanges() => changes.stream;
+  void change(String? uid) {
+    user = uid == null ? null : _User(uid);
+    changes.add(user);
+  }
+}
+
+class _LifecycleInvites extends _Invites {
+  final String label;
+  Future<StaffInvitation>? creation;
+  Future<void>? revocation;
+  Future<void>? redemption;
+  String? revokedId;
+  _LifecycleInvites(this.label);
+  @override
+  Future<StaffInvitation> create(String value) {
+    creates++;
+    return creation ?? Future.value(StaffInvitation('id-$label', 'code-$label', '2030-01-01'));
+  }
+  @override
+  Future<void> revoke(String id) {
+    revokes++;
+    revokedId = id;
+    return revocation ?? Future.value();
+  }
+  @override
+  Future<void> redeem(String code) {
+    redeems++;
+    return redemption ?? Future.value();
+  }
+}
+
+Future<void> _mountLifecycle(WidgetTester tester, FirebaseAuth auth,
+    StaffInvitations service, CafeWorkspace? scope, {bool ownerMode = true,
+    VoidCallback? onJoined}) async {
+  await tester.pumpWidget(MaterialApp(home: StaffInvitationPage(
+    auth: auth, invitations: service, workspace: scope,
+    ownerMode: ownerMode, onJoined: onJoined)));
+  await tester.pump();
+}
+
+Future<void> _largeViewport(WidgetTester tester) async {
+  await tester.binding.setSurfaceSize(const Size(900, 1200));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+}
+
+Future<void> _createDisplayed(WidgetTester tester, String label) async {
+  await tester.enterText(find.byType(TextField).first, 'private@example.test');
+  await tester.tap(find.text('Create invitation'));
+  await tester.pumpAndSettle();
+  expect(find.text('code-$label'), findsOneWidget);
+  expect(tester.widget<TextField>(find.byType(TextField).last).controller!.text, 'id-$label');
+}
+
 Map<String, dynamic> _creationResponse([String letter = 'a']) {
   final id = List.filled(32, letter).join();
   return {'invitationId': id, 'code': '$id.${List.filled(64, 'c').join()}',
@@ -87,12 +160,14 @@ class _CreationInvites extends _Invites {
 }
 
 class _User extends Fake implements User {
+  final String identity;
+  _User([this.identity = 'synthetic-staff']);
   bool verified = true;
   Object? reloadError, tokenError;
   VoidCallback? afterReload;
   bool refreshed = false;
   @override
-  String get uid => 'synthetic-staff';
+  String get uid => identity;
   @override
   bool get emailVerified => verified;
   @override
@@ -111,6 +186,208 @@ class _User extends Fake implements User {
 
 void main() {
   setUp(installInvitationFirebase);
+  test('Team Management caller remains compiled with explicit Auth context', () {
+    final auth = _Auth()..user = _User();
+    expect(TeamManagementPage(auth: auth).auth, same(auth));
+  });
+  for (final transition in ['equivalent', 'auth', 'uid', 'service', 'workspace', 'generation', 'mode']) {
+    testWidgets('State reuse binds $transition without cross-context presentation', (tester) async {
+      await _largeViewport(tester);
+      final auth = _ChangingAuth('owner-a');
+      final first = _LifecycleInvites('first');
+      await _mountLifecycle(tester, auth, first, _ownerScope('owner-a'));
+      final state = tester.state(find.byType(StaffInvitationPage));
+      await _createDisplayed(tester, 'first');
+      final nextAuth = transition == 'auth' ? _ChangingAuth('owner-a') : auth;
+      final nextService = transition == 'service' ? _LifecycleInvites('second') : first;
+      if (transition == 'uid') auth.change('owner-b');
+      await _mountLifecycle(tester, nextAuth, nextService,
+        _ownerScope(transition == 'uid' ? 'owner-b' : 'owner-a',
+          transition == 'workspace' ? 'b' : 'a', transition == 'generation' ? 1 : 0),
+        ownerMode: transition != 'mode');
+      expect(tester.state(find.byType(StaffInvitationPage)), same(state));
+      if (transition == 'equivalent') {
+        expect(find.text('code-first'), findsOneWidget);
+        expect(tester.widget<TextField>(find.byType(TextField).last).controller!.text, 'id-first');
+      } else {
+        expect(find.text('code-first'), findsNothing);
+        for (final field in tester.widgetList<TextField>(find.byType(TextField))) {
+          expect(field.controller!.text, isEmpty);
+        }
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+      }
+      if (transition == 'service') {
+        await _createDisplayed(tester, 'second');
+        expect(first.creates, 1);
+        expect(nextService.creates, 1);
+      }
+      await tester.pumpWidget(const SizedBox());
+      await auth.changes.close();
+      if (!identical(nextAuth, auth)) await nextAuth.changes.close();
+    });
+  }
+  for (final operation in ['create', 'revoke']) {
+    for (final completion in ['success', 'unknown', 'rejected']) {
+      testWidgets('stale $operation $completion cannot affect a newer pending operation', (tester) async {
+        await _largeViewport(tester);
+        final auth = _ChangingAuth('owner-a');
+        final oldService = _LifecycleInvites('old');
+        final create = Completer<StaffInvitation>();
+        final revoke = Completer<void>();
+        await _mountLifecycle(tester, auth, oldService, _ownerScope('owner-a'));
+        if (operation == 'revoke') {
+          await _createDisplayed(tester, 'old');
+          oldService.revocation = revoke.future;
+          await tester.tap(find.text('Revoke invitation'));
+        } else {
+          oldService.creation = create.future;
+          await tester.tap(find.text('Create invitation'));
+        }
+        await tester.pump();
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        auth.change('owner-b');
+        final nextService = _LifecycleInvites('new');
+        await _mountLifecycle(tester, auth, nextService, _ownerScope('owner-b'));
+        await _createDisplayed(tester, 'new');
+        final nextPending = Completer<StaffInvitation>();
+        nextService.creation = nextPending.future;
+        await tester.tap(find.text('Create invitation'));
+        await tester.pump();
+        if (completion == 'success') {
+          if (operation == 'create') create.complete(const StaffInvitation('id-stale', 'PRIVATE-OLD-CODE', '2030'));
+          else revoke.complete();
+        } else {
+          final error = completion == 'unknown'
+              ? StaffInvitationFailure.fromError(StaffRedeemStage.callableInvocation, TimeoutException('PRIVATE-ERROR'))
+              : StaffInvitationFailure.fromError(StaffRedeemStage.callableInvocation,
+                  FirebaseFunctionsException(code: 'permission-denied', message: 'PRIVATE-ERROR'));
+          if (operation == 'create') create.completeError(error); else revoke.completeError(error);
+        }
+        await tester.pump();
+        await tester.pump();
+        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+        expect(find.text('code-new'), findsOneWidget);
+        expect(tester.widget<TextField>(find.byType(TextField).last).controller!.text, 'id-new');
+        expect(find.text('Invitation revoked.'), findsNothing);
+        expect(find.textContaining('PRIVATE'), findsNothing);
+        expect(find.textContaining('Outcome unknown.'), findsNothing);
+        final oldGuard = StaffInvitationCreation.forSession(auth, 'owner-a');
+        expect(oldGuard.blocked, operation == 'create' && completion != 'rejected');
+        expect(StaffInvitationCreation.forSession(auth, 'owner-b').blocked, false);
+        nextPending.complete(const StaffInvitation('id-latest', 'code-latest', '2030'));
+        await tester.pumpAndSettle();
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+        expect(find.text('code-latest'), findsOneWidget);
+        expect(nextService.creates, 2);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+        await auth.changes.close();
+      });
+    }
+  }
+  for (final operation in ['create', 'revoke', 'redeem']) {
+    testWidgets('disposal rejects late $operation completion without navigation', (tester) async {
+      await _largeViewport(tester);
+      final auth = _ChangingAuth('owner-a');
+      final service = _LifecycleInvites('old');
+      final create = Completer<StaffInvitation>();
+      final action = Completer<void>();
+      var navigated = 0;
+      await _mountLifecycle(tester, auth, service,
+        operation == 'redeem' ? null : _ownerScope('owner-a'),
+        ownerMode: operation != 'redeem', onJoined: () => navigated++);
+      if (operation == 'revoke') {
+        await _createDisplayed(tester, 'old');
+        service.revocation = action.future;
+        await tester.tap(find.text('Revoke invitation'));
+      } else if (operation == 'redeem') {
+        service.redemption = action.future;
+        await tester.tap(find.text('Redeem invitation'));
+      } else {
+        service.creation = create.future;
+        await tester.tap(find.text('Create invitation'));
+      }
+      await tester.pump();
+      await tester.pumpWidget(const MaterialApp(home: Text('New screen')));
+      if (operation == 'create') create.complete(const StaffInvitation('id-old', 'PRIVATE-CODE', '2030'));
+      else action.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('New screen'), findsOneWidget);
+      expect(find.textContaining('PRIVATE'), findsNothing);
+      expect(navigated, 0);
+      expect(tester.takeException(), isNull);
+      if (operation == 'create') expect(StaffInvitationCreation.forSession(auth, 'owner-a').blocked, true);
+      await auth.changes.close();
+    });
+  }
+  for (final matching in [false, true]) {
+    testWidgets('revocation clears displayed invitation only when ID matches: $matching', (tester) async {
+      await _largeViewport(tester);
+      final auth = _ChangingAuth('owner-a');
+      final service = _LifecycleInvites('first');
+      await _mountLifecycle(tester, auth, service, _ownerScope('owner-a'));
+      await _createDisplayed(tester, 'first');
+      if (!matching) await tester.enterText(find.byType(TextField).last, 'unrelated-id');
+      await tester.tap(find.text('Revoke invitation'));
+      await tester.pumpAndSettle();
+      expect(service.revokedId, matching ? 'id-first' : 'unrelated-id');
+      expect(find.text('code-first'), matching ? findsNothing : findsOneWidget);
+      expect(find.text('Invitation revoked.'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await auth.changes.close();
+    });
+  }
+  testWidgets('unknown guard survives page/service reconstruction and Owner round trip', (tester) async {
+    await _largeViewport(tester);
+    final auth = _ChangingAuth('owner-a');
+    final service = _CreationInvites()..creationError = TimeoutException('PRIVATE');
+    await _mountLifecycle(tester, auth, service, _ownerScope('owner-a'));
+    await tester.tap(find.text('Create invitation'));
+    await tester.pumpAndSettle();
+    final guard = StaffInvitationCreation.forSession(auth, 'owner-a');
+    expect(guard.blocked, true);
+    await tester.pumpWidget(const SizedBox());
+    final replacement = _LifecycleInvites('replacement');
+    await _mountLifecycle(tester, auth, replacement, _ownerScope('owner-a'));
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+    expect(replacement.creates, 0);
+    auth.change('owner-b');
+    await _mountLifecycle(tester, auth, replacement, _ownerScope('owner-b'));
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNotNull);
+    await _createDisplayed(tester, 'replacement');
+    auth.change(null);
+    await tester.pump();
+    expect(find.text('code-replacement'), findsNothing);
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+    auth.change('owner-a');
+    await _mountLifecycle(tester, auth, replacement, _ownerScope('owner-a'));
+    expect(guard.blocked, true);
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+    final otherAuth = _ChangingAuth('owner-a');
+    await _mountLifecycle(tester, otherAuth, replacement, _ownerScope('owner-a'));
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNotNull);
+    await tester.pumpWidget(const SizedBox());
+    await auth.changes.close();
+    await otherAuth.changes.close();
+  });
+  for (final invalid in ['missing', 'uid', 'role', 'generation']) {
+    testWidgets('invalid Owner context $invalid fails closed without invoking service', (tester) async {
+      final auth = _ChangingAuth('owner-a');
+      final service = _LifecycleInvites('never');
+      final scope = invalid == 'missing' ? null : CafeWorkspace(cafeId: 'a',
+        uid: invalid == 'uid' ? 'other' : 'owner-a', ownerUid: 'owner-a',
+        role: invalid == 'role' ? CafeRole.staff : CafeRole.owner,
+        membershipGeneration: invalid == 'generation' ? -1 : 0);
+      await _mountLifecycle(tester, auth, service, scope);
+      expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+      expect(tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed, isNull);
+      expect(service.creates, 0);
+      expect(service.revokes, 0);
+      await tester.pumpWidget(const SizedBox());
+      await auth.changes.close();
+    });
+  }
   final invalidCreationResponses = <String, Object?>{
     'missing id': {..._creationResponse()}..remove('invitationId'),
     'empty id': {..._creationResponse(), 'invitationId': ''},
@@ -215,7 +492,7 @@ void main() {
   for (final outcome in ['success', 'permission', 'timeout', 'malformed']) {
     testWidgets('creation replacement $outcome preserves invitation and paired ID', (tester) async {
       final invites = _CreationInvites();
-      await tester.pumpWidget(MaterialApp(home: StaffInvitationPage(ownerMode: true, invitations: invites)));
+      await tester.pumpWidget(MaterialApp(home: _invitationPage(ownerMode: true, invitations: invites)));
       await tester.enterText(find.byType(TextField).first, 'staff@example.test');
       await tester.tap(find.text('Create invitation'));
       await tester.pumpAndSettle();
@@ -367,7 +644,7 @@ void main() {
         final pending = Completer<void>();
         final invites = _Invites();
         var joined = 0;
-        await tester.pumpWidget(MaterialApp(home: StaffInvitationPage(
+        await tester.pumpWidget(MaterialApp(home: _invitationPage(
           ownerMode: ownerMode, invitations: invites, onJoined: () => joined++)));
         if (ownerMode) {
           await tester.enterText(find.byType(TextField).first, 'staff@example.test');
@@ -505,7 +782,7 @@ void main() {
           ),
         );
       await tester.pumpWidget(
-        MaterialApp(home: StaffInvitationPage(invitations: invites)),
+        MaterialApp(home: _invitationPage(invitations: invites)),
       );
       await tester.enterText(find.byType(TextField), 'PRIVATE-INVITE');
       await tester.tap(find.text('Redeem invitation'));
@@ -524,7 +801,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.light,
-        home: StaffInvitationPage(ownerMode: true, invitations: invites),
+        home: _invitationPage(ownerMode: true, invitations: invites),
       ),
     );
     await tester.enterText(find.byType(TextField).first, 'staff@example.test');
@@ -548,7 +825,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           theme: AppTheme.light,
-          home: StaffInvitationPage(
+          home: _invitationPage(
             invitations: invites,
             onJoined: () => joined = true,
           ),

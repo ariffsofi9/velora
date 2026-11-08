@@ -108,7 +108,7 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
                 return _NoTrustedTeam(onRetry: _retry);
               }
 
-              return _VerifiedTeamView(roster: workspace, onRefresh: _retry);
+              return _VerifiedTeamView(roster: workspace, onRefresh: _retry, auth: _auth);
             },
           ),
         ),
@@ -120,8 +120,9 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
 class _VerifiedTeamView extends StatelessWidget {
   final TeamRoster roster;
   final VoidCallback onRefresh;
+  final FirebaseAuth auth;
 
-  const _VerifiedTeamView({required this.roster, required this.onRefresh});
+  const _VerifiedTeamView({required this.roster, required this.onRefresh, required this.auth});
 
   @override
   Widget build(BuildContext context) {
@@ -130,7 +131,7 @@ class _VerifiedTeamView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
       children: [
-        _TeamHeader(role: role),
+        _TeamHeader(role: role, workspace: roster.workspace, auth: auth),
         const SizedBox(height: 24),
         Text(
           'Verified Members (${roster.members.length})',
@@ -169,8 +170,10 @@ class _VerifiedTeamView extends StatelessWidget {
 
 class _TeamHeader extends StatelessWidget {
   final String role;
+  final CafeWorkspace workspace;
+  final FirebaseAuth auth;
 
-  const _TeamHeader({required this.role});
+  const _TeamHeader({required this.role, required this.workspace, required this.auth});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -231,7 +234,7 @@ class _TeamHeader extends StatelessWidget {
                 ? () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (_) =>
-                          const StaffInvitationPage(ownerMode: true),
+                          StaffInvitationPage(ownerMode: true, auth: auth, workspace: workspace),
                     ),
                   )
                 : null,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
@@ -6,21 +7,36 @@ import 'package:flutter/services.dart';
 import '../../services/staff_invitation_service.dart';
 import '../../services/firebase_emulator_config.dart';
 import '../auth/workspace_gate.dart';
+import '../../models/cafe_workspace.dart';
 
 class StaffInvitationPage extends StatefulWidget {
   final bool ownerMode;
   final StaffInvitations? invitations;
   final FirebaseAuth? auth;
   final VoidCallback? onJoined;
+  final CafeWorkspace? workspace;
   const StaffInvitationPage({
     super.key,
     this.ownerMode = false,
     this.invitations,
     this.auth,
     this.onJoined,
+    this.workspace,
   });
   @override
   State<StaffInvitationPage> createState() => _StaffInvitationPageState();
+}
+
+class _InvitationOperation {
+  final int revision;
+  final FirebaseAuth auth;
+  final String uid;
+  final StaffInvitations service;
+  final CafeWorkspace? workspace;
+  final bool ownerMode;
+  final StaffInvitationCreation? guard;
+  _InvitationOperation(this.revision, this.auth, this.uid, this.service,
+      this.workspace, this.ownerMode, this.guard);
 }
 
 class _StaffInvitationPageState extends State<StaffInvitationPage> {
@@ -28,33 +44,118 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
   final _revoke = TextEditingController();
   StaffInvitation? _invitation;
   bool _busy = false;
-  bool _creationBlocked = false;
   String? _message;
-  late final StaffInvitations _service =
-      widget.invitations ?? FirebaseStaffInvitations(auth: widget.auth);
+  late FirebaseAuth _auth;
+  late StaffInvitations _service;
+  String? _uid;
+  int _revision = 0;
+  bool _identityTrusted = false;
+  StreamSubscription<User?>? _authChanges;
+  StaffInvitationCreation? _creationGuard;
+  _InvitationOperation? _operation;
 
-  bool get _cannotCreate => _creationBlocked ||
+  bool get _cannotCreate => (_creationGuard?.blocked ?? false) ||
       (_service is FirebaseStaffInvitations &&
           (_service as FirebaseStaffInvitations).creationBlocked);
 
+  static bool _sameWorkspace(CafeWorkspace? a, CafeWorkspace? b) =>
+      a?.cafeId == b?.cafeId && a?.uid == b?.uid &&
+      a?.ownerUid == b?.ownerUid && a?.role == b?.role &&
+      a?.membershipGeneration == b?.membershipGeneration;
+
+  static bool _validId(String? value) => value != null && value.isNotEmpty &&
+      value.length <= 128 && value.trim() == value && value != '.' && value != '..' &&
+      !RegExp(r'[/\\\x00-\x1f]').hasMatch(value);
+
+  bool get _validContext {
+    if (!_identityTrusted || !_validId(_uid) || _auth.currentUser?.uid != _uid) return false;
+    if (!widget.ownerMode) return true;
+    final scope = widget.workspace;
+    return scope != null && _validId(scope.cafeId) && scope.uid == _uid &&
+        scope.ownerUid == _uid && scope.role == CafeRole.owner &&
+        scope.membershipGeneration >= 0 && scope.membershipGeneration <= 9007199254740991;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _bindContext();
+  }
+
+  void _clearContext() {
+    _revision++;
+    _operation = null;
+    _busy = false;
+    _invitation = null;
+    _entry.clear();
+    _revoke.clear();
+    _message = null;
+    _identityTrusted = false;
+    _authChanges?.cancel();
+    _authChanges = null;
+  }
+
+  void _bindContext() {
+    _clearContext();
+    _auth = widget.auth ?? FirebaseAuth.instance;
+    _uid = _auth.currentUser?.uid;
+    _service = widget.invitations ?? FirebaseStaffInvitations(auth: _auth);
+    _creationGuard = _uid == null ? null : StaffInvitationCreation.forSession(_auth, _uid!);
+    _identityTrusted = true;
+    final revision = _revision;
+    _authChanges = _auth.authStateChanges().listen((user) {
+      if (!mounted || revision != _revision) return;
+      if (user?.uid != _uid || _auth.currentUser?.uid != _uid) {
+        setState(_bindContext);
+      }
+    }, onError: (Object _) {
+      if (!mounted || revision != _revision) return;
+      setState(_clearContext);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant StaffInvitationPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.auth, widget.auth) ||
+        !identical(oldWidget.invitations, widget.invitations) ||
+        oldWidget.ownerMode != widget.ownerMode ||
+        !_sameWorkspace(oldWidget.workspace, widget.workspace) ||
+        _auth.currentUser?.uid != _uid) {
+      _bindContext();
+    }
+  }
+
+  bool _current(_InvitationOperation operation) => mounted &&
+      identical(_operation, operation) && operation.revision == _revision &&
+      identical(operation.auth, _auth) && operation.uid == _uid &&
+      identical(operation.service, _service) && operation.ownerMode == widget.ownerMode &&
+      _sameWorkspace(operation.workspace, widget.workspace) && _validContext;
+
   @override
   void dispose() {
+    _revision++;
+    _operation = null;
+    _authChanges?.cancel();
     _entry.dispose();
     _revoke.dispose();
     _invitation = null;
     super.dispose();
   }
 
-  Future<void> _run(Future<void> Function() action) async {
-    if (_busy) return;
+  Future<void> _run(Future<void> Function(_InvitationOperation) action) async {
+    if (_busy || !_validContext) return;
+    final operation = _InvitationOperation(_revision, _auth, _uid!, _service,
+        widget.workspace, widget.ownerMode, _creationGuard);
+    _operation = operation;
     setState(() {
       _busy = true;
       _message = null;
     });
     try {
-      await action();
+      await action(operation);
     } catch (error) {
-      if (mounted) {
+      if (_current(operation)) {
         setState(
           () => _message = switch (error) {
             StaffInvitationFailure(outcomeUnknown: true) =>
@@ -73,12 +174,16 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
         );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (_current(operation)) setState(() {
+        _busy = false;
+        _operation = null;
+      });
     }
   }
 
   bool get _available =>
-      widget.invitations != null || FirebaseEmulatorConfig.invitationsAvailable;
+      _validContext &&
+      (widget.invitations != null || FirebaseEmulatorConfig.invitationsAvailable);
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -121,29 +226,33 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
             FilledButton(
               onPressed: _busy || !_available || (widget.ownerMode && _cannotCreate)
                   ? null
-                  : () => _run(() async {
+                  : () => _run((operation) async {
                       if (widget.ownerMode) {
                         if (_cannotCreate) return;
                         late StaffInvitation result;
                         try {
-                          result = await _service.create(_entry.text.trim());
+                          result = await operation.service.create(_entry.text.trim());
                         } on StaffInvitationFailure catch (error) {
-                          if (error.outcomeUnknown && mounted) {
-                            setState(() => _creationBlocked = true);
-                          }
+                          if (error.outcomeUnknown) operation.guard?.requireReconciliation();
                           rethrow;
                         }
-                        if (!mounted) return;
+                        if (!_current(operation)) {
+                          // Issuance was acknowledged but its code cannot be delivered
+                          // into the old context. Do not silently allow fresh issuance.
+                          operation.guard?.requireReconciliation();
+                          return;
+                        }
                         setState(() {
                           _invitation = result;
                           _revoke.text = result.id;
                         });
                       } else {
-                        await _service.redeem(_entry.text);
-                        if (!context.mounted) return;
+                        final onJoined = widget.onJoined;
+                        await operation.service.redeem(_entry.text);
+                        if (!_current(operation)) return;
                         _entry.clear();
-                        if (widget.onJoined != null) {
-                          widget.onJoined!();
+                        if (onJoined != null) {
+                          onJoined();
                         } else {
                           Navigator.of(context).pushAndRemoveUntil(
                             MaterialPageRoute<void>(
@@ -162,12 +271,11 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
               TextButton(
                 onPressed: _busy || !_available
                     ? null
-                    : () => _run(() async {
-                        final user =
-                            (widget.auth ?? FirebaseAuth.instance).currentUser;
+                    : () => _run((operation) async {
+                        final user = operation.auth.currentUser;
                         if (user == null) throw StateError('Sign in required.');
                         await user.sendEmailVerification();
-                        if (mounted) {
+                        if (_current(operation)) {
                           setState(
                             () => _message =
                                 'Verification requested. Open the email verification link, then redeem again.',
@@ -183,6 +291,7 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
               Text('Expires: ${invite.expiresAt}'),
               TextButton(
                 onPressed: () async {
+                  if (!_validContext || !identical(_invitation, invite)) return;
                   await Clipboard.setData(ClipboardData(text: invite.code));
                 },
                 child: const Text('Copy one-time code'),
@@ -204,11 +313,15 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
               OutlinedButton(
                 onPressed: _busy || !_available
                     ? null
-                    : () => _run(() async {
-                        await _service.revoke(_revoke.text.trim());
-                        if (mounted) {
+                    : () => _run((operation) async {
+                        final submittedId = _revoke.text.trim();
+                        await operation.service.revoke(submittedId);
+                        if (_current(operation)) {
                           setState(() {
-                            _invitation = null;
+                            if (_invitation?.id == submittedId) {
+                              _invitation = null;
+                              _revoke.clear();
+                            }
                             _message = 'Invitation revoked.';
                           });
                         }
@@ -223,6 +336,8 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
               ),
             if (_message != null)
               Semantics(liveRegion: true, child: Text(_message!)),
+            if (!_validContext)
+              const Text('Invitation context could not be verified. Return and reopen this page from your current workspace.'),
             if (widget.ownerMode && _cannotCreate)
               const Text(
                 'Creation is blocked because an earlier issuance is unconfirmed. '
