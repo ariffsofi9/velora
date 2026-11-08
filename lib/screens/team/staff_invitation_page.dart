@@ -28,9 +28,14 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
   final _revoke = TextEditingController();
   StaffInvitation? _invitation;
   bool _busy = false;
+  bool _creationBlocked = false;
   String? _message;
-  StaffInvitations get _service =>
+  late final StaffInvitations _service =
       widget.invitations ?? FirebaseStaffInvitations(auth: widget.auth);
+
+  bool get _cannotCreate => _creationBlocked ||
+      (_service is FirebaseStaffInvitations &&
+          (_service as FirebaseStaffInvitations).creationBlocked);
 
   @override
   void dispose() {
@@ -114,14 +119,20 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
             ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: _busy || !_available
+              onPressed: _busy || !_available || (widget.ownerMode && _cannotCreate)
                   ? null
                   : () => _run(() async {
                       if (widget.ownerMode) {
-                        setState(() => _invitation = null);
-                        final result = await _service.create(
-                          _entry.text.trim(),
-                        );
+                        if (_cannotCreate) return;
+                        late StaffInvitation result;
+                        try {
+                          result = await _service.create(_entry.text.trim());
+                        } on StaffInvitationFailure catch (error) {
+                          if (error.outcomeUnknown && mounted) {
+                            setState(() => _creationBlocked = true);
+                          }
+                          rethrow;
+                        }
                         if (!mounted) return;
                         setState(() {
                           _invitation = result;
@@ -212,6 +223,13 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
               ),
             if (_message != null)
               Semantics(liveRegion: true, child: Text(_message!)),
+            if (widget.ownerMode && _cannotCreate)
+              const Text(
+                'Creation is blocked because an earlier issuance is unconfirmed. '
+                'An existing code does not rule out another issued invitation. '
+                'Confirm the server state with the owner or support; do not restart '
+                'the app to retry. This protection is in memory only.',
+              ),
           ],
         ),
       ),

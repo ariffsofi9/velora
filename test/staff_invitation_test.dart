@@ -62,6 +62,30 @@ class _Auth extends Fake implements FirebaseAuth {
   Stream<User?> authStateChanges() => const Stream.empty();
 }
 
+Map<String, dynamic> _creationResponse([String letter = 'a']) {
+  final id = List.filled(32, letter).join();
+  return {'invitationId': id, 'code': '$id.${List.filled(64, 'c').join()}',
+    'expiresAt': '2030-01-01T00:00:00.000Z'};
+}
+
+class _CreationInvites extends _Invites {
+  final guard = StaffInvitationCreation();
+  Object? response = _creationResponse();
+  Object? creationError;
+  Future<void>? creationPending;
+
+  @override
+  Future<StaffInvitation> create(String value) => guard.issue((onStage) async {
+    email = value;
+    creates++;
+    onStage(StaffRedeemStage.callableInvocation);
+    await creationPending;
+    if (creationError != null) throw creationError!;
+    onStage(StaffRedeemStage.callableResponse);
+    return response;
+  }, clock: () => DateTime.utc(2029));
+}
+
 class _User extends Fake implements User {
   bool verified = true;
   Object? reloadError, tokenError;
@@ -87,6 +111,165 @@ class _User extends Fake implements User {
 
 void main() {
   setUp(installInvitationFirebase);
+  final invalidCreationResponses = <String, Object?>{
+    'missing id': {..._creationResponse()}..remove('invitationId'),
+    'empty id': {..._creationResponse(), 'invitationId': ''},
+    'wrong id type': {..._creationResponse(), 'invitationId': 1},
+    'uppercase id': {..._creationResponse(), 'invitationId': List.filled(32, 'A').join()},
+    'missing code': {..._creationResponse()}..remove('code'),
+    'empty code': {..._creationResponse(), 'code': ''},
+    'wrong code type': {..._creationResponse(), 'code': true},
+    'invalid code': {..._creationResponse(), 'code': 'PRIVATE-CODE'},
+    'newline code': {..._creationResponse(), 'code': '${_creationResponse()['code']}\n'},
+    'prefix mismatch': {..._creationResponse(), 'code': _creationResponse('b')['code']},
+    'missing expiry': {..._creationResponse()}..remove('expiresAt'),
+    'empty expiry': {..._creationResponse(), 'expiresAt': ''},
+    'wrong expiry type': {..._creationResponse(), 'expiresAt': 1},
+    'invalid expiry': {..._creationResponse(), 'expiresAt': 'PRIVATE-EXPIRY'},
+    'calendar overflow': {..._creationResponse(), 'expiresAt': '2030-02-30T00:00:00.000Z'},
+    'hour overflow': {..._creationResponse(), 'expiresAt': '2030-01-01T24:00:00.000Z'},
+    'offset expiry': {..._creationResponse(), 'expiresAt': '2030-01-01T00:00:00.000+00:00'},
+    'missing milliseconds': {..._creationResponse(), 'expiresAt': '2030-01-01T00:00:00Z'},
+    'expired': {..._creationResponse(), 'expiresAt': '2028-01-01T00:00:00.000Z'},
+    'nested envelope': {'data': _creationResponse()},
+    'list envelope': [_creationResponse()],
+    'null envelope': null,
+    'string envelope': 'PRIVATE-RESPONSE',
+  };
+  test('creation accepts canonical response without exposing diagnostics', () async {
+    final invites = _CreationInvites();
+    final result = await invites.create('staff@example.test');
+    expect(result.id, _creationResponse()['invitationId']);
+    expect(result.code, _creationResponse()['code']);
+    expect(result.expiresAt, '2030-01-01T00:00:00.000Z');
+    expect(invites.guard.blocked, false);
+    expect(invites.creates, 1);
+  });
+  for (final entry in invalidCreationResponses.entries) {
+    test('creation rejects ${entry.key} and guards unconfirmed issuance', () async {
+      final invites = _CreationInvites()..response = entry.value;
+      await expectLater(invites.create('staff@example.test'), throwsA(
+        isA<StaffInvitationFailure>()
+          .having((e) => e.outcomeUnknown, 'unknown', true)
+          .having((e) => e.toString().contains('PRIVATE'), 'private data', false)));
+      await expectLater(invites.create('different@example.test'), throwsA(isA<StaffInvitationFailure>()));
+      expect(invites.guard.blocked, true);
+      expect(invites.creates, 1);
+    });
+  }
+  for (final entry in <String, Object>{
+    'timeout': TimeoutException('PRIVATE'),
+    'transport': FirebaseFunctionsException(code: 'unavailable', message: 'PRIVATE'),
+    'decoding': StateError('PRIVATE'),
+    'duplicate receipt': FirebaseFunctionsException(code: 'already-exists', message: 'PRIVATE'),
+  }.entries) {
+    test('creation ${entry.key} may follow commit and blocks another invocation', () async {
+      final invites = _CreationInvites()..creationError = entry.value;
+      await expectLater(invites.create('staff@example.test'), throwsA(
+        isA<StaffInvitationFailure>().having((e) => e.outcomeUnknown, 'unknown', true)));
+      await expectLater(invites.create('other@example.test'), throwsA(isA<StaffInvitationFailure>()));
+      expect(invites.creates, 1);
+    });
+  }
+  test('permission rejection releases creation guard without claiming success', () async {
+    final invites = _CreationInvites()..creationError = FirebaseFunctionsException(
+      code: 'permission-denied', message: 'PRIVATE');
+    await expectLater(invites.create('staff@example.test'), throwsA(
+      isA<StaffInvitationFailure>().having((e) => e.outcomeUnknown, 'unknown', false)));
+    expect(invites.guard.blocked, false);
+    invites.creationError = null;
+    expect((await invites.create('staff@example.test')).id, _creationResponse()['invitationId']);
+  });
+  test('pre-invocation failure creates no unknown guard', () async {
+    final guard = StaffInvitationCreation();
+    await expectLater(guard.issue((_) async => throw StateError('PRIVATE')),
+      throwsA(isA<StaffInvitationFailure>().having((e) => e.outcomeUnknown, 'unknown', false)));
+    expect(guard.blocked, false);
+    expect((await guard.issue((stage) async {
+      stage(StaffRedeemStage.callableInvocation);
+      return _creationResponse();
+    }, clock: () => DateTime.utc(2029))).id, _creationResponse()['invitationId']);
+  });
+  test('guard survives service lookup but is isolated by Auth instance and Owner', () async {
+    final session = Object();
+    final guard = StaffInvitationCreation.forSession(session, 'owner');
+    await expectLater(guard.issue((stage) async {
+      stage(StaffRedeemStage.callableInvocation);
+      throw TimeoutException('PRIVATE');
+    }), throwsA(isA<StaffInvitationFailure>()));
+    expect(identical(guard, StaffInvitationCreation.forSession(session, 'owner')), true);
+    expect(StaffInvitationCreation.forSession(session, 'owner').blocked, true);
+    expect(StaffInvitationCreation.forSession(session, 'other').blocked, false);
+    expect(StaffInvitationCreation.forSession(Object(), 'owner').blocked, false);
+  });
+  test('concurrent creation reaches invocation only once', () async {
+    final invites = _CreationInvites();
+    final pending = Completer<void>();
+    invites.creationPending = pending.future;
+    final first = invites.create('staff@example.test');
+    await expectLater(invites.create('other@example.test'), throwsA(isA<StaffInvitationFailure>()));
+    expect(invites.creates, 1);
+    pending.complete();
+    await first;
+  });
+  for (final outcome in ['success', 'permission', 'timeout', 'malformed']) {
+    testWidgets('creation replacement $outcome preserves invitation and paired ID', (tester) async {
+      final invites = _CreationInvites();
+      await tester.pumpWidget(MaterialApp(home: StaffInvitationPage(ownerMode: true, invitations: invites)));
+      await tester.enterText(find.byType(TextField).first, 'staff@example.test');
+      await tester.tap(find.text('Create invitation'));
+      await tester.pumpAndSettle();
+      final old = _creationResponse();
+      expect(find.text(old['code']), findsOneWidget);
+      expect(tester.widget<TextField>(find.byType(TextField).last).controller!.text, old['invitationId']);
+      final pending = Completer<void>();
+      invites.creationPending = pending.future;
+      invites.response = outcome == 'malformed' ? {} : _creationResponse('b');
+      if (outcome == 'permission') invites.creationError = FirebaseFunctionsException(code: 'permission-denied', message: 'PRIVATE');
+      if (outcome == 'timeout') invites.creationError = TimeoutException('PRIVATE');
+      final callback = tester.widget<FilledButton>(find.byType(FilledButton)).onPressed!;
+      callback(); callback();
+      await tester.pump();
+      expect(invites.creates, 2);
+      expect(find.text(old['code']), findsOneWidget);
+      expect(tester.widget<TextField>(find.byType(TextField).last).controller!.text, old['invitationId']);
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      final success = outcome == 'success';
+      final expected = success ? _creationResponse('b') : old;
+      expect(find.text(expected['code']), findsOneWidget);
+      expect(tester.widget<TextField>(find.byType(TextField).last).controller!.text, expected['invitationId']);
+      expect(find.text('Invitation revoked.'), findsNothing);
+      expect(find.textContaining('PRIVATE'), findsNothing);
+      final unknown = outcome == 'timeout' || outcome == 'malformed';
+      expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed == null, unknown);
+      if (unknown) {
+        await tester.scrollUntilVisible(find.textContaining('Outcome unknown.'), 150,
+          scrollable: find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)).first);
+        expect(find.textContaining('Outcome unknown.'), findsOneWidget);
+        await tester.drag(find.byType(ListView), const Offset(0, 1000));
+        await tester.pumpAndSettle();
+        await tester.enterText(find.byType(TextField).first, 'different@example.test');
+        callback(); // A stale callback may not bypass the unknown guard.
+        await tester.pumpAndSettle();
+        expect(invites.creates, 2);
+        await tester.scrollUntilVisible(find.text('Revoke invitation'), 150,
+          scrollable: find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)).first);
+        await tester.ensureVisible(find.text('Revoke invitation'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Revoke invitation'));
+        await tester.pumpAndSettle();
+        await tester.drag(find.byType(ListView), const Offset(0, 1000));
+        await tester.pumpAndSettle();
+        expect(find.text(old['code']), findsNothing);
+        expect(invites.guard.blocked, true);
+        expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+        expect(invites.creates, 2);
+      }
+      expect(tester.takeException(), isNull);
+    });
+  }
   test('diagnostics retain only stage and allowlisted Firebase error code', () {
     final error = FirebaseAuthException(
       code: 'network-request-failed',

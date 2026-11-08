@@ -106,6 +106,81 @@ class StaffInvitation {
   const StaffInvitation(this.id, this.code, this.expiresAt);
 }
 
+/// In-memory safety only: no recovery, persistence or cross-tab/device guarantee.
+/// Retained per Auth instance and UID even when a page/service is reconstructed.
+/// Signing out or changing email does not resolve an earlier uncertain issuance.
+class StaffInvitationCreation {
+  static final _sessions = Expando<Map<String, StaffInvitationCreation>>();
+  static StaffInvitationCreation forSession(Object session, String uid) {
+    final owners = _sessions[session] ??= <String, StaffInvitationCreation>{};
+    return owners.putIfAbsent(uid, () => StaffInvitationCreation());
+  }
+
+  bool _blocked = false;
+  bool _pending = false;
+  bool get blocked => _blocked;
+
+  static StaffInvitation validate(Object? response, DateTime now) {
+    if (response is Map<String, dynamic>) {
+      final id = response['invitationId'];
+      final code = response['code'];
+      final expiry = response['expiresAt'];
+      if (id is String && id.length == 32 && RegExp(r'^[a-f0-9]{32}$').hasMatch(id) &&
+          code is String && code.length == 97 && RegExp(r'^[a-f0-9]{32}\.[a-f0-9]{64}$').hasMatch(code) &&
+          code.startsWith('$id.') && expiry is String &&
+          RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$').hasMatch(expiry)) {
+        final parsed = DateTime.tryParse(expiry);
+        // Round-trip rejects DateTime's permissive calendar overflow normalization.
+        if (parsed != null && parsed.toUtc().toIso8601String() == expiry &&
+            parsed.isAfter(now.toUtc())) {
+          return StaffInvitation(id, code, expiry);
+        }
+      }
+    }
+    throw const StaffInvitationFailure._(
+      StaffRedeemStage.callableResponse, 'invalid-creation-acknowledgement',
+      outcomeUnknown: true);
+  }
+
+  Future<StaffInvitation> issue(
+    Future<Object?> Function(void Function(StaffRedeemStage) onStage) operation, {
+    DateTime Function()? clock,
+  }) async {
+    if (_blocked) {
+      throw const StaffInvitationFailure._(
+        StaffRedeemStage.callableResponse, 'creation-unconfirmed',
+        outcomeUnknown: true);
+    }
+    if (_pending) {
+      throw const StaffInvitationFailure._(
+        StaffRedeemStage.callableConfig, 'creation-in-progress');
+    }
+    _pending = true;
+    var stage = StaffRedeemStage.callableConfig;
+    var invoked = false;
+    try {
+      final response = await operation((value) {
+        stage = value;
+        if (value == StaffRedeemStage.callableInvocation) invoked = true;
+      });
+      stage = StaffRedeemStage.callableResponse;
+      return validate(response, (clock ?? DateTime.now)());
+    } catch (error) {
+      var failure = error is StaffInvitationFailure
+          ? error : StaffInvitationFailure.fromError(stage, error);
+      // A duplicate receipt may describe an earlier commit, never recovered success.
+      if (invoked && failure.code == 'already-exists') {
+        failure = const StaffInvitationFailure._(
+          StaffRedeemStage.callableInvocation, 'already-exists', outcomeUnknown: true);
+      }
+      if (invoked && failure.outcomeUnknown) _blocked = true;
+      throw failure;
+    } finally {
+      _pending = false;
+    }
+  }
+}
+
 abstract interface class StaffInvitations {
   Future<StaffInvitation> create(String email);
   Future<void> revoke(String id);
@@ -116,6 +191,12 @@ class FirebaseStaffInvitations implements StaffInvitations {
   final FirebaseFunctions? functions;
   final FirebaseAuth? auth;
   FirebaseStaffInvitations({this.functions, this.auth});
+
+  bool get creationBlocked {
+    final identity = auth ?? FirebaseAuth.instance;
+    final uid = identity.currentUser?.uid;
+    return uid != null && StaffInvitationCreation.forSession(identity, uid).blocked;
+  }
 
   Future<Map<String, dynamic>> _call(
     String name,
@@ -174,22 +255,21 @@ class FirebaseStaffInvitations implements StaffInvitations {
 
   @override
   Future<StaffInvitation> create(String email) async {
-    // Unique local issuance request ID; not an authorization secret.
-    final id = '${DateTime.now().microsecondsSinceEpoch}-${_sequence++}';
-    final data = await _call('createStaffInvitation', {
-      'email': email,
-      'requestId': id,
-    });
-    if (data['invitationId'] is! String ||
-        data['code'] is! String ||
-        data['expiresAt'] is! String) {
-      throw StateError('Invalid invitation response.');
+    final identity = auth ?? FirebaseAuth.instance;
+    final uid = identity.currentUser?.uid;
+    if (uid == null) {
+      throw const StaffInvitationFailure._(
+        StaffRedeemStage.authSession, 'unauthenticated');
     }
-    return StaffInvitation(
-      data['invitationId'],
-      data['code'],
-      data['expiresAt'],
-    );
+    final creation = StaffInvitationCreation.forSession(identity, uid);
+    return creation.issue((onStage) async {
+      // Unique local issuance request ID; not an authorization secret.
+      final id = '${DateTime.now().microsecondsSinceEpoch}-${_sequence++}';
+      return _call('createStaffInvitation', {
+        'email': email,
+        'requestId': id,
+      }, onStage: onStage);
+    });
   }
 
   static int _sequence = 0;
