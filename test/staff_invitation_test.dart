@@ -13,6 +13,7 @@ import 'package:velora/services/staff_invitation_service.dart';
 import 'package:velora/services/firebase_emulator_config.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'helpers/invitation_firebase.dart';
+import 'helpers/staff_invitation_callable_fakes.dart';
 
 class _Invites implements StaffInvitations {
   int creates = 0;
@@ -186,6 +187,113 @@ class _User extends Fake implements User {
 
 void main() {
   setUp(installInvitationFirebase);
+  group('actual invitation callable adapter', () {
+    final profile = FirebaseEmulatorConfig.invitationProfileAllows(
+      FirebaseEmulatorConfig.ai1Mock ? 'demo-velora-ai1' : 'demo-velora-staff');
+    StaffCallableFunctions transport() => StaffCallableFunctions(Firebase.app());
+    _Auth identity() => _Auth()..user = _User();
+    Future<Object?> invoke(FirebaseStaffInvitations service, String action) =>
+        switch (action) {
+          'create' => service.create('private@example.test'),
+          'revoke' => service.revoke('synthetic-invitation-id'),
+          _ => service.redeem('  PRIVATE-SYNTHETIC-CODE  '),
+        };
+    Object response(String action) => switch (action) {
+      'create' => {..._creationResponse(),
+        'expiresAt': DateTime.now().toUtc().add(const Duration(days: 1)).toIso8601String().replaceFirst(RegExp(r'\.\d+Z$'), '.000Z')},
+      'revoke' => <String, dynamic>{'revoked': true},
+      _ => <String, dynamic>{'joined': true},
+    };
+    for (final action in ['create', 'revoke', 'redeem']) {
+      test('$action default profile fails before transport', () async {
+        final functions = transport();
+        final service = FirebaseStaffInvitations(auth: identity(), functions: functions);
+        await expectLater(invoke(service, action), throwsA(isA<StaffInvitationFailure>()
+          .having((e) => e.outcomeUnknown, 'unknown', false)));
+        expect(functions.names, isEmpty);
+        expect(functions.routes, isEmpty);
+        expect(functions.payloads, isEmpty);
+      }, skip: profile);
+      test('$action uses only injected instance and explicit loopback route', () async {
+        final functions = transport()..respond = (() async => response(action));
+        final unused = transport();
+        final auth = identity();
+        final service = FirebaseStaffInvitations(auth: auth, functions: functions);
+        await invoke(service, action);
+        expect(identical(service.functions, functions), true);
+        expect(unused.payloads, isEmpty);
+        expect(functions.names, ['${action}StaffInvitation']);
+        expect(functions.payloads, hasLength(1));
+        final payload = functions.payloads.single;
+        if (action == 'create') {
+          expect(payload.keys.toSet(), {'email', 'requestId'});
+          expect(payload['email'] == 'private@example.test', true);
+          expect(RegExp(r'^[A-Za-z0-9_-]{16,64}$').hasMatch(payload['requestId'] as String), true);
+        } else {
+          expect(payload.keys.toSet(), {action == 'revoke' ? 'invitationId' : 'code'});
+          expect(payload.values.single == (action == 'revoke' ? 'synthetic-invitation-id' : 'PRIVATE-SYNTHETIC-CODE'), true);
+        }
+        expect(functions.routes.single, (host: '127.0.0.1', port: FirebaseEmulatorConfig.invitationFunctionsPort, automaticHostMapping: false));
+        if (action == 'redeem') expect((auth.user as _User).refreshed, true);
+      }, skip: !profile);
+      for (final outcome in ['malformed', 'permission', 'timeout', 'transport']) {
+        test('$action adapter $outcome is sanitized and never retried', () async {
+          final functions = transport()..respond = (() async {
+            switch (outcome) {
+              case 'permission': throw FirebaseFunctionsException(code: 'permission-denied', message: 'PRIVATE', details: 'PRIVATE');
+              case 'timeout': throw TimeoutException('PRIVATE');
+              case 'transport': throw StateError('PRIVATE');
+              default: return <String, dynamic>{'joined': 'true', 'revoked': 'true', 'private': 'PRIVATE'};
+            }
+          });
+          final service = FirebaseStaffInvitations(auth: identity(), functions: functions);
+          await expectLater(invoke(service, action), throwsA(isA<StaffInvitationFailure>()
+            .having((e) => e.outcomeUnknown, 'unknown', outcome != 'permission')
+            .having((e) => e.code, 'code', outcome == 'permission' ? 'permission-denied' : outcome == 'timeout' ? 'deadline-exceeded' : outcome == 'malformed' ? (action == 'create' ? 'invalid-creation-acknowledgement' : 'invalid-acknowledgement') : 'unknown')
+            .having((e) => e.toString().contains('PRIVATE'), 'private diagnostics', false)));
+          expect(functions.payloads, hasLength(1));
+          expect(functions.names, hasLength(1));
+          if (action == 'create' && outcome != 'permission') {
+            await expectLater(service.create('another@example.test'), throwsA(isA<StaffInvitationFailure>()));
+            expect(functions.payloads, hasLength(1));
+          }
+        }, skip: !profile);
+      }
+      test('$action adapter pending completion remains controlled', () async {
+        final pending = Completer<Object?>();
+        final functions = transport()..respond = (() => pending.future);
+        var completed = false;
+        final operation = invoke(FirebaseStaffInvitations(auth: identity(), functions: functions), action)
+          .then((_) => completed = true);
+        await Future<void>.delayed(Duration.zero);
+        expect(completed, false);
+        expect(functions.payloads, hasLength(1));
+        pending.complete(response(action));
+        await operation;
+        expect(completed, true);
+        expect(functions.payloads, hasLength(1));
+      }, skip: !profile);
+    }
+    test('wrong Functions project is rejected without routing or invocation', () async {
+      final core = installInvitationFirebase();
+      core.projectId = 'synthetic-wrong-project';
+      final wrong = transport();
+      installInvitationFirebase();
+      await expectLater(FirebaseStaffInvitations(auth: identity(), functions: wrong).create('private@example.test'),
+        throwsA(isA<StaffInvitationFailure>().having((e) => e.outcomeUnknown, 'unknown', false)));
+      expect(wrong.routes, isEmpty);
+      expect(wrong.names, isEmpty);
+      expect(wrong.payloads, isEmpty);
+    }, skip: !profile);
+    test('wrong default app rejects even an approved injected transport', () async {
+      final functions = transport();
+      installInvitationFirebase().projectId = 'synthetic-wrong-project';
+      await expectLater(FirebaseStaffInvitations(auth: identity(), functions: functions).revoke('synthetic-id'),
+        throwsA(isA<StaffInvitationFailure>().having((e) => e.outcomeUnknown, 'unknown', false)));
+      expect(functions.routes, isEmpty);
+      expect(functions.payloads, isEmpty);
+    }, skip: !profile);
+  });
   test('Team Management caller remains compiled with explicit Auth context', () {
     final auth = _Auth()..user = _User();
     expect(TeamManagementPage(auth: auth).auth, same(auth));

@@ -33,7 +33,9 @@ test('isolated Owner/Staff inventory, invitation workflow and Rules', {timeout:1
    method:'POST',headers:{'Content-Type':'application/json',...(who?{Authorization:`Bearer ${who.user.idToken}`}:{})},
    body:JSON.stringify({data})});return r.json();
  }
- const owner=await account();const second=await account();const staff=await account();const wrong=await account(true);
+ // account(true) verifies the synthetic account and refreshes its token before bootstrap.
+ // Keep Staff unverified until the explicit redemption-denial test below.
+ const owner=await account(true);const second=await account(true);const staff=await account();const wrong=await account(true);
  const setup={businessName:'Disposable Staff Cafe',businessType:'cafe',address:'',inventoryUnit:'kg',lowStockAlerts:true,expiryReminders:true,reminderDays:3};
  const workspace=(await call('createWorkspace',owner,setup)).result;assert.ok(workspace?.cafeId);
  const other=(await call('createWorkspace',second,setup)).result;assert.ok(other?.cafeId);
