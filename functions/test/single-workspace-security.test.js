@@ -55,7 +55,7 @@ const create = (store, uid, cafeId, changes = {}) => createWorkspace({
 });
 const now = () => new Date('2030-01-01Z');
 const invite = (store, owner, uid) => createStaffInvitation({store, auth: auth(owner),
-  data: {email: `${uid}@example.test`, requestId: 'security-invite-0001'}, now});
+  data: {expectedCafeId: store.docs.get(`user_cafe_memberships/${owner}`).cafeId, expectedMembershipGeneration: 0, email: `${uid}@example.test`, requestId: 'security-invite-0001'}, now});
 const join = (store, uid, invitation) => redeemStaffInvitation({store, auth: auth(uid),
   data: {code: invitation.code}, now});
 const cafes = store => [...store.docs.keys()].filter(path => /^cafes\/[^/]+$/.test(path));

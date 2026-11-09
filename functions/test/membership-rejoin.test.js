@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {createStaffInvitation, redeemStaffInvitation} = require('../src/workspace-invitations');
+const {createStaffInvitation, redeemStaffInvitation, revokeStaffInvitation} = require('../src/workspace-invitations');
 const {removeStaffMember} = require('../src/membership-removal');
 const {menuOperation} = require('../src/menu-service');
 class Store {
@@ -45,7 +45,7 @@ async function fixture() {
     data: {targetUid: 'staff', expectedCafeId: cafeId, expectedGeneration: generation, expectedActorGeneration: 0,
       idempotencyKey: `remove-request-${String(++sequence).padStart(8, '0')}`}});
   const issue = (owner = 'ob', options = {}) => createStaffInvitation({store, auth: auth(owner), now,
-    data: {email: 'staff@example.test', requestId: `rejoin-request-${String(++sequence).padStart(8, '0')}`},
+    data: {expectedCafeId: store.docs.get(`user_cafe_memberships/${owner}`).cafeId, expectedMembershipGeneration: store.docs.get(`user_cafe_memberships/${owner}`).membershipGeneration ?? 0, email: 'staff@example.test', requestId: `rejoin-request-${String(++sequence).padStart(8, '0')}`},
     allowRejoin: true, resolveAccount: async () => ({uid: 'staff', email: 'staff@example.test', emailVerified: true, disabled: false}), ...options});
   const redeem = (invite, options = {}) => redeemStaffInvitation({store, auth: auth('staff'),
     data: {code: invite.code}, now, allowRejoin: true, ...options});
@@ -61,6 +61,8 @@ for (const sameCafe of [false, true]) {
     const invite = await f.issue(sameCafe ? 'oa' : 'ob');
     const document = f.store.docs.get(`workspace_invitations/${invite.invitationId}`);
     assert.equal(document.targetUid, 'staff'); assert.equal(document.targetGeneration, 1);
+    assert.equal(document.issuerBindingVersion, 1);
+    assert.equal(document.issuerMembershipGeneration, 0);
     assert.equal(document.previousCafeId, 'a');
     await assert.rejects(menuOperation({store: f.store, auth: auth('staff'), operation: 'get', data: {itemId: 'x'}}), {code: 'permission-denied'});
     const result = await f.redeem(invite); const cafeId = sameCafe ? 'a' : 'b';
@@ -185,7 +187,7 @@ test('owner invalidation at rejoin commit retries and denies without partial sta
 test('first-time invitation and legacy active generation-zero behavior remain compatible', async () => {
   const f = await fixture();
   const invitation = await createStaffInvitation({store: f.store, auth: auth('ob'),
-    data: {email: 'new@example.test', requestId: 'first-time-request-01'}, now,
+    data: {expectedCafeId: 'b', expectedMembershipGeneration: 0, email: 'new@example.test', requestId: 'first-time-request-01'}, now,
     allowRejoin: true, resolveAccount: async () => null});
   const result = await redeemStaffInvitation({store: f.store, auth: auth('new'), data: {code: invitation.code}, now});
   assert.equal(result.cafeId, 'b');
@@ -208,4 +210,86 @@ test('runtime wiring exposes no new rejoin callable or internal opt-in', () => {
   assert.ok(!source.includes('allowRejoin: true'));
   assert.ok(!/exports\.\w*[Rr]ejoin/.test(source));
   assert.match(source, /createStaffRemovalHandler\(\{\s*enabled: false,/);
+});
+
+test('rejoin validates distinct issuer and Staff target generations independently', async () => {
+  const f = await fixture();
+  for (const p of ['user_cafe_memberships/ob', 'cafes/b/members/ob']) {
+    f.store.put(p, {...f.store.docs.get(p), membershipGeneration: 7});
+  }
+  const invite = await f.issue();
+  const stored = f.store.docs.get(`workspace_invitations/${invite.invitationId}`);
+  assert.equal(stored.issuerBindingVersion, 1);
+  assert.equal(stored.issuerMembershipGeneration, 7);
+  assert.equal(stored.bindingVersion, 1);
+  assert.equal(stored.targetGeneration, 1);
+  assert.equal((await f.redeem(invite)).generation, 2);
+});
+
+for (const defect of ['new-issuer', 'missing-issuer', 'malformed-issuer', 'wrong-target']) {
+  test(`independent rejoin binding rejects ${defect} without consuming invitation`, async () => {
+    const f = await fixture(); const invite = await f.issue();
+    const stored = f.store.docs.get(`workspace_invitations/${invite.invitationId}`);
+    if (defect === 'new-issuer') {
+      for (const p of ['user_cafe_memberships/ob', 'cafes/b/members/ob']) {
+        f.store.put(p, {...f.store.docs.get(p), membershipGeneration: 2});
+      }
+    }
+    if (defect === 'missing-issuer') delete stored.issuerMembershipGeneration;
+    if (defect === 'malformed-issuer') stored.issuerBindingVersion = '1';
+    if (defect === 'wrong-target') stored.targetGeneration = 0;
+    const before = structuredClone(protectedState(f));
+    await assert.rejects(f.redeem(invite), {code: 'permission-denied'});
+    assert.deepEqual(protectedState(f), before);
+  });
+}
+
+for (const rejoin of [false, true]) {
+  test(`issuer generation change at redemption commit retries and denies (rejoin ${rejoin})`, async () => {
+    const f = await fixture();
+    const invite = await f.issue('ob', rejoin ? {} : {resolveAccount: async () => null});
+    const uid = rejoin ? 'staff' : 'new';
+    const before = structuredClone(protectedState(f));
+    const hook = writes => {
+      if (!writes.has(`user_cafe_memberships/${uid}`)) { f.store.beforeCommit = hook; return; }
+      for (const p of ['user_cafe_memberships/ob', 'cafes/b/members/ob']) {
+        f.store.put(p, {...f.store.docs.get(p), membershipGeneration: 2});
+      }
+    };
+    f.store.beforeCommit = hook;
+    const args = rejoin ? {} : {auth: {...auth('new'), token: {email_verified: true, email: 'staff@example.test'}}};
+    await assert.rejects(f.redeem(invite, args), {code: 'permission-denied'});
+    assert.ok(f.store.conflicts > 0);
+    const withoutIssuer = rows => rows.filter(([p]) => !['user_cafe_memberships/ob', 'cafes/b/members/ob'].includes(p));
+    assert.deepEqual(withoutIssuer(protectedState(f)), withoutIssuer(before));
+    assert.equal(rejoinEvents(f).length, 0);
+  });
+}
+
+test('issuance retry rejects rather than adopting a new Owner generation', async () => {
+  const f = await fixture();
+  f.store.beforeCommit = () => {
+    for (const p of ['user_cafe_memberships/ob', 'cafes/b/members/ob']) {
+      f.store.put(p, {...f.store.docs.get(p), membershipGeneration: 7});
+    }
+  };
+  await assert.rejects(f.issue(), {code: 'failed-precondition'});
+  assert.ok(f.store.conflicts > 0);
+  assert.equal([...f.store.docs.keys()].some(p => p.startsWith('workspace_invitations/')), false);
+});
+
+test('revocation retry rejects the original expected generation without changing invitation', async () => {
+  const f = await fixture(); const invite = await f.issue();
+  const path = `workspace_invitations/${invite.invitationId}`;
+  const before = structuredClone(f.store.docs.get(path));
+  f.store.beforeCommit = () => {
+    for (const p of ['user_cafe_memberships/ob', 'cafes/b/members/ob']) {
+      f.store.put(p, {...f.store.docs.get(p), membershipGeneration: 7});
+    }
+  };
+  await assert.rejects(revokeStaffInvitation({store: f.store, auth: auth('ob'), now,
+    data: {invitationId: invite.invitationId, expectedCafeId: 'b', expectedMembershipGeneration: 0}}),
+  {code: 'failed-precondition'});
+  assert.ok(f.store.conflicts > 0);
+  assert.deepEqual(f.store.docs.get(path), before);
 });

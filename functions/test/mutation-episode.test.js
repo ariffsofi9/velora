@@ -73,7 +73,7 @@ async function remove(f) {
 async function rejoin(f, destination = 'owner') {
   const invitation = await createStaffInvitation({store: f.store, auth: auth(destination), now, allowRejoin: true,
     resolveAccount: async () => ({uid: 'staff', email: 'staff@example.test', emailVerified: true}),
-    data: {email: 'staff@example.test', requestId: 'episode-rejoin-key-01'}});
+    data: {expectedCafeId: destination === 'owner' ? 'a' : 'b', expectedMembershipGeneration: 0, email: 'staff@example.test', requestId: 'episode-rejoin-key-01'}});
   await redeemStaffInvitation({store: f.store, auth: auth('staff'), now, allowRejoin: true, data: {code: invitation.code}});
 }
 for (const op of operations) {

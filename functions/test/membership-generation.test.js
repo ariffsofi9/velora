@@ -94,7 +94,7 @@ const base = f => ({store: f.store, timestamp: () => new Date(), auth: auth('sta
 const operations = {
   'workspace retry': f => createWorkspace({...base(f), auth: auth('owner'), data: setup, idFactory: () => 'unused'}),
   'invitation owner': f => createStaffInvitation({...base(f), auth: auth('owner'),
-    data: {email: 'new@example.test', requestId: 'generation-invite-01'}}),
+    data: {expectedCafeId: 'a', expectedMembershipGeneration: f.docs.get('user_cafe_memberships/owner').membershipGeneration ?? 0, email: 'new@example.test', requestId: 'generation-invite-01'}}),
   'team context': f => listTeamMembers({...base(f), auth: auth('owner'), data: {}, accounts: async () => []}),
   'menu context': f => menuOperation({...base(f), operation: 'get', data: {itemId: 'item'}}),
   'inventory create': f => createInventoryItem({...base(f), toTimestamp: d => d,
@@ -132,6 +132,7 @@ for (const explicit of [false, true]) {
     f.docs.set('user_cafe_memberships/new', tombstone);
     f.docs.set(`workspace_invitations/${'a'.repeat(32)}`, {ownerUid: 'owner', cafeId: 'a',
       role: 'staff', email: 'new@example.test', status: 'pending', schemaVersion: 1,
+      issuerBindingVersion: 1, issuerMembershipGeneration: 0,
       tokenHash: createHash('sha256').update(code).digest('hex'), expiresAt: new Date('2031-01-01Z')});
     await assert.rejects(redeemStaffInvitation({store: f.store, auth: auth('new'),
       data: {code}, now: () => new Date('2030-01-01Z')}), {code: 'already-exists'});

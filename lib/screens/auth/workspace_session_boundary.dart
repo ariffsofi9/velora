@@ -17,6 +17,10 @@ class WorkspaceSessionBoundary extends StatefulWidget {
   final Widget child;
   final Stream<String?>? identities;
   final Stream<bool>? authority;
+
+  /// Optional subscription source; aggregation and metadata checks stay here.
+  final Stream<DocumentSnapshot<Map<String, dynamic>>> Function(String path)?
+  authoritySnapshots;
   final Future<CafeWorkspace> Function()? resolve;
   const WorkspaceSessionBoundary({
     super.key,
@@ -24,6 +28,7 @@ class WorkspaceSessionBoundary extends StatefulWidget {
     required this.child,
     this.identities,
     this.authority,
+    this.authoritySnapshots,
     this.resolve,
   });
   @override
@@ -95,9 +100,10 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
       onListen: () {
         for (final path in paths) {
           subscriptions.add(
-            FirebaseFirestore.instance
-                .doc(path)
-                .snapshots(includeMetadataChanges: true)
+            (widget.authoritySnapshots?.call(path) ??
+                    FirebaseFirestore.instance
+                        .doc(path)
+                        .snapshots(includeMetadataChanges: true))
                 .listen(
                   (snapshot) {
                     if (controller.isClosed) return;

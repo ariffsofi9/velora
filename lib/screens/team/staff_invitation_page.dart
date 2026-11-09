@@ -35,8 +35,15 @@ class _InvitationOperation {
   final CafeWorkspace? workspace;
   final bool ownerMode;
   final StaffInvitationCreation? guard;
-  _InvitationOperation(this.revision, this.auth, this.uid, this.service,
-      this.workspace, this.ownerMode, this.guard);
+  _InvitationOperation(
+    this.revision,
+    this.auth,
+    this.uid,
+    this.service,
+    this.workspace,
+    this.ownerMode,
+    this.guard,
+  );
 }
 
 class _StaffInvitationPageState extends State<StaffInvitationPage> {
@@ -54,26 +61,39 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
   StaffInvitationCreation? _creationGuard;
   _InvitationOperation? _operation;
 
-  bool get _cannotCreate => (_creationGuard?.blocked ?? false) ||
+  bool get _cannotCreate =>
+      (_creationGuard?.blocked ?? false) ||
       (_service is FirebaseStaffInvitations &&
           (_service as FirebaseStaffInvitations).creationBlocked);
 
   static bool _sameWorkspace(CafeWorkspace? a, CafeWorkspace? b) =>
-      a?.cafeId == b?.cafeId && a?.uid == b?.uid &&
-      a?.ownerUid == b?.ownerUid && a?.role == b?.role &&
+      a?.cafeId == b?.cafeId &&
+      a?.uid == b?.uid &&
+      a?.ownerUid == b?.ownerUid &&
+      a?.role == b?.role &&
       a?.membershipGeneration == b?.membershipGeneration;
 
-  static bool _validId(String? value) => value != null && value.isNotEmpty &&
-      value.length <= 128 && value.trim() == value && value != '.' && value != '..' &&
+  static bool _validId(String? value) =>
+      value != null &&
+      value.isNotEmpty &&
+      value.length <= 128 &&
+      value.trim() == value &&
+      value != '.' &&
+      value != '..' &&
       !RegExp(r'[/\\\x00-\x1f]').hasMatch(value);
 
   bool get _validContext {
-    if (!_identityTrusted || !_validId(_uid) || _auth.currentUser?.uid != _uid) return false;
+    if (!_identityTrusted || !_validId(_uid) || _auth.currentUser?.uid != _uid)
+      return false;
     if (!widget.ownerMode) return true;
     final scope = widget.workspace;
-    return scope != null && _validId(scope.cafeId) && scope.uid == _uid &&
-        scope.ownerUid == _uid && scope.role == CafeRole.owner &&
-        scope.membershipGeneration >= 0 && scope.membershipGeneration <= 9007199254740991;
+    return scope != null &&
+        _validId(scope.cafeId) &&
+        scope.uid == _uid &&
+        scope.ownerUid == _uid &&
+        scope.role == CafeRole.owner &&
+        scope.membershipGeneration >= 0 &&
+        scope.membershipGeneration <= 9007199254740991;
   }
 
   @override
@@ -100,18 +120,23 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
     _auth = widget.auth ?? FirebaseAuth.instance;
     _uid = _auth.currentUser?.uid;
     _service = widget.invitations ?? FirebaseStaffInvitations(auth: _auth);
-    _creationGuard = _uid == null ? null : StaffInvitationCreation.forSession(_auth, _uid!);
+    _creationGuard = _uid == null
+        ? null
+        : StaffInvitationCreation.forSession(_auth, _uid!);
     _identityTrusted = true;
     final revision = _revision;
-    _authChanges = _auth.authStateChanges().listen((user) {
-      if (!mounted || revision != _revision) return;
-      if (user?.uid != _uid || _auth.currentUser?.uid != _uid) {
-        setState(_bindContext);
-      }
-    }, onError: (Object _) {
-      if (!mounted || revision != _revision) return;
-      setState(_clearContext);
-    });
+    _authChanges = _auth.authStateChanges().listen(
+      (user) {
+        if (!mounted || revision != _revision) return;
+        if (user?.uid != _uid || _auth.currentUser?.uid != _uid) {
+          setState(_bindContext);
+        }
+      },
+      onError: (Object _) {
+        if (!mounted || revision != _revision) return;
+        setState(_clearContext);
+      },
+    );
   }
 
   @override
@@ -126,11 +151,16 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
     }
   }
 
-  bool _current(_InvitationOperation operation) => mounted &&
-      identical(_operation, operation) && operation.revision == _revision &&
-      identical(operation.auth, _auth) && operation.uid == _uid &&
-      identical(operation.service, _service) && operation.ownerMode == widget.ownerMode &&
-      _sameWorkspace(operation.workspace, widget.workspace) && _validContext;
+  bool _current(_InvitationOperation operation) =>
+      mounted &&
+      identical(_operation, operation) &&
+      operation.revision == _revision &&
+      identical(operation.auth, _auth) &&
+      operation.uid == _uid &&
+      identical(operation.service, _service) &&
+      operation.ownerMode == widget.ownerMode &&
+      _sameWorkspace(operation.workspace, widget.workspace) &&
+      _validContext;
 
   @override
   void dispose() {
@@ -145,8 +175,15 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
 
   Future<void> _run(Future<void> Function(_InvitationOperation) action) async {
     if (_busy || !_validContext) return;
-    final operation = _InvitationOperation(_revision, _auth, _uid!, _service,
-        widget.workspace, widget.ownerMode, _creationGuard);
+    final operation = _InvitationOperation(
+      _revision,
+      _auth,
+      _uid!,
+      _service,
+      widget.workspace,
+      widget.ownerMode,
+      _creationGuard,
+    );
     _operation = operation;
     setState(() {
       _busy = true;
@@ -174,16 +211,18 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
         );
       }
     } finally {
-      if (_current(operation)) setState(() {
-        _busy = false;
-        _operation = null;
-      });
+      if (_current(operation))
+        setState(() {
+          _busy = false;
+          _operation = null;
+        });
     }
   }
 
   bool get _available =>
       _validContext &&
-      (widget.invitations != null || FirebaseEmulatorConfig.invitationsAvailable);
+      (widget.invitations != null ||
+          FirebaseEmulatorConfig.invitationsAvailable);
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -224,16 +263,21 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
             ),
             const SizedBox(height: 16),
             FilledButton(
-              onPressed: _busy || !_available || (widget.ownerMode && _cannotCreate)
+              onPressed:
+                  _busy || !_available || (widget.ownerMode && _cannotCreate)
                   ? null
                   : () => _run((operation) async {
                       if (widget.ownerMode) {
                         if (_cannotCreate) return;
                         late StaffInvitation result;
                         try {
-                          result = await operation.service.create(_entry.text.trim());
+                          result = await operation.service.create(
+                            _entry.text.trim(),
+                            workspace: operation.workspace!,
+                          );
                         } on StaffInvitationFailure catch (error) {
-                          if (error.outcomeUnknown) operation.guard?.requireReconciliation();
+                          if (error.outcomeUnknown)
+                            operation.guard?.requireReconciliation();
                           rethrow;
                         }
                         if (!_current(operation)) {
@@ -315,7 +359,10 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
                     ? null
                     : () => _run((operation) async {
                         final submittedId = _revoke.text.trim();
-                        await operation.service.revoke(submittedId);
+                        await operation.service.revoke(
+                          submittedId,
+                          workspace: operation.workspace!,
+                        );
                         if (_current(operation)) {
                           setState(() {
                             if (_invitation?.id == submittedId) {
@@ -337,7 +384,9 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
             if (_message != null)
               Semantics(liveRegion: true, child: Text(_message!)),
             if (!_validContext)
-              const Text('Invitation context could not be verified. Return and reopen this page from your current workspace.'),
+              const Text(
+                'Invitation context could not be verified. Return and reopen this page from your current workspace.',
+              ),
             if (widget.ownerMode && _cannotCreate)
               const Text(
                 'Creation is blocked because an earlier issuance is unconfirmed. '

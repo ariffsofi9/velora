@@ -30,4 +30,40 @@ async function main() {
   child.on('error',()=>{console.error('Staff demo launch failed.');process.exitCode=1;});
   child.on('exit',code=>{process.exitCode=code??1;});
 }
-main().catch(()=>{console.error('Staff demo configuration or ports unavailable.');process.exitCode=1;});
+// Real emulator execution remains blocked until native containment acceptance.
+// Importing this module never starts services or performs port probes.
+const SCENARIOS = Object.freeze(['forced', 'graceful', 'root-exit', 'close-job',
+  'partial', 'assignment-failure', 'heartbeat-timeout', 'execution-timeout',
+  'owner-crash', 'owner-hang', 'breakaway', 'startup-timeout']);
+function preflight({project, executable, token, scenario, environment = {}}) {
+  if (project !== 'demo-velora-staff' || !path.isAbsolute(executable || '') ||
+      path.basename(executable).toLowerCase() !== 'staff-job-supervisor.exe' ||
+      !/^[a-f0-9]{32}$/.test(token || '') || !SCENARIOS.includes(scenario)) {
+    throw Error('SYNTHETIC_CONFIGURATION_REJECTED');
+  }
+  for (const [key, expected] of Object.entries({GCLOUD_PROJECT: project,
+    GOOGLE_CLOUD_PROJECT: project, FIRESTORE_EMULATOR_HOST: '127.0.0.1:28080',
+    FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:29099'})) {
+    if (environment[key] !== undefined && environment[key] !== expected) {
+      throw Error('SYNTHETIC_ENVIRONMENT_REJECTED');
+    }
+  }
+  if (['GOOGLE_APPLICATION_CREDENTIALS', 'FIREBASE_TOKEN', 'FIREBASE_CONFIG',
+    'NODE_OPTIONS'].some(key => environment[key] !== undefined)) {
+    throw Error('SYNTHETIC_ENVIRONMENT_REJECTED');
+  }
+  const mode = ['owner-crash', 'owner-hang'].includes(scenario) ? '--observe' : '--supervise';
+  return Object.freeze({executable, args: Object.freeze([mode, token, scenario]),
+    env: Object.freeze({})});
+}
+function launchSynthetic(options, spawnOwned = spawn) {
+  const spec = preflight(options);
+  if (!existsSync(spec.executable)) throw Error('SUPERVISOR_UNAVAILABLE');
+  return spawnOwned(spec.executable, spec.args, {shell: false, windowsHide: true,
+    env: spec.env, stdio: ['pipe', 'pipe', 'pipe']});
+}
+if (require.main === module) {
+  console.error('BLOCKED: Emulator execution requires separate containment acceptance.');
+  process.exitCode = 1;
+}
+module.exports = {SCENARIOS, preflight, launchSynthetic};

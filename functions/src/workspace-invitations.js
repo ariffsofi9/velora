@@ -1,5 +1,6 @@
 'use strict';
 const {activeMembershipGeneration} = require('./membership-generation');
+const {mutationEpisode} = require('./mutation-episode');
 const {removedStaff, applyStaffRejoin} = require('./membership-rejoin');
 
 const {randomBytes, createHash, timingSafeEqual} = require('node:crypto');
@@ -32,12 +33,13 @@ async function owner(tx, uid) {
   if (!id(cafeId) || !active(map, uid, cafeId)) fail('permission-denied', 'Verified workspace owner required.');
   const cafe = await tx.get(`cafes/${cafeId}`);
   const member = await tx.get(`cafes/${cafeId}/members/${uid}`);
+  const generation = activeMembershipGeneration(map, member, uid, cafeId, uid);
   if (cafe?.ownerUid !== uid || cafe.status !== 'active' || cafe.schemaVersion !== 1 ||
       !active(member, uid, cafeId) || member.role !== 'owner' ||
-      activeMembershipGeneration(map, member, uid, cafeId, uid) === null) {
+      generation === null) {
     fail('permission-denied', 'Verified workspace owner required.');
   }
-  return cafeId;
+  return {cafeId, generation};
 }
 function requestId(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(value)) {
@@ -46,11 +48,18 @@ function requestId(value) {
   return value;
 }
 const millis = (value) => value instanceof Date ? value.getTime() : value?.toMillis?.();
+function expectedOwner(episode, authority) {
+  if (episode.expectedCafeId !== authority.cafeId || episode.expectedMembershipGeneration !== authority.generation) {
+    fail('failed-precondition', 'Workspace membership changed. Reopen invitations before trying again.');
+  }
+}
 
 async function createStaffInvitation({auth, data, store, now = () => new Date(),
   toTimestamp = (d) => d, random = randomBytes, allowRejoin = false, resolveAccount}) {
-  const uid = actor(auth); input(data, ['email', 'requestId']);
-  const targetEmail = email(data.email); const request = requestId(data.requestId);
+  const uid = actor(auth);
+  const {episode, payload} = mutationEpisode(data, InvitationError);
+  input(payload, ['email', 'requestId']);
+  const targetEmail = email(payload.email); const request = requestId(payload.requestId);
   // Internal dependency only, never accepted in request data. Existing callable
   // wiring supplies neither option, so rejoin issuance remains disabled.
   let target;
@@ -66,7 +75,9 @@ async function createStaffInvitation({auth, data, store, now = () => new Date(),
   const code = `${invitationId}.${secret}`;
   const time = now(); const expires = new Date(time.getTime() + 24 * 60 * 60 * 1000);
   await store.runTransaction(async (tx) => {
-    const cafeId = await owner(tx, uid);
+    const authority = await owner(tx, uid);
+    expectedOwner(episode, authority);
+    const {cafeId, generation} = authority;
     let binding = {};
     if (target) {
       const mapping = await tx.get(`user_cafe_memberships/${target.uid}`);
@@ -87,6 +98,7 @@ async function createStaffInvitation({auth, data, store, now = () => new Date(),
     const invitePath = `workspace_invitations/${invitationId}`;
     if (await tx.get(invitePath)) fail('unavailable', 'Please create a new invitation request.');
     tx.create(invitePath, {cafeId, ownerUid: uid, email: targetEmail, role: 'staff',
+      issuerBindingVersion: 1, issuerMembershipGeneration: generation,
       tokenHash: hash(code), status: 'pending', schemaVersion: 1,
       createdAt: toTimestamp(time), expiresAt: toTimestamp(expires), ...binding});
     tx.create(receipt, {uid, cafeId, invitationId, createdAt: toTimestamp(time)});
@@ -96,11 +108,16 @@ async function createStaffInvitation({auth, data, store, now = () => new Date(),
   return {invitationId, code, expiresAt: expires.toISOString()};
 }
 async function revokeStaffInvitation({auth, data, store, now = () => new Date(), toTimestamp = (d) => d}) {
-  const uid = actor(auth); input(data, ['invitationId']);
-  if (!/^[a-f0-9]{32}$/.test(data.invitationId ?? '')) fail('invalid-argument', 'Invalid invitation ID.');
+  const uid = actor(auth);
+  const {episode, payload} = mutationEpisode(data, InvitationError);
+  input(payload, ['invitationId']);
+  if (!/^[a-f0-9]{32}$/.test(payload.invitationId ?? '')) fail('invalid-argument', 'Invalid invitation ID.');
   await store.runTransaction(async (tx) => {
-    const cafeId = await owner(tx, uid);
-    const path = `workspace_invitations/${data.invitationId}`;
+    // Current Owner authority may revoke stale or legacy invitations for cleanup.
+    const authority = await owner(tx, uid);
+    expectedOwner(episode, authority);
+    const {cafeId} = authority;
+    const path = `workspace_invitations/${payload.invitationId}`;
     const invite = await tx.get(path);
     if (!invite || invite.cafeId !== cafeId || invite.ownerUid !== uid || invite.schemaVersion !== 1) {
       fail('permission-denied', 'Invitation is unavailable.');
@@ -140,7 +157,17 @@ async function redeemStaffInvitation({auth, data, store, now = () => new Date(),
     if (invite.status !== 'pending') fail('failed-precondition', 'Invitation is revoked or already used.');
     const expiry = millis(invite.expiresAt);
     if (!Number.isFinite(expiry) || expiry <= now().getTime()) fail('failed-precondition', 'Invitation has expired.');
-    if (await owner(tx, invite.ownerUid) !== invite.cafeId) fail('permission-denied', 'Invitation is unavailable.');
+    // Issuer binding is independent of the optional Staff rejoin target binding.
+    // Missing bindings never inherit the current Owner generation, even zero.
+    if (!Object.hasOwn(invite, 'issuerBindingVersion') || invite.issuerBindingVersion !== 1 ||
+        !Object.hasOwn(invite, 'issuerMembershipGeneration') ||
+        !Number.isSafeInteger(invite.issuerMembershipGeneration) || invite.issuerMembershipGeneration < 0) {
+      fail('permission-denied', 'Invitation is unavailable.');
+    }
+    const issuer = await owner(tx, invite.ownerUid);
+    if (issuer.cafeId !== invite.cafeId || issuer.generation !== invite.issuerMembershipGeneration) {
+      fail('permission-denied', 'Invitation is unavailable.');
+    }
     const mapPath = `user_cafe_memberships/${uid}`;
     const memberPath = `cafes/${invite.cafeId}/members/${uid}`;
     const mapping = await tx.get(mapPath); const member = await tx.get(memberPath);

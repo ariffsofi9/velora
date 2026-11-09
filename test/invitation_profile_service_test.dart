@@ -1,6 +1,7 @@
 // Offline Auth/Functions doubles; never dispatches network requests.
 // ignore_for_file: subtype_of_sealed_class
 import 'dart:async';
+import 'package:velora/models/cafe_workspace.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -8,6 +9,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/services/firebase_emulator_config.dart';
 import 'package:velora/services/staff_invitation_service.dart';
 import 'helpers/invitation_firebase.dart';
+
+const ownerContext = CafeWorkspace(
+  cafeId: 'a',
+  uid: 'actor',
+  ownerUid: 'actor',
+  role: CafeRole.owner,
+);
 
 class _User extends Fake implements User {
   @override
@@ -78,11 +86,13 @@ class _Functions extends Fake implements FirebaseFunctions {
         await pending?.future;
         return name == 'createStaffInvitation'
             ? {
-                'invitationId': 'fixture-id',
-                'code': 'fixture-code',
-                'expiresAt': '2099-01-01',
+                'invitationId': 'a' * 32,
+                'code': '${'a' * 32}.${'b' * 64}',
+                'expiresAt': '2099-01-01T00:00:00.000Z',
               }
-            : <String, dynamic>{};
+            : <String, dynamic>{
+                name == 'revokeStaffInvitation' ? 'revoked' : 'joined': true,
+              };
       });
 }
 
@@ -131,7 +141,16 @@ void main() {
     'wrong runtime project always denies create/redeem before dispatch',
     () async {
       core.projectId = 'production';
-      await expectLater(service.create('staff@example.test'), throwsStateError);
+      await expectLater(
+        service.create('staff@example.test', workspace: ownerContext),
+        throwsA(
+          isA<StaffInvitationFailure>().having(
+            (e) => e.outcomeUnknown,
+            'unknown',
+            false,
+          ),
+        ),
+      );
       await expectLater(
         service.redeem('fixture-code'),
         throwsA(isA<StaffInvitationFailure>()),
@@ -143,7 +162,16 @@ void main() {
     'ineligible profiles cannot dispatch even with injected transport',
     () async {
       if (allowed) return;
-      await expectLater(service.create('staff@example.test'), throwsStateError);
+      await expectLater(
+        service.create('staff@example.test', workspace: ownerContext),
+        throwsA(
+          isA<StaffInvitationFailure>().having(
+            (e) => e.outcomeUnknown,
+            'unknown',
+            false,
+          ),
+        ),
+      );
       await expectLater(
         service.redeem('fixture-code'),
         throwsA(isA<StaffInvitationFailure>()),
@@ -152,14 +180,39 @@ void main() {
     },
   );
   group('eligible invitation service', () {
+    for (final action in ['create', 'revoke']) {
+      test(
+        '$action sends captured nonzero Owner generation exactly once',
+        () async {
+          const captured = CafeWorkspace(
+            cafeId: 'original',
+            uid: 'actor',
+            ownerUid: 'actor',
+            role: CafeRole.owner,
+            membershipGeneration: 7,
+          );
+          if (action == 'create') {
+            await service.create('staff@example.test', workspace: captured);
+          } else {
+            await service.revoke('fixture-id', workspace: captured);
+          }
+          expect(functions.calls, ['${action}StaffInvitation']);
+          expect(functions.payloads.single['expectedCafeId'], 'original');
+          expect(functions.payloads.single['expectedMembershipGeneration'], 7);
+        },
+      );
+    }
     test(
       'create/revoke/redeem route to exact emulator; no cafe/role fields',
       () async {
         expect(
-          (await service.create('staff@example.test')).code,
-          'fixture-code',
+          (await service.create(
+            'staff@example.test',
+            workspace: ownerContext,
+          )).code,
+          '${'a' * 32}.${'b' * 64}',
         );
-        await service.revoke('fixture-id');
+        await service.revoke('fixture-id', workspace: ownerContext);
         await service.redeem('fixture-code');
         expect(functions.calls, [
           'createStaffInvitation',
@@ -170,6 +223,8 @@ void main() {
         expect((functions.payloads.first as Map).keys.toSet(), {
           'email',
           'requestId',
+          'expectedCafeId',
+          'expectedMembershipGeneration',
         });
         expect(functions.payloads.last, {'code': 'fixture-code'});
       },
@@ -206,7 +261,7 @@ void main() {
         test('$action pending result invalidated: $transition', () async {
           functions.pending = Completer<void>();
           final request = action == 'create'
-              ? service.create('staff@example.test')
+              ? service.create('staff@example.test', workspace: ownerContext)
               : service.redeem('fixture-code');
           final rejected = expectLater(
             request,

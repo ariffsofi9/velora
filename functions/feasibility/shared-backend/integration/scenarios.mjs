@@ -4,17 +4,101 @@ function check(condition,message){if(!condition)throw Error(message);}
 const expected={expectedCafeId:'cafe',expectedMembershipGeneration:0,maxRecipes:1};
 const issue=async f=>{const r=await f.call('/ai/issue',expected);check(r.status===200,'ticket issuance');return r.body.ticketId;};
 const generate=(f,ticketId)=>f.call('/ai/generate',{...expected,ticketId});
-const invite=async f=>{const r=await f.call('/staff/create',{email:'joiner@example.test',requestId:'request_123456789'});check(r.status===200,'invite issuance');return r.body;};
+const invite=async f=>{const r=await f.call('/staff/create',{expectedCafeId:'cafe',expectedMembershipGeneration:0,email:'joiner@example.test',requestId:'request_123456789'});check(r.status===200,'invite issuance');return r.body;};
 const writeTo=(path)=>body=>body.writes.some(w=>(w.update?.name??w.delete)?.endsWith('/'+path));
+const invitationWrite = body => body.writes.some(w => /\/workspace_invitations\/[^/]+$/.test(w.update?.name ?? ''));
+const invitationContext = {expectedCafeId: 'cafe', expectedMembershipGeneration: 0};
+const invitationData = {...invitationContext, email: 'joiner@example.test', requestId: 'request_123456789'};
+const invitationState = f => Object.entries(f.simulator.snapshot()).filter(([p]) => p.startsWith('workspace_invitations/'));
+const businessPath = path => /^(workspace_invitations|workspace_invite_requests|workspace_invite_limits)\//.test(path);
 export const names=['authorized AI through REST','identity denials','workspace generation denials','AI concurrent replay',
   'AI quota issuance race','provider uncertainty','Staff admission and removal','Staff invitation revoke and theft',
   'conflict retries','atomic rollback and preconditions','applied lost commit recovery','unresolved receipt outcome',
-  'unknown AI dispatch commit','request and response bounds','wire masks and transforms','query fingerprint contention'];
+  'unknown AI dispatch commit','request and response bounds','wire masks and transforms','query fingerprint contention',
+  'invitation conflict retry preserves binding', 'invitation retry rejects changed Owner generation',
+  'invitation applied lost commit has no automatic retry', 'invitation unresolved commit has no automatic retry',
+  'invitation duplicate issuance and rollback'];
 export async function scenario(name){
   const f=fixture(); const results=[]; const logs=[];const previous=console.error;
   console.error=(...args)=>logs.push(args.map(String));
   try {
     switch(name){
+      case 'invitation conflict retry preserves binding': {
+        f.simulator.faults.push({type: 'conflict', when: invitationWrite});
+        const data = structuredClone(invitationData);
+        const r = await f.call('/staff/create', data); results.push(r);
+        check(r.status === 200, 'retry succeeds with original expectations');
+        check(JSON.stringify(data) === JSON.stringify(invitationData), 'caller expectations unchanged');
+        const commits = f.simulator.trace.filter(row => row.method === 'commit' && invitationWrite(row));
+        check(commits.length === 2, 'exactly one transactional retry');
+        const ids = commits.map(row => row.writes.find(w => /\/workspace_invitations\//.test(w.update?.name ?? '')).update.name);
+        check(ids[0] === ids[1], 'stable invitation ID within transaction retries');
+        const state = f.simulator.snapshot();
+        check(invitationState(f).length === 1, 'single committed invitation');
+        check(invitationState(f)[0][1].issuerMembershipGeneration === 0, 'original issuer generation');
+        check(Object.entries(state).filter(([p]) => p.startsWith('workspace_invite_requests/')).length === 1, 'single receipt');
+        const counters = Object.entries(state).filter(([p]) => p.startsWith('workspace_invite_limits/'));
+        check(counters.length === 1 && counters[0][1].count === 1, 'single counter increment');
+        break;
+      }
+      case 'invitation retry rejects changed Owner generation': {
+        const transact = f.store.runTransaction.bind(f.store);
+        let changed = false; const attempts = [];
+        f.store.runTransaction = action => transact(async tx => {
+          const operations = []; attempts.push(operations);
+          const observed = new Proxy(tx, {get(target, method) {
+            const member = target[method];
+            return typeof member !== 'function' ? member : (...args) => {
+              operations.push({method, path: args[0]}); return member.apply(target, args);
+            };
+          }});
+          const result = await action(observed);
+          if (!changed && operations.some(op => op.method === 'create' && op.path.startsWith('workspace_invitations/'))) {
+            changed = true;
+            // Mock concurrent commit invalidates the REST transaction's read versions.
+            await transact(async other => {
+              other.update('user_cafe_memberships/owner', {membershipGeneration: 1});
+              other.update('cafes/cafe/members/owner', {membershipGeneration: 1});
+            });
+          }
+          return result;
+        });
+        const data = structuredClone(invitationData);
+        const r = await f.call('/staff/create', data); results.push(r);
+        check(changed && r.status === 409 && r.body.error === 'failed-precondition', 'retry rejects stale capture');
+        check(data.expectedMembershipGeneration === 0, 'captured generation never refreshed');
+        check(attempts.length === 3, 'scope, conflicted domain attempt, and revalidated domain retry');
+        check(attempts.at(-1).some(op => op.method === 'get' && op.path === 'user_cafe_memberships/owner'), 'retry rechecks canonical authority');
+        check(attempts.at(-1).every(op => !businessPath(op.path)), 'retry rejects before business operations');
+        check(invitationState(f).length === 0, 'conflicted invitation not committed');
+        check(!Object.keys(f.simulator.snapshot()).some(businessPath), 'no receipt or counter committed');
+        break;
+      }
+      case 'invitation applied lost commit has no automatic retry':
+      case 'invitation unresolved commit has no automatic retry': {
+        const applied = name.includes('applied lost');
+        f.simulator.faults.push({type: applied ? 'applied-lost' : 'unresolved', when: invitationWrite});
+        const r = await f.call('/staff/create', invitationData); results.push(r);
+        check(r.status === 503 && r.body.error === 'unavailable', 'uncertainty is not success');
+        check(!Object.hasOwn(r.body, 'code') && !Object.hasOwn(r.body, 'invitationId'), 'no fabricated acknowledgement');
+        check(f.simulator.trace.filter(row => row.method === 'commit' && invitationWrite(row)).length === 1, 'no automatic issuance retry');
+        const state = f.simulator.snapshot();
+        check(invitationState(f).length === (applied ? 1 : 0), 'expected uncertain synthetic state');
+        check(Object.keys(state).filter(p => p.startsWith('workspace_invite_requests/')).length === (applied ? 1 : 0), 'receipt atomicity');
+        check(Object.entries(state).filter(([p]) => p.startsWith('workspace_invite_limits/')).length === (applied ? 1 : 0), 'counter atomicity');
+        break;
+      }
+      case 'invitation duplicate issuance and rollback': {
+        const inv = await invite(f);
+        const before = JSON.stringify(f.simulator.snapshot());
+        check((await f.call('/staff/create', invitationData)).status === 409, 'duplicate request denied');
+        check(JSON.stringify(f.simulator.snapshot()) === before, 'duplicate leaves all state unchanged');
+        f.simulator.faults.push({type: 'reject', when: invitationWrite});
+        check((await f.call('/staff/create', {...invitationData, requestId: 'request_987654321'})).status !== 200, 'rejected commit not acknowledged');
+        check(JSON.stringify(f.simulator.snapshot()) === before, 'rejected commit rolls back invitation receipt and counter');
+        check((await f.call('/staff/redeem', {code: inv.code}, 'joiner')).body.joined === true, 'original invitation remains usable');
+        break;
+      }
       case 'authorized AI through REST': {
         const ticket=await issue(f);const r=await generate(f,ticket);results.push(r);
         check(r.status===200&&r.body.recipes[0].ingredients[0].itemId==='item','scoped recipe');
@@ -59,9 +143,9 @@ export async function scenario(name){
         check((await f.call('/staff/list',{},'joiner')).status===403,'stale session');break;
       }
       case 'Staff invitation revoke and theft': {
-        check((await f.call('/staff/create',{email:'joiner@example.test',requestId:'request_123456789'},'staff')).status===403,'owner only');
+        check((await f.call('/staff/create',{expectedCafeId:'cafe',expectedMembershipGeneration:0,email:'joiner@example.test',requestId:'request_123456789'},'staff')).status===403,'owner only');
         const inv=await invite(f);check((await f.call('/staff/redeem',{code:inv.code},'outsider')).status!==200,'email bound');
-        check((await f.call('/staff/revoke',{invitationId:inv.invitationId})).status===200,'revoke');
+        check((await f.call('/staff/revoke',{expectedCafeId:'cafe',expectedMembershipGeneration:0,invitationId:inv.invitationId})).status===200,'revoke');
         check((await f.call('/staff/redeem',{code:inv.code},'joiner')).status!==200,'revoked');check(!f.simulator.snapshot()['user_cafe_memberships/joiner'],'no partial membership');break;
       }
       case 'conflict retries': {

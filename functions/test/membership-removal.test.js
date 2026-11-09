@@ -179,6 +179,7 @@ test('removed Staff loses backend authorization and cannot redeem an existing in
   const code = 'a'.repeat(32) + '.' + 'b'.repeat(64);
   f.store.put(`workspace_invitations/${'a'.repeat(32)}`, {ownerUid: 'owner', cafeId: 'a', role: 'staff',
     email: 'staff@example.test', status: 'pending', schemaVersion: 1,
+    issuerBindingVersion: 1, issuerMembershipGeneration: 0,
     expiresAt: new Date('2031-01-01Z'), tokenHash: createHash('sha256').update(code).digest('hex')});
   await assert.rejects(redeemStaffInvitation({auth: {uid: 'staff', token: {email_verified: true, email: 'staff@example.test'}},
     data: {code}, store: f.store, now: () => new Date('2030-01-01Z')}), {code: 'already-exists'});

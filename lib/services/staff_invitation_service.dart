@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:async';
 
 import 'firebase_emulator_config.dart';
+import '../models/cafe_workspace.dart';
 
 enum StaffRedeemStage {
   emulatorConfig,
@@ -19,7 +20,11 @@ class StaffInvitationFailure implements Exception {
   final StaffRedeemStage stage;
   final String code;
   final bool outcomeUnknown;
-  const StaffInvitationFailure._(this.stage, this.code, {this.outcomeUnknown = false});
+  const StaffInvitationFailure._(
+    this.stage,
+    this.code, {
+    this.outcomeUnknown = false,
+  });
 
   factory StaffInvitationFailure.fromError(
     StaffRedeemStage stage,
@@ -58,15 +63,26 @@ class StaffInvitationFailure implements Exception {
     // Only explicit callable rejections establish rejection after invocation.
     // Transport, decoding and session errors cannot rule out a server commit.
     const rejections = {
-      'unauthenticated', 'permission-denied', 'invalid-argument',
-      'already-exists', 'failed-precondition', 'resource-exhausted', 'not-found',
+      'unauthenticated',
+      'permission-denied',
+      'invalid-argument',
+      'already-exists',
+      'failed-precondition',
+      'resource-exhausted',
+      'not-found',
     };
-    final afterInvocation = stage == StaffRedeemStage.callableInvocation ||
+    final afterInvocation =
+        stage == StaffRedeemStage.callableInvocation ||
         stage == StaffRedeemStage.callableResponse;
-    final rejected = stage == StaffRedeemStage.callableInvocation &&
-        error is FirebaseFunctionsException && rejections.contains(code);
-    return StaffInvitationFailure._(stage, code,
-      outcomeUnknown: afterInvocation && !rejected);
+    final rejected =
+        stage == StaffRedeemStage.callableInvocation &&
+        error is FirebaseFunctionsException &&
+        rejections.contains(code);
+    return StaffInvitationFailure._(
+      stage,
+      code,
+      outcomeUnknown: afterInvocation && !rejected,
+    );
   }
 
   @override
@@ -87,13 +103,18 @@ class StaffInvitationAcknowledgement {
       response = await invoke();
     } catch (error) {
       throw StaffInvitationFailure.fromError(
-        StaffRedeemStage.callableInvocation, error);
+        StaffRedeemStage.callableInvocation,
+        error,
+      );
     }
     if (response is! Map<String, dynamic> ||
-        response[field] is! bool || response[field] != true) {
+        response[field] is! bool ||
+        response[field] != true) {
       throw const StaffInvitationFailure._(
-        StaffRedeemStage.callableResponse, 'invalid-acknowledgement',
-        outcomeUnknown: true);
+        StaffRedeemStage.callableResponse,
+        'invalid-acknowledgement',
+        outcomeUnknown: true,
+      );
     }
     return response;
   }
@@ -129,35 +150,50 @@ class StaffInvitationCreation {
       final id = response['invitationId'];
       final code = response['code'];
       final expiry = response['expiresAt'];
-      if (id is String && id.length == 32 && RegExp(r'^[a-f0-9]{32}$').hasMatch(id) &&
-          code is String && code.length == 97 && RegExp(r'^[a-f0-9]{32}\.[a-f0-9]{64}$').hasMatch(code) &&
-          code.startsWith('$id.') && expiry is String &&
-          RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$').hasMatch(expiry)) {
+      if (id is String &&
+          id.length == 32 &&
+          RegExp(r'^[a-f0-9]{32}$').hasMatch(id) &&
+          code is String &&
+          code.length == 97 &&
+          RegExp(r'^[a-f0-9]{32}\.[a-f0-9]{64}$').hasMatch(code) &&
+          code.startsWith('$id.') &&
+          expiry is String &&
+          RegExp(
+            r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$',
+          ).hasMatch(expiry)) {
         final parsed = DateTime.tryParse(expiry);
         // Round-trip rejects DateTime's permissive calendar overflow normalization.
-        if (parsed != null && parsed.toUtc().toIso8601String() == expiry &&
+        if (parsed != null &&
+            parsed.toUtc().toIso8601String() == expiry &&
             parsed.isAfter(now.toUtc())) {
           return StaffInvitation(id, code, expiry);
         }
       }
     }
     throw const StaffInvitationFailure._(
-      StaffRedeemStage.callableResponse, 'invalid-creation-acknowledgement',
-      outcomeUnknown: true);
+      StaffRedeemStage.callableResponse,
+      'invalid-creation-acknowledgement',
+      outcomeUnknown: true,
+    );
   }
 
   Future<StaffInvitation> issue(
-    Future<Object?> Function(void Function(StaffRedeemStage) onStage) operation, {
+    Future<Object?> Function(void Function(StaffRedeemStage) onStage)
+    operation, {
     DateTime Function()? clock,
   }) async {
     if (_blocked) {
       throw const StaffInvitationFailure._(
-        StaffRedeemStage.callableResponse, 'creation-unconfirmed',
-        outcomeUnknown: true);
+        StaffRedeemStage.callableResponse,
+        'creation-unconfirmed',
+        outcomeUnknown: true,
+      );
     }
     if (_pending) {
       throw const StaffInvitationFailure._(
-        StaffRedeemStage.callableConfig, 'creation-in-progress');
+        StaffRedeemStage.callableConfig,
+        'creation-in-progress',
+      );
     }
     _pending = true;
     var stage = StaffRedeemStage.callableConfig;
@@ -171,11 +207,15 @@ class StaffInvitationCreation {
       return validate(response, (clock ?? DateTime.now)());
     } catch (error) {
       var failure = error is StaffInvitationFailure
-          ? error : StaffInvitationFailure.fromError(stage, error);
+          ? error
+          : StaffInvitationFailure.fromError(stage, error);
       // A duplicate receipt may describe an earlier commit, never recovered success.
       if (invoked && failure.code == 'already-exists') {
         failure = const StaffInvitationFailure._(
-          StaffRedeemStage.callableInvocation, 'already-exists', outcomeUnknown: true);
+          StaffRedeemStage.callableInvocation,
+          'already-exists',
+          outcomeUnknown: true,
+        );
       }
       if (invoked && failure.outcomeUnknown) _blocked = true;
       throw failure;
@@ -186,8 +226,11 @@ class StaffInvitationCreation {
 }
 
 abstract interface class StaffInvitations {
-  Future<StaffInvitation> create(String email);
-  Future<void> revoke(String id);
+  Future<StaffInvitation> create(
+    String email, {
+    required CafeWorkspace workspace,
+  });
+  Future<void> revoke(String id, {required CafeWorkspace workspace});
   Future<void> redeem(String code);
 }
 
@@ -199,7 +242,8 @@ class FirebaseStaffInvitations implements StaffInvitations {
   bool get creationBlocked {
     final identity = auth ?? FirebaseAuth.instance;
     final uid = identity.currentUser?.uid;
-    return uid != null && StaffInvitationCreation.forSession(identity, uid).blocked;
+    return uid != null &&
+        StaffInvitationCreation.forSession(identity, uid).blocked;
   }
 
   Future<Map<String, dynamic>> _call(
@@ -249,22 +293,32 @@ class FirebaseStaffInvitations implements StaffInvitations {
         onStage?.call(StaffRedeemStage.callableResponse);
         return result.data;
       }
+
       return acknowledgement == null
           ? await invoke()
-          : await StaffInvitationAcknowledgement.confirm(acknowledgement, invoke);
+          : await StaffInvitationAcknowledgement.confirm(
+              acknowledgement,
+              invoke,
+            );
     } finally {
       await subscription.cancel();
     }
   }
 
   @override
-  Future<StaffInvitation> create(String email) async {
+  Future<StaffInvitation> create(
+    String email, {
+    required CafeWorkspace workspace,
+  }) async {
     final identity = auth ?? FirebaseAuth.instance;
     final uid = identity.currentUser?.uid;
     if (uid == null) {
       throw const StaffInvitationFailure._(
-        StaffRedeemStage.authSession, 'unauthenticated');
+        StaffRedeemStage.authSession,
+        'unauthenticated',
+      );
     }
+    final expected = _ownerData(workspace);
     final creation = StaffInvitationCreation.forSession(identity, uid);
     return creation.issue((onStage) async {
       // Unique local issuance request ID; not an authorization secret.
@@ -272,6 +326,7 @@ class FirebaseStaffInvitations implements StaffInvitations {
       return _call('createStaffInvitation', {
         'email': email,
         'requestId': id,
+        ...expected,
       }, onStage: onStage);
     });
   }
@@ -279,16 +334,48 @@ class FirebaseStaffInvitations implements StaffInvitations {
   static int _sequence = 0;
 
   @override
-  Future<void> revoke(String id) async {
+  Future<void> revoke(String id, {required CafeWorkspace workspace}) async {
     var stage = StaffRedeemStage.callableConfig;
     try {
-      await _call('revokeStaffInvitation', {'invitationId': id},
-        acknowledgement: 'revoked', onStage: (value) => stage = value);
+      final expected = _ownerData(workspace);
+      await _call(
+        'revokeStaffInvitation',
+        {'invitationId': id, ...expected},
+        acknowledgement: 'revoked',
+        onStage: (value) => stage = value,
+      );
     } on StaffInvitationFailure {
       rethrow;
     } catch (error) {
       throw StaffInvitationFailure.fromError(stage, error);
     }
+  }
+
+  // Capture the caller's original context; never refresh or adopt a new episode.
+  // These are request preconditions, not backend authorization.
+  Map<String, Object> _ownerData(CafeWorkspace workspace) {
+    bool validId(String value) =>
+        value.isNotEmpty &&
+        value.length <= 128 &&
+        value.trim() == value &&
+        !['.', '..'].contains(value) &&
+        !RegExp(r'[/\\\x00-\x1f]').hasMatch(value);
+    if (!validId(workspace.uid) ||
+        !validId(workspace.cafeId) ||
+        (auth ?? FirebaseAuth.instance).currentUser?.uid != workspace.uid ||
+        workspace.ownerUid != workspace.uid ||
+        workspace.role != CafeRole.owner ||
+        workspace.membershipGeneration < 0 ||
+        workspace.membershipGeneration > 9007199254740991) {
+      throw const StaffInvitationFailure._(
+        StaffRedeemStage.callableConfig,
+        'invalid-argument',
+      );
+    }
+    return {
+      'expectedCafeId': workspace.cafeId,
+      'expectedMembershipGeneration': workspace.membershipGeneration,
+    };
   }
 
   @override
@@ -333,9 +420,12 @@ class FirebaseStaffInvitations implements StaffInvitations {
           'session-changed',
         );
       }
-      await _call('redeemStaffInvitation', {
-        'code': code.trim(),
-      }, acknowledgement: 'joined', onStage: (value) => stage = value);
+      await _call(
+        'redeemStaffInvitation',
+        {'code': code.trim()},
+        acknowledgement: 'joined',
+        onStage: (value) => stage = value,
+      );
     } on StaffInvitationFailure {
       rethrow;
     } catch (error) {

@@ -60,8 +60,8 @@ test('workspace and user admitted quota caps reject dispatch', async () => {
 });
 test('Staff issuance, privacy, concurrent redemption, removal and historical replay', async () => {
   const f = setup();
-  assert.equal((await f.call('/staff/create', {email: 'joiner@example.test', requestId: 'request_123456789'}, 'staff')).status, 403);
-  const response = await f.call('/staff/create', {email: 'joiner@example.test', requestId: 'request_123456789'});
+  assert.equal((await f.call('/staff/create', {expectedCafeId: 'cafe', expectedMembershipGeneration: 0, email: 'joiner@example.test', requestId: 'request_123456789'}, 'staff')).status, 403);
+  const response = await f.call('/staff/create', {expectedCafeId: 'cafe', expectedMembershipGeneration: 0, email: 'joiner@example.test', requestId: 'request_123456789'});
   assert.equal(response.status, 200); const invite = await response.json();
   assert.ok(!JSON.stringify(f.store.snapshot()).includes(invite.code));
   assert.equal((await f.call('/staff/redeem', {code: invite.code}, 'outsider')).status, 403);
@@ -77,9 +77,9 @@ test('Staff issuance, privacy, concurrent redemption, removal and historical rep
 test('revoked and expired invitations cannot admit membership', async () => {
   for (const expired of [false, true]) {
     const f = setup();
-    const invite = await (await f.call('/staff/create', {email: 'joiner@example.test', requestId: 'request_123456789'})).json();
+    const invite = await (await f.call('/staff/create', {expectedCafeId: 'cafe', expectedMembershipGeneration: 0, email: 'joiner@example.test', requestId: 'request_123456789'})).json();
     if (expired) f.advance(86400001);
-    else assert.equal((await f.call('/staff/revoke', {invitationId: invite.invitationId})).status, 200);
+    else assert.equal((await f.call('/staff/revoke', {expectedCafeId: 'cafe', expectedMembershipGeneration: 0, invitationId: invite.invitationId})).status, 200);
     // Advance expiry directly in the store to avoid also expiring the synthetic ID token.
     if (expired) f.advance(-86400001);
     if (expired) await f.store.runTransaction(async tx => tx.update(`workspace_invitations/${invite.invitationId}`, {expiresAt: new Date(0)}));
@@ -103,7 +103,7 @@ test('invitation transaction failure cannot publish partial records', async () =
     if (++count === 2) f.store.failCommit = true;
     return original(action);
   };
-  assert.equal((await f.call('/staff/create', {email: 'joiner@example.test', requestId: 'request_123456789'})).status, 503);
+  assert.equal((await f.call('/staff/create', {expectedCafeId: 'cafe', expectedMembershipGeneration: 0, email: 'joiner@example.test', requestId: 'request_123456789'})).status, 503);
   assert.deepEqual(f.store.snapshot(), before);
 });
 test('payload conflict and client operation injection do not dispatch', async () => {
