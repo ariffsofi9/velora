@@ -242,6 +242,45 @@ class _User extends Fake implements User {
 }
 
 void main() {
+  test('typed HTTPS rejection preserves definite failure classification', () {
+    final failure = StaffInvitationFailure.fromError(
+      StaffRedeemStage.callableInvocation,
+      const StaffInvitationTransportException(
+        'permission-denied',
+        outcomeUnknown: false,
+      ),
+    );
+    expect(failure.code, 'permission-denied');
+    expect(failure.outcomeUnknown, false);
+  });
+
+  test('typed uncertain HTTPS error cannot become definite rejection', () {
+    final failure = StaffInvitationFailure.fromError(
+      StaffRedeemStage.callableInvocation,
+      const StaffInvitationTransportException(
+        'permission-denied',
+        outcomeUnknown: true,
+      ),
+    );
+    expect(failure.outcomeUnknown, true);
+    expect(failure.toString(), isNot(contains('Bearer')));
+  });
+
+  test('shared Owner capture preserves zero and nonzero expectations', () {
+    for (final generation in [0, 7]) {
+      expect(
+        captureInvitationOwnerContext(
+          _ownerScope('owner', 'cafe', generation),
+          'owner',
+        ),
+        {'expectedCafeId': 'cafe', 'expectedMembershipGeneration': generation},
+      );
+    }
+    expect(
+      () => captureInvitationOwnerContext(_ownerScope('owner'), 'other'),
+      throwsA(isA<StaffInvitationFailure>()),
+    );
+  });
   setUp(installInvitationFirebase);
   group('actual invitation callable adapter', () {
     final profile = FirebaseEmulatorConfig.invitationProfileAllows(

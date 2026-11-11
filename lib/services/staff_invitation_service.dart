@@ -16,6 +16,18 @@ enum StaffRedeemStage {
   callableResponse,
 }
 
+/// Safe transport metadata only; never carries server messages or response data.
+class StaffInvitationTransportException implements Exception {
+  final String code;
+  final bool outcomeUnknown;
+  const StaffInvitationTransportException(
+    this.code, {
+    required this.outcomeUnknown,
+  });
+  @override
+  String toString() => 'Invitation transport failed.';
+}
+
 class StaffInvitationFailure implements Exception {
   final StaffRedeemStage stage;
   final String code;
@@ -55,7 +67,9 @@ class StaffInvitationFailure implements Exception {
       'invalid-api-key',
       'app-not-authorized',
     };
-    final code = error is TimeoutException
+    final code = error is StaffInvitationTransportException
+        ? (allowed.contains(error.code) ? error.code : 'unknown')
+        : error is TimeoutException
         ? 'deadline-exceeded'
         : error is FirebaseException && allowed.contains(error.code)
         ? error.code
@@ -76,12 +90,17 @@ class StaffInvitationFailure implements Exception {
         stage == StaffRedeemStage.callableResponse;
     final rejected =
         stage == StaffRedeemStage.callableInvocation &&
-        error is FirebaseFunctionsException &&
+        (error is FirebaseFunctionsException ||
+            (error is StaffInvitationTransportException &&
+                !error.outcomeUnknown)) &&
         rejections.contains(code);
     return StaffInvitationFailure._(
       stage,
       code,
-      outcomeUnknown: afterInvocation && !rejected,
+      outcomeUnknown:
+          (error is StaffInvitationTransportException &&
+              error.outcomeUnknown) ||
+          (afterInvocation && !rejected),
     );
   }
 
@@ -234,6 +253,35 @@ abstract interface class StaffInvitations {
   Future<void> redeem(String code);
 }
 
+/// Shared client precondition validation; this never grants backend authority.
+Map<String, Object> captureInvitationOwnerContext(
+  CafeWorkspace workspace,
+  String? uid,
+) {
+  bool validId(String value) =>
+      value.isNotEmpty &&
+      value.length <= 128 &&
+      value.trim() == value &&
+      !['.', '..'].contains(value) &&
+      !RegExp(r'[/\\\x00-\x1f]').hasMatch(value);
+  if (!validId(workspace.uid) ||
+      !validId(workspace.cafeId) ||
+      uid != workspace.uid ||
+      workspace.ownerUid != workspace.uid ||
+      workspace.role != CafeRole.owner ||
+      workspace.membershipGeneration < 0 ||
+      workspace.membershipGeneration > 9007199254740991) {
+    throw const StaffInvitationFailure._(
+      StaffRedeemStage.callableConfig,
+      'invalid-argument',
+    );
+  }
+  return {
+    'expectedCafeId': workspace.cafeId,
+    'expectedMembershipGeneration': workspace.membershipGeneration,
+  };
+}
+
 class FirebaseStaffInvitations implements StaffInvitations {
   final FirebaseFunctions? functions;
   final FirebaseAuth? auth;
@@ -354,28 +402,10 @@ class FirebaseStaffInvitations implements StaffInvitations {
   // Capture the caller's original context; never refresh or adopt a new episode.
   // These are request preconditions, not backend authorization.
   Map<String, Object> _ownerData(CafeWorkspace workspace) {
-    bool validId(String value) =>
-        value.isNotEmpty &&
-        value.length <= 128 &&
-        value.trim() == value &&
-        !['.', '..'].contains(value) &&
-        !RegExp(r'[/\\\x00-\x1f]').hasMatch(value);
-    if (!validId(workspace.uid) ||
-        !validId(workspace.cafeId) ||
-        (auth ?? FirebaseAuth.instance).currentUser?.uid != workspace.uid ||
-        workspace.ownerUid != workspace.uid ||
-        workspace.role != CafeRole.owner ||
-        workspace.membershipGeneration < 0 ||
-        workspace.membershipGeneration > 9007199254740991) {
-      throw const StaffInvitationFailure._(
-        StaffRedeemStage.callableConfig,
-        'invalid-argument',
-      );
-    }
-    return {
-      'expectedCafeId': workspace.cafeId,
-      'expectedMembershipGeneration': workspace.membershipGeneration,
-    };
+    return captureInvitationOwnerContext(
+      workspace,
+      (auth ?? FirebaseAuth.instance).currentUser?.uid,
+    );
   }
 
   @override

@@ -190,4 +190,46 @@ async function redeemStaffInvitation({auth, data, store, now = () => new Date(),
     return {joined: true, cafeId: invite.cafeId};
   });
 }
-module.exports = {InvitationError, createStaffInvitation, revokeStaffInvitation, redeemStaffInvitation};
+// Receipt observation only. Does not recover delivery, issue secrets or resolve
+// absent receipts: a previously dispatched transaction may still commit later.
+async function reconcileStaffInvitation({auth, data, store, now = () => new Date()}) {
+  const uid = actor(auth);
+  if (auth.token?.email_verified !== true) fail('unauthenticated', 'Verified identity required.');
+  const {episode, payload} = mutationEpisode(data, InvitationError);
+  input(payload, ['requestId']);
+  const request = requestId(payload.requestId);
+  return store.runTransaction(async tx => {
+    const authority = await owner(tx, uid);
+    expectedOwner(episode, authority);
+    const receipt = await tx.get(`workspace_invite_requests/${hash(`${uid}\0${request}`)}`);
+    if (receipt === null || receipt === undefined) return {state: 'unknown'};
+    if (receipt.uid !== uid || receipt.cafeId !== authority.cafeId) {
+      fail('permission-denied', 'Invitation observation unavailable.');
+    }
+    const validTime = value => Number.isFinite(millis(value));
+    if (!/^[a-f0-9]{32}$/.test(receipt.invitationId ?? '') || !validTime(receipt.createdAt)) {
+      fail('unavailable', 'Invitation observation unavailable.');
+    }
+    const invite = await tx.get(`workspace_invitations/${receipt.invitationId}`);
+    if (!invite || invite.schemaVersion !== 1 || invite.ownerUid !== uid ||
+        invite.cafeId !== authority.cafeId || invite.role !== 'staff' ||
+        invite.issuerBindingVersion !== 1 || !Number.isSafeInteger(invite.issuerMembershipGeneration) ||
+        invite.issuerMembershipGeneration < 0 || invite.issuerMembershipGeneration !== authority.generation ||
+        typeof invite.tokenHash !== 'string' || !/^[a-f0-9]{64}$/.test(invite.tokenHash) ||
+        typeof invite.email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invite.email) ||
+        !validTime(invite.createdAt) || millis(invite.createdAt) !== millis(receipt.createdAt) ||
+        !validTime(invite.expiresAt) || millis(invite.expiresAt) <= millis(invite.createdAt) ||
+        !['pending', 'revoked', 'redeemed'].includes(invite.status)) {
+      fail('unavailable', 'Invitation observation unavailable.');
+    }
+    if ((invite.status === 'revoked' && (!validTime(invite.revokedAt) || invite.revokedBy !== uid)) ||
+        (invite.status === 'redeemed' && (!validTime(invite.redeemedAt) || !id(invite.redeemedBy)))) {
+      fail('unavailable', 'Invitation observation unavailable.');
+    }
+    const time = millis(now());
+    if (!Number.isFinite(time)) fail('unavailable', 'Invitation observation unavailable.');
+    return {state: 'committed', invitationState:
+      invite.status === 'pending' && millis(invite.expiresAt) <= time ? 'expired' : invite.status};
+  });
+}
+module.exports = {InvitationError, createStaffInvitation, revokeStaffInvitation, redeemStaffInvitation, reconcileStaffInvitation};
