@@ -9,6 +9,7 @@ import {createWorkspaceHttp} from '../https/workspace-http.mjs';
 import {createStaffHttp} from '../https/staff-http.mjs';
 import {createMenuHttp} from '../https/menu-http.mjs';
 import {createAiHttp} from '../https/ai-http.mjs';
+import {createSavedRecipesHttp} from '../https/saved-recipes-http.mjs';
 import {createHttpPolicy} from './http-policy.mjs';
 
 const inventoryRoutes = ['/inventory/create', '/inventory/update', '/inventory/adjust-stock', '/inventory/lifecycle', '/inventory/reconcile'];
@@ -17,6 +18,7 @@ const workspaceRoutes = ['/workspace/create'];
 const staffRoutes = ['/staff/list', '/staff/remove'];
 const menuRoutes = ['/menu/create', '/menu/get', '/menu/list', '/menu/update', '/menu/lifecycle'];
 const aiRoutes = ['/ai/issue', '/ai/generate'];
+const recipeRoutes = ['/recipes/save', '/recipes/list', '/recipes/get', '/recipes/lifecycle', '/recipes/reconcile'];
 
 // Unwired TEST-only composition. No listener, defaults for network/credentials,
 // SDK initialization, environment discovery or import of src/index.js.
@@ -24,8 +26,9 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
   now = Date.now, maxConcurrent = 8, httpTimeoutMs = 5000, identityTimeoutMs = 5000,
   verificationTimeoutMs = 5000, bodyTimeoutMs = 5000, cleanupTimeoutMs = 100,
   transactionTimeoutMs = 20000, rpcTimeoutMs = 5000, maxResponseBytes = 262144,
-  workspaceIdFactory, allowInvitationRejoin = false, ai} = {}) {
+  workspaceIdFactory, allowInvitationRejoin = false, enableSavedRecipes = false, ai} = {}) {
   requireTestProject(projectId);
+  if (typeof enableSavedRecipes !== 'boolean') throw new BackendError('configuration', 'invalid-configuration');
   if (!credential || credential.projectId !== projectId || typeof now !== 'function') {
     throw new BackendError('configuration', 'invalid-configuration');
   }
@@ -52,6 +55,7 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
   createStaffHttp({...common, verifyIdentity, store, timestamp: store.timestamp, getAccount,
     accountTimeoutMs: identityTimeoutMs});
   createMenuHttp({...common, verifyIdentity, store, timestamp: store.timestamp});
+  if (enableSavedRecipes) createSavedRecipesHttp({...common, verifyIdentity, store, timestamp: store.timestamp});
   // Trusted explicit injection only. Existing callers keep AI unavailable;
   // provider traffic never passes through the Google-only transport.
   if (ai !== undefined && (!ai || typeof ai !== 'object' || Array.isArray(ai) ||
@@ -72,6 +76,8 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
       capturedToken = token; capturedIdentity = identity;
       return identity;
     };
+    // Preserve the trusted verifier binding for the token-based Saved Recipes domain.
+    Object.assign(capture, {projectId});
     const scopedStore = Object.freeze({...store, runTransaction: async callback => {
       if (!capturedToken || !capturedIdentity) throw new BackendError('identity', 'unauthenticated');
       // Body reading can outlast identity freshness. Reuse the real verifier
@@ -92,6 +98,8 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
             getAccount, accountTimeoutMs: identityTimeoutMs})
           : menuRoutes.includes(path)
             ? createMenuHttp({...common, verifyIdentity: capture, store: scopedStore, timestamp: store.timestamp})
+            : enableSavedRecipes && recipeRoutes.includes(path)
+              ? createSavedRecipesHttp({...common, verifyIdentity: capture, store: scopedStore, timestamp: store.timestamp})
             : aiOptions && aiRoutes.includes(path)
               ? createAiHttp({...common, ...aiOptions, verifyIdentity: capture, store: scopedStore})
               : createInvitationHttp({...common, ...rejoin, verifyIdentity: capture, store: scopedStore, now: () => new Date(now())});
@@ -101,6 +109,6 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
   };
   const fetch = createHttpPolicy({projectId, publicOrigin, allowedOrigins, maxConcurrent,
     routes: [...inventoryRoutes, ...invitationRoutes, ...workspaceRoutes, ...staffRoutes, ...menuRoutes,
-      ...(aiOptions ? aiRoutes : [])], handler});
+      ...(aiOptions ? aiRoutes : []), ...(enableSavedRecipes ? recipeRoutes : [])], handler});
   return Object.freeze({projectId, fetch});
 }

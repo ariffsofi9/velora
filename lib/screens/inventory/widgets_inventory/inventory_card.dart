@@ -120,7 +120,7 @@ class InventoryCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 5),
                     Text(
-                      '${item.category} \u2022 ${item.quantity} in stock',
+                      '${item.category} \u2022 ${item.quantity} ${item.unit} in stock',
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: AppColors.textSecondary,
                       ),

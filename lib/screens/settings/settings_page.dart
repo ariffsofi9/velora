@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import '../../core/theme/app_tokens.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/user_profile_service.dart';
+import '../../services/workspace_session.dart';
 import '../auth/login_page.dart';
 import '../team/team_management_page.dart';
 import '../menu/menu_page.dart';
@@ -17,14 +20,44 @@ import 'widgets_settings/profile_header_card.dart';
 import 'widgets_settings/settings_section_card.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  final WorkspaceSession? workspaceSession;
+  final FirebaseAuth? auth;
+  final UserProfileService? profileService;
+  final Future<SharedPreferences> Function()? preferences;
+  const SettingsPage({
+    super.key,
+    this.workspaceSession,
+    this.auth,
+    this.profileService,
+    this.preferences,
+  });
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  final UserProfileService _userProfileService = UserProfileService();
+  FirebaseAuth get _auth => widget.auth ?? FirebaseAuth.instance;
+  StreamSubscription<User?>? _authChanges;
+  int _generation = 0;
+  bool _loggingOut = false, _saving = false, _preferencesReady = false;
+  String? _preferencesError;
+  bool get _authorized =>
+      !_loggingOut &&
+      widget.workspaceSession?.isActive == true &&
+      _auth.currentUser?.uid == widget.workspaceSession?.uid &&
+      _auth.currentUser?.emailVerified == true;
+  bool _current(int generation) =>
+      mounted && generation == _generation && _authorized;
+  Future<SharedPreferences> _preferences() =>
+      (widget.preferences ?? SharedPreferences.getInstance)();
+  void _feedback(String message) {
+    if (mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
+  }
 
   bool nearExpiryAlerts = true;
   bool lowStockAlerts = true;
@@ -34,50 +67,143 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    _authChanges = _auth.idTokenChanges().listen(
+      (user) {
+        if (user?.uid != widget.workspaceSession?.uid ||
+            user?.emailVerified != true) {
+          _generation++;
+          widget.workspaceSession?.invalidate();
+        }
+        if (mounted) setState(() {});
+      },
+      onError: (Object _) {
+        _generation++;
+        widget.workspaceSession?.invalidate();
+        if (mounted) setState(() {});
+      },
+    );
     _loadSettings();
     _createUserProfile();
   }
 
   Future<void> _createUserProfile() async {
-    final user = FirebaseAuth.instance.currentUser;
-
-    if (user == null) return;
-
-    await _userProfileService.createUserProfileIfNeeded(user);
+    if (!_authorized) return;
+    final generation = _generation;
+    try {
+      await (widget.profileService ?? UserProfileService())
+          .createUserProfileIfNeeded(_auth.currentUser!);
+    } catch (_) {
+      if (_current(generation)) {
+        _feedback('Profile could not be loaded. Please retry later.');
+      }
+    }
   }
 
   Future<void> _loadSettings() async {
-    final prefs = await SharedPreferences.getInstance();
+    if (!_authorized) return;
+    final generation = _generation;
+    try {
+      final prefs = await _preferences();
+      if (!_current(generation)) return;
+      setState(() {
+        nearExpiryAlerts = prefs.getBool('nearExpiryAlerts') ?? true;
+        lowStockAlerts = prefs.getBool('lowStockAlerts') ?? true;
+        activityUpdates = prefs.getBool('activityUpdates') ?? false;
+        darkModePrep = prefs.getBool('darkModePrep') ?? false;
+        _preferencesReady = true;
+        _preferencesError = null;
+      });
+    } catch (_) {
+      if (_current(generation)) {
+        setState(() {
+          _preferencesReady = false;
+          _preferencesError = 'Local preferences could not be loaded.';
+        });
+      }
+    }
+  }
 
-    setState(() {
-      nearExpiryAlerts = prefs.getBool('nearExpiryAlerts') ?? true;
-      lowStockAlerts = prefs.getBool('lowStockAlerts') ?? true;
-      activityUpdates = prefs.getBool('activityUpdates') ?? false;
-      darkModePrep = prefs.getBool('darkModePrep') ?? false;
-    });
+  bool _value(String key) => switch (key) {
+    'nearExpiryAlerts' => nearExpiryAlerts,
+    'lowStockAlerts' => lowStockAlerts,
+    'activityUpdates' => activityUpdates,
+    _ => darkModePrep,
+  };
+  void _setValue(String key, bool value) {
+    switch (key) {
+      case 'nearExpiryAlerts':
+        nearExpiryAlerts = value;
+      case 'lowStockAlerts':
+        lowStockAlerts = value;
+      case 'activityUpdates':
+        activityUpdates = value;
+      case 'darkModePrep':
+        darkModePrep = value;
+    }
   }
 
   Future<void> _saveBool(String key, bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(key, value);
+    if (!_authorized || !_preferencesReady || _saving) return;
+    final generation = _generation, previous = _value(key);
+    setState(() {
+      _saving = true;
+      _setValue(key, value);
+    });
+    try {
+      final prefs = await _preferences();
+      if (!_current(generation)) return;
+      if (!await prefs.setBool(key, value)) {
+        throw StateError('Preference not saved');
+      }
+    } catch (_) {
+      if (_current(generation)) {
+        setState(() => _setValue(key, previous));
+        _feedback('Preference could not be saved. Please retry.');
+      }
+    } finally {
+      if (mounted && generation == _generation) setState(() => _saving = false);
+    }
   }
 
   Future<void> _openEditProfile(User user) async {
+    if (!_authorized || _auth.currentUser?.uid != user.uid) return;
+    final generation = _generation;
     final updated = await showDialog<bool>(
       context: context,
       builder: (_) => EditProfileDialog(user: user),
     );
 
-    if (updated == true && mounted) {
-      await FirebaseAuth.instance.currentUser?.reload();
-      setState(() {});
+    if (updated == true && _current(generation)) {
+      try {
+        await user.reload();
+        if (_current(generation)) setState(() {});
+      } catch (_) {
+        if (_current(generation)) _feedback('Profile could not be refreshed.');
+      }
     }
   }
 
   Future<void> _handleLogout() async {
-    await FirebaseAuth.instance.signOut();
+    if (_loggingOut) return;
+    _generation++;
+    widget.workspaceSession?.invalidate();
+    setState(() => _loggingOut = true);
+    try {
+      await _auth.signOut();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loggingOut = false);
+        _feedback('Sign out failed. Please retry.');
+      }
+      return;
+    }
 
     if (!mounted) return;
+    if (_auth.currentUser != null) {
+      setState(() => _loggingOut = false);
+      _feedback('Session changed. Please sign out again.');
+      return;
+    }
 
     Navigator.pushAndRemoveUntil(
       context,
@@ -87,6 +213,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _openTeamManagement() {
+    if (!_authorized) return;
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const TeamManagementPage()),
@@ -94,13 +221,13 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void _openAppearance() {
+    if (!_authorized || !_preferencesReady || _saving) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => AppearancePage(
           initialDarkModePreference: darkModePrep,
           onPreferenceChanged: (value) {
-            setState(() => darkModePrep = value);
             _saveBool('darkModePrep', value);
           },
         ),
@@ -109,8 +236,28 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   @override
+  void didUpdateWidget(covariant SettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession)) {
+      _generation++;
+      _saving = false;
+      _preferencesReady = false;
+      _loadSettings();
+      _createUserProfile();
+    }
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _authChanges?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+    final authorized = _authorized;
+    final user = authorized ? _auth.currentUser : null;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -154,47 +301,66 @@ class _SettingsPageState extends State<SettingsPage> {
                       title: 'Edit Profile',
                       subtitle: 'Tap profile card to update name and photo',
                     ),
-                    const _AccountTile(
+                    _AccountTile(
                       icon: Icons.admin_panel_settings_outlined,
                       title: 'Account Role',
-                      subtitle: 'Current user is prepared as Owner by default',
+                      subtitle: authorized
+                          ? 'Verified workspace role: ${widget.workspaceSession!.isOwner ? 'Owner' : 'Staff'}'
+                          : 'Workspace access not verified',
                     ),
                     _AccountTile(
                       icon: Icons.groups_2_outlined,
                       title: 'Team Management',
                       subtitle: 'View verified café membership',
-                      onTap: _openTeamManagement,
+                      onTap: authorized ? _openTeamManagement : null,
                     ),
                     _AccountTile(
                       icon: Icons.restaurant_menu_rounded,
                       title: 'Menu Management',
                       subtitle: 'View menu items and availability',
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const MenuPage()),
-                      ),
+                      onTap: !authorized
+                          ? null
+                          : () {
+                              if (!_authorized) return;
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const MenuPage(),
+                                ),
+                              );
+                            },
                     ),
                   ],
                 ),
 
                 const SizedBox(height: 16),
 
-                NotificationSettingsCard(
-                  nearExpiryAlerts: nearExpiryAlerts,
-                  lowStockAlerts: lowStockAlerts,
-                  activityUpdates: activityUpdates,
-                  onNearExpiryChanged: (value) {
-                    setState(() => nearExpiryAlerts = value);
-                    _saveBool('nearExpiryAlerts', value);
-                  },
-                  onLowStockChanged: (value) {
-                    setState(() => lowStockAlerts = value);
-                    _saveBool('lowStockAlerts', value);
-                  },
-                  onActivityChanged: (value) {
-                    setState(() => activityUpdates = value);
-                    _saveBool('activityUpdates', value);
-                  },
+                const Text(
+                  'Notification choices are stored on this device only. Scheduling and delivery are not enabled here.',
+                ),
+                if (_preferencesError != null && authorized) ...[
+                  Text(_preferencesError!),
+                  TextButton(
+                    onPressed: _loadSettings,
+                    child: const Text('Retry preferences'),
+                  ),
+                ],
+                IgnorePointer(
+                  ignoring: !authorized || !_preferencesReady || _saving,
+                  child: NotificationSettingsCard(
+                    nearExpiryAlerts: nearExpiryAlerts,
+                    lowStockAlerts: lowStockAlerts,
+                    activityUpdates: activityUpdates,
+                    onNearExpiryChanged: (value) {
+                      _saveBool('nearExpiryAlerts', value);
+                    },
+                    onLowStockChanged: (value) {
+                      _saveBool('lowStockAlerts', value);
+                    },
+                    onActivityChanged: (value) {
+                      _saveBool('activityUpdates', value);
+                    },
+                  ),
                 ),
 
                 const SizedBox(height: 16),

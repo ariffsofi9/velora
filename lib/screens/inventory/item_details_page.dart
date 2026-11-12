@@ -38,6 +38,21 @@ class ItemDetailsPage extends StatelessWidget {
     this.lifecycleManager,
   });
 
+  bool get _hasVerifiedContext =>
+      workspaceSession != null &&
+      workspaceSession!.isActive &&
+      (repository == null || identical(repository!.session, workspaceSession));
+
+  void _showMutationsUnavailable(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Inventory changes are unavailable until secure workspace updates are enabled.',
+        ),
+      ),
+    );
+  }
+
   bool get hasImage => item.imageUrl.trim().isNotEmpty;
 
   IconData _icon(String category) {
@@ -81,12 +96,16 @@ class ItemDetailsPage extends StatelessWidget {
   }
 
   Future<void> _goToEdit(BuildContext context) async {
-    if (workspaceSession == null || item.id.trim().isEmpty) {
+    if (!_hasVerifiedContext || item.id.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Editing requires a verified workspace item.'),
         ),
       );
+      return;
+    }
+    if (updater == null) {
+      _showMutationsUnavailable(context);
       return;
     }
     final updated = await Navigator.push<bool>(
@@ -107,12 +126,16 @@ class ItemDetailsPage extends StatelessWidget {
     BuildContext context,
     StockAdjustmentType type,
   ) async {
-    if (workspaceSession == null || item.id.trim().isEmpty) {
+    if (!_hasVerifiedContext || item.id.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Stock adjustments require a verified workspace item.'),
         ),
       );
+      return;
+    }
+    if (stockAdjuster == null) {
+      _showMutationsUnavailable(context);
       return;
     }
     final adjusted = await Navigator.push<bool>(
@@ -137,7 +160,7 @@ class ItemDetailsPage extends StatelessWidget {
   }
 
   void _goToHistory(BuildContext context) {
-    if (workspaceSession == null || item.id.trim().isEmpty) {
+    if (!_hasVerifiedContext || item.id.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Stock history requires a verified workspace item.'),
@@ -159,6 +182,14 @@ class ItemDetailsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (workspaceSession != null && !_hasVerifiedContext) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Item Details')),
+        body: const Center(
+          child: Text('Workspace access could not be verified.'),
+        ),
+      );
+    }
     final width = MediaQuery.of(context).size.width;
     final isSmall = width < 370;
 
@@ -207,7 +238,7 @@ class ItemDetailsPage extends StatelessWidget {
                 rows: [
                   ItemDetailInfoRow(
                     label: 'Quantity',
-                    value: item.quantity.toString(),
+                    value: '${item.quantity} ${item.unit}',
                   ),
                   ItemDetailInfoRow(label: 'Category', value: item.category),
                   ItemDetailInfoRow(
@@ -233,12 +264,24 @@ class ItemDetailsPage extends StatelessWidget {
                 label: const Text('Stock History'),
               ),
               const SizedBox(height: 12),
-              InventoryLifecycleActionButton(
-                workspaceSession: workspaceSession,
-                item: item,
-                manager: lifecycleManager,
-                onChanged: () => Navigator.pop(context, true),
-              ),
+              if (_hasVerifiedContext && lifecycleManager != null)
+                InventoryLifecycleActionButton(
+                  workspaceSession: workspaceSession,
+                  item: item,
+                  manager: lifecycleManager,
+                  onChanged: () => Navigator.pop(context, true),
+                )
+              else
+                OutlinedButton.icon(
+                  key: ValueKey(
+                    item.isArchived ? 'restore-item' : 'archive-item',
+                  ),
+                  onPressed: () => _showMutationsUnavailable(context),
+                  icon: const Icon(Icons.archive_outlined),
+                  label: Text(
+                    item.isArchived ? 'Restore Item' : 'Archive Item',
+                  ),
+                ),
             ],
           ),
         ),

@@ -365,7 +365,7 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: InventoryPage(
-            workspaceSession: session('cafe-a'),
+            workspaceSession: repository.session,
             repository: repository,
             csvExportService: InventoryCsvExportService(
               repository: repository,
@@ -496,20 +496,25 @@ void main() {
         dataSource: source,
       );
       final downloader = Downloader();
-      final service = InventoryCsvExportService(
-        repository: repository,
-        auth: auth,
-        resolver: resolver,
-        downloader: downloader,
-      );
-      Widget host(String cafe) => MaterialApp(
-        home: InventoryPage(
-          workspaceSession: session(cafe),
-          repository: repository,
-          csvExportService: service,
-        ),
-      );
-      await tester.pumpWidget(host('cafe-a'));
+      WorkspaceInventoryRepository replacement(String cafe) =>
+          WorkspaceInventoryRepository(
+            session: session(cafe),
+            dataSource: Source(source.documents),
+          );
+      Widget host(WorkspaceInventoryRepository currentRepository) =>
+          MaterialApp(
+            home: InventoryPage(
+              workspaceSession: currentRepository.session,
+              repository: currentRepository,
+              csvExportService: InventoryCsvExportService(
+                repository: currentRepository,
+                auth: auth,
+                resolver: resolver,
+                downloader: downloader,
+              ),
+            ),
+          );
+      await tester.pumpWidget(host(repository));
       for (var frame = 0; frame < 8; frame++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
@@ -525,9 +530,9 @@ void main() {
       if (transition == 'dispose') {
         await tester.pumpWidget(const MaterialApp(home: SizedBox()));
       } else {
-        await tester.pumpWidget(host('cafe-b'));
+        await tester.pumpWidget(host(replacement('cafe-b')));
         if (transition == 'cafe-away-back') {
-          await tester.pumpWidget(host('cafe-a'));
+          await tester.pumpWidget(host(replacement('cafe-a')));
         }
       }
       pending.complete();
@@ -556,7 +561,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: InventoryPage(
-          workspaceSession: session('cafe-a'),
+          workspaceSession: repository.session,
           repository: repository,
           csvExportService: InventoryCsvExportService(
             repository: repository,

@@ -80,14 +80,18 @@ function createRestFake(seed = {}) {
       assert.equal(q.from.length, 1);
       assert.deepEqual(Object.keys(q.from[0]), ['collectionId']);
       const collection = q.from[0].collectionId;
-      assert.ok(['members', 'inventory', 'menu_items'].includes(collection));
+      assert.ok(['members', 'inventory', 'menu_items', 'saved_recipes'].includes(collection));
       assert.ok(Number.isInteger(q.limit) && q.limit > 0 && q.limit <= 101);
+      if (collection === 'saved_recipes') assert.ok(q.limit <= 21);
       const prefix = `cafes/${cafeId}/${collection}/`;
       let rows = Object.entries(tx.records).filter(([path]) => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'));
       if (q.where) {
-        assert.equal(collection, 'menu_items');
-        assert.deepEqual(q.where, {fieldFilter: {field: {fieldPath: 'isArchived'}, op: 'EQUAL', value: {booleanValue: false}}});
-        rows = rows.filter(([, data]) => data.isArchived === false);
+        assert.ok(['menu_items', 'saved_recipes'].includes(collection));
+        const archived = q.where.fieldFilter?.value?.booleanValue;
+        assert.equal(typeof archived, 'boolean');
+        if (collection === 'menu_items') assert.equal(archived, false);
+        assert.deepEqual(q.where, {fieldFilter: {field: {fieldPath: 'isArchived'}, op: 'EQUAL', value: {booleanValue: archived}}});
+        rows = rows.filter(([, data]) => data.isArchived === archived);
       }
       rows.sort(([a], [b]) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
       if (q.startAt) {
@@ -95,6 +99,7 @@ function createRestFake(seed = {}) {
         assert.equal(q.startAt.values.length, 1);
         const cursor = q.startAt.values[0].referenceValue;
         assert.ok(cursor.startsWith(resource(prefix)));
+        if (collection === 'saved_recipes') assert.match(cursor.slice(resource(prefix).length), /^recipe_[a-f0-9]{64}$/);
         rows = rows.filter(([path]) => Buffer.compare(Buffer.from(resource(path)), Buffer.from(cursor)) > 0);
       }
       rows = rows.slice(0, q.limit);

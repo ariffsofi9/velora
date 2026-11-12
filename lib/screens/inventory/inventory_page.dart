@@ -65,21 +65,22 @@ class _InventoryPageState extends State<InventoryPage> {
   void initState() {
     super.initState();
     _configureRepository();
-    _itemsStream = _repository.watchItems();
+    _itemsStream = _watchVerifiedItems();
   }
 
   @override
   void didUpdateWidget(covariant InventoryPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.workspaceSession.cafeId != widget.workspaceSession.cafeId ||
-        oldWidget.workspaceSession.uid != widget.workspaceSession.uid ||
-        oldWidget.workspaceSession.ownerUid !=
-            widget.workspaceSession.ownerUid ||
-        oldWidget.workspaceSession.role != widget.workspaceSession.role ||
-        oldWidget.repository != widget.repository) {
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.repository, widget.repository)) {
       _configureRepository();
-      _itemsStream = _repository.watchItems();
+      _itemsStream = _watchVerifiedItems();
       _exportGeneration++;
+      _searchController.clear();
+      _searchQuery = '';
+      _selectedFilter = 'All Items';
+      _selectedCategory = InventorySortHelper.allCategories;
+      _selectedSort = InventorySortOption.expiry;
     }
   }
 
@@ -87,6 +88,32 @@ class _InventoryPageState extends State<InventoryPage> {
     _repository =
         widget.repository ??
         WorkspaceInventoryRepository(session: widget.workspaceSession);
+  }
+
+  bool get _hasVerifiedContext =>
+      widget.workspaceSession.isActive &&
+      identical(_repository.session, widget.workspaceSession);
+
+  Stream<List<InventoryItem>> _watchVerifiedItems() => _hasVerifiedContext
+      ? _repository.watchItems()
+      : Stream.error(StateError('Workspace access could not be verified.'));
+
+  bool _requireVerifiedContext() {
+    if (_hasVerifiedContext) return true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Workspace access could not be verified.')),
+    );
+    return false;
+  }
+
+  void _showMutationsUnavailable() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Inventory changes are unavailable until secure workspace updates are enabled.',
+        ),
+      ),
+    );
   }
 
   @override
@@ -107,7 +134,7 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   void _retry() {
-    setState(() => _itemsStream = _repository.watchItems());
+    setState(() => _itemsStream = _watchVerifiedItems());
   }
 
   void _clearListControls() {
@@ -121,6 +148,11 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   void _goToAddItem() {
+    if (!_requireVerifiedContext()) return;
+    if (widget.inventoryCreator == null) {
+      _showMutationsUnavailable();
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -133,6 +165,7 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   void _goToDetails(InventoryItem item) {
+    if (!_requireVerifiedContext()) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -150,6 +183,7 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   void _goToArchivedItems() {
+    if (!_requireVerifiedContext()) return;
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -163,7 +197,7 @@ class _InventoryPageState extends State<InventoryPage> {
   }
 
   Future<void> _chooseExport() async {
-    if (_exporting) return;
+    if (!_requireVerifiedContext() || _exporting) return;
     final generation = ++_exportGeneration;
     final service =
         widget.csvExportService ??
@@ -185,7 +219,9 @@ class _InventoryPageState extends State<InventoryPage> {
       bool current() =>
           mounted &&
           generation == _exportGeneration &&
-          service.auth.currentUser?.uid == expected.uid;
+          service.auth.currentUser?.uid == expected.uid &&
+          _hasVerifiedContext &&
+          identical(expected, widget.workspaceSession);
       if (!current()) return;
       final scope = await showDialog<InventoryCsvScope>(
         context: context,
@@ -271,9 +307,10 @@ class _InventoryPageState extends State<InventoryPage> {
         ],
       ),
       body: StreamBuilder<List<InventoryItem>>(
+        key: ObjectKey(_itemsStream),
         stream: _itemsStream,
         builder: (context, snapshot) {
-          if (snapshot.hasError) {
+          if (!_hasVerifiedContext || snapshot.hasError) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -303,7 +340,7 @@ class _InventoryPageState extends State<InventoryPage> {
                     ),
                     const SizedBox(height: 16),
                     OutlinedButton.icon(
-                      onPressed: _retry,
+                      onPressed: _hasVerifiedContext ? _retry : null,
                       icon: const Icon(Icons.refresh_rounded),
                       label: const Text('Retry'),
                     ),
@@ -331,8 +368,11 @@ class _InventoryPageState extends State<InventoryPage> {
           }
 
           final items = snapshot.data!;
-          final visibleItems = _applySearchFilterSort(items);
           final categories = InventorySortHelper.categories(items);
+          if (!categories.contains(_selectedCategory)) {
+            _selectedCategory = InventorySortHelper.allCategories;
+          }
+          final visibleItems = _applySearchFilterSort(items);
 
           return Center(
             child: ConstrainedBox(
@@ -388,6 +428,12 @@ class _InventoryPageState extends State<InventoryPage> {
                           ),
                           const SizedBox(height: 14),
                           InventoryListControls(
+                            // Recreate form-field state when controlled values change.
+                            key: ValueKey((
+                              _selectedCategory,
+                              _selectedSort,
+                              Object.hashAll(categories),
+                            )),
                             categories: categories,
                             selectedCategory: _selectedCategory,
                             selectedSort: _selectedSort,

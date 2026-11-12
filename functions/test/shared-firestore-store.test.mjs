@@ -11,6 +11,8 @@ import lifecycle from '../src/inventory-lifecycle.js';
 import menu from '../src/menu-service.js';
 import menuModel from '../src/menu-model.js';
 import team from '../src/team-members.js';
+import savedRecipes from '../src/saved-recipe-service.js';
+import savedRecipeModel from '../src/saved-recipe-model.js';
 
 globalThis.fetch = () => { throw Error('Unexpected network'); };
 const projectId = 'velora-spark-test';
@@ -522,3 +524,306 @@ for (const phase of ['credential', 'beginTransaction', 'batchGet', 'runQuery', '
     assert.equal(commits(f).length, ['commit', 'backoff'].includes(phase) ? 1 : 0);
   });
 }
+
+// Exercise the unchanged E2 domain through native-shaped REST transactions.
+// Identity/account lookup is explicitly synthetic; no live Firebase is called.
+function savedFixture(records = seed(), overrides = {}) {
+  const f = fixture(records, overrides);
+  f.accounts = new Map(['owner', 'staff', 'outsider'].map(uid => [uid, {uid, token: {
+    sub: uid, aud: projectId, iss: `https://securetoken.google.com/${projectId}`, email_verified: true,
+  }}]));
+  const verifyIdentity = bind(async token => {
+    const auth = f.accounts.get(token);
+    if (!auth || auth.disabled || auth.revoked) throw Error('SYNTHETIC ACCOUNT REJECTION');
+    return structuredClone(auth);
+  });
+  const domain = savedRecipes.createSavedRecipeService({projectId, store: f.store, verifyIdentity, timestamp: f.store.timestamp});
+  f.recipes = (operation, data, token = 'owner') => domain({operation, token,
+    data: operation === 'reconcile' ? data : {...context, ...data}});
+  return f;
+}
+const savedInput = (key = 'saved-request-0001', title = 'Milk recipe') => ({idempotencyKey: key,
+  recipe: {title, ingredients: [{itemId: 'milk', quantity: 0.125, unit: 'L'}], steps: ['Stir.'], whyRecommended: 'Uses stock.'},
+  attribution: {kind: 'claimed-ai', provider: 'groq', ticketId: 'a'.repeat(64)}});
+const savedLifecycle = (item, action = 'archive', key = 'saved-lifecycle-0001') => ({idempotencyKey: key,
+  recipeId: item.recipeId, expectedVersion: item.version, action});
+const savedFailure = (code, unknown = false) => error => error instanceof savedRecipeModel.SavedRecipeError &&
+  error.code === code && error.outcomeUnknown === unknown && error.message === 'Saved recipes are unavailable.';
+const savedPath = item => `cafes/cafe/saved_recipes/${item.recipeId}`;
+const savedReceipt = item => `cafes/cafe/saved_recipe_requests/${item.requestHash}`;
+const syntheticRecipeId = ch => 'recipe_' + ch.repeat(64);
+
+for (const uid of ['owner', 'staff']) {
+  test(`Saved Recipes ${uid} save/detail uses atomic scoped recipe and private receipt transforms`, async () => {
+    const f = savedFixture(), before = f.fake.snapshot();
+    assert.equal(f.fake.calls.length, 0);
+    const ack = await f.recipes('save', savedInput(), uid);
+    assert.equal(ack.outcome, 'created'); assert.equal(ack.changed, true);
+    const commit = commits(f)[0];
+    assert.equal(commit.body.writes.length, 2);
+    assert.deepEqual(commit.body.writes.map(w => w.update.name), [f.fake.resource(savedPath(ack)), f.fake.resource(savedReceipt(ack))]);
+    assert.ok(commit.body.writes.every(w => w.currentDocument.exists === false));
+    assert.equal(commit.body.writes[0].updateMask, undefined);
+    assert.deepEqual(commit.body.writes[0].updateTransforms.map(t => t.fieldPath), ['`createdAt`', '`updatedAt`']);
+    assert.deepEqual(commit.body.writes[1].updateTransforms.map(t => t.fieldPath), ['`createdAt`']);
+    const authReads = f.fake.calls.filter(c => c.method === 'batchGet').map(c => c.body.documents[0]);
+    for (const path of [`user_cafe_memberships/${uid}`, `cafes/cafe/members/${uid}`, 'cafes/cafe',
+      'user_cafe_memberships/owner', 'cafes/cafe/members/owner']) assert.ok(authReads.includes(f.fake.resource(path)));
+    assert.ok(f.fake.calls.filter(c => c.method === 'batchGet').every(c => c.body.transaction === commit.body.transaction));
+    const item = (await f.recipes('get', {recipeId: ack.recipeId}, uid)).item;
+    assert.deepEqual(item.recipe, savedInput().recipe);
+    assert.equal(item.createdAt, new Date(f.fake.instant).toISOString());
+    assert.equal(item.createdBy, uid); assert.equal(item.provenanceEvidence, 'unverified-attribution');
+    for (const [path, value] of Object.entries(before)) assert.deepEqual(f.fake.snapshot()[path], value);
+    assert.equal(Object.keys(f.fake.snapshot()).length, Object.keys(before).length + 2);
+  });
+}
+
+test('Saved Recipes replay and duplicate content preserve original record and attribution', async () => {
+  const f = savedFixture(), first = await f.recipes('save', savedInput());
+  const record = f.fake.snapshot()[savedPath(first)], writes = f.fake.snapshot();
+  const replay = await f.recipes('save', savedInput());
+  assert.deepEqual(replay, {...first, replayed: true});
+  assert.deepEqual(commits(f).at(-1).body.writes, []); assert.deepEqual(f.fake.snapshot(), writes);
+  const duplicate = await f.recipes('save', {...savedInput('duplicate-save-0001'),
+    attribution: {kind: 'mock', provider: null, ticketId: null}}, 'staff');
+  assert.equal(duplicate.outcome, 'existing-active'); assert.equal(duplicate.changed, false);
+  assert.equal(commits(f).at(-1).body.writes.length, 1);
+  assert.equal(commits(f).at(-1).body.writes[0].update.name, f.fake.resource(savedReceipt(duplicate)));
+  assert.deepEqual(f.fake.snapshot()[savedPath(first)], record);
+  const count = commits(f).length;
+  await assert.rejects(f.recipes('save', savedInput('saved-request-0001', 'Changed')), savedFailure('already-exists'));
+  assert.equal(commits(f).length, count);
+});
+
+test('Saved Recipes lifecycle patch masks preserve immutable content and restore explicit nulls', async () => {
+  const f = savedFixture(), first = await f.recipes('save', savedInput());
+  const original = f.fake.snapshot()[savedPath(first)];
+  const archived = await f.recipes('lifecycle', savedLifecycle(first));
+  assert.equal(archived.version, 2); assert.equal(archived.isArchived, true);
+  const patch = commits(f).at(-1).body.writes[0];
+  assert.deepEqual(patch.currentDocument, {exists: true});
+  assert.deepEqual([...patch.updateMask.fieldPaths].sort(), ['`archivedBy`', '`isArchived`', '`updatedBy`', '`version`']);
+  assert.deepEqual(patch.updateTransforms.map(t => t.fieldPath), ['`updatedAt`', '`archivedAt`']);
+  assert.equal(patch.update.fields.recipe, undefined); assert.equal(patch.update.fields.createdBy, undefined);
+  const doc = f.fake.snapshot()[savedPath(first)];
+  assert.deepEqual(doc.recipe, original.recipe); assert.deepEqual(doc.createdAt, original.createdAt);
+  assert.deepEqual(doc.archivedAt, doc.updatedAt); assert.equal(doc.archivedBy, 'owner');
+  for (const action of ['archive', 'restore']) {
+    const count = commits(f).length;
+    await assert.rejects(f.recipes('lifecycle', savedLifecycle(archived, action, `staff-${action}-0001`), 'staff'), savedFailure('permission-denied'));
+    assert.equal(commits(f).length, count);
+  }
+  const duplicate = await f.recipes('save', savedInput('archived-save-0001'), 'staff');
+  assert.equal(duplicate.outcome, 'existing-archived');
+  assert.equal((await f.recipes('get', {recipeId: first.recipeId}, 'staff')).item.isArchived, true);
+  const restored = await f.recipes('lifecycle', savedLifecycle(archived, 'restore', 'restore-saved-0001'));
+  assert.equal(restored.version, 3); assert.equal(restored.isArchived, false);
+  const restorePatch = commits(f).at(-1).body.writes[0];
+  assert.deepEqual(restorePatch.update.fields.archivedAt, {nullValue: null});
+  assert.ok(restorePatch.updateMask.fieldPaths.includes('`archivedAt`'));
+  assert.equal(f.fake.snapshot()[savedPath(first)].archivedBy, null);
+  const beforeReplay = f.fake.snapshot();
+  assert.deepEqual(await f.recipes('lifecycle', savedLifecycle(first)), {...archived, replayed: true});
+  assert.deepEqual(f.fake.snapshot(), beforeReplay);
+});
+
+for (const reason of ['revoked', 'generation', 'owner-link', 'cross-cafe', 'unverified', 'wrong-project']) {
+  test(`Saved Recipes ${reason} rejects before protected query/write`, async () => {
+    const f = savedFixture();
+    if (reason === 'unverified') f.accounts.get('staff').token.email_verified = false;
+    else if (reason === 'wrong-project') f.accounts.get('staff').token.aud = 'velora-73222';
+    else if (reason === 'owner-link') f.fake.replace('user_cafe_memberships/owner', {...f.fake.snapshot()['user_cafe_memberships/owner'], status: 'revoked'});
+    else if (reason === 'revoked') f.fake.replace('cafes/cafe/members/staff', {...f.fake.snapshot()['cafes/cafe/members/staff'], status: 'revoked'});
+    else if (reason === 'generation') {
+      for (const p of ['user_cafe_memberships/staff', 'cafes/cafe/members/staff']) f.fake.replace(p, {...f.fake.snapshot()[p], membershipGeneration: 1});
+    }
+    const before = f.fake.snapshot();
+    const expectedCafeId = reason === 'cross-cafe' ? 'other' : 'cafe';
+    await assert.rejects(f.recipes('save', {...savedInput(), expectedCafeId}, 'staff'),
+      savedFailure(['unverified', 'wrong-project'].includes(reason) ? 'unauthenticated' : ['generation', 'cross-cafe'].includes(reason) ? 'aborted' : 'permission-denied'));
+    assert.deepEqual(f.fake.snapshot(), before); assert.equal(commits(f).length, 0);
+    assert.equal(f.fake.calls.filter(c => c.method === 'runQuery').length, 0);
+  });
+}
+
+for (const change of ['generation', 'revocation']) {
+  test(`Saved Recipes native abort rechecks ${change} and never retries a domain rejection`, async () => {
+    const f = savedFixture(); let once = false;
+    f.fake.hooks.commit = () => {
+      if (once) return; once = true;
+      if (change === 'revocation') f.fake.replace('cafes/cafe/members/staff', {...f.fake.snapshot()['cafes/cafe/members/staff'], status: 'revoked'});
+      else for (const p of ['user_cafe_memberships/staff', 'cafes/cafe/members/staff']) f.fake.replace(p, {...f.fake.snapshot()[p], membershipGeneration: 1});
+    };
+    await assert.rejects(f.recipes('save', savedInput(), 'staff'), savedFailure(change === 'revocation' ? 'permission-denied' : 'aborted'));
+    assert.equal(begins(f).length, 2); assert.equal(commits(f).length, 1); assert.equal(f.sleeps.length, 1);
+    assert.equal(Object.keys(f.fake.snapshot()).filter(p => p.includes('/saved_recipe')).length, 0);
+  });
+}
+
+test('Saved Recipes concurrent content saves commit one content record and two receipts', async () => {
+  const f = savedFixture();
+  const result = await Promise.all([f.recipes('save', savedInput()), f.recipes('save', savedInput('concurrent-save-0001'), 'staff')]);
+  assert.deepEqual(result.map(r => r.outcome).sort(), ['created', 'existing-active']);
+  assert.equal(result[0].recipeId, result[1].recipeId);
+  const paths = Object.keys(f.fake.snapshot());
+  assert.equal(paths.filter(p => p.includes('/saved_recipes/')).length, 1);
+  assert.equal(paths.filter(p => p.includes('/saved_recipe_requests/')).length, 2);
+  assert.ok(f.sleeps.length >= 1);
+});
+test('Saved Recipes concurrent lifecycle operations cannot both change one version', async () => {
+  const f = savedFixture(), first = await f.recipes('save', savedInput());
+  const result = await Promise.allSettled([f.recipes('lifecycle', savedLifecycle(first)),
+    f.recipes('lifecycle', savedLifecycle(first, 'archive', 'second-archive-0001'))]);
+  assert.equal(result.filter(r => r.status === 'fulfilled').length, 1);
+  assert.ok(savedFailure('aborted')(result.find(r => r.status === 'rejected').reason));
+  assert.equal(f.fake.snapshot()[savedPath(first)].version, 2);
+  assert.equal(Object.keys(f.fake.snapshot()).filter(p => p.includes('/saved_recipe_requests/')).length, 2);
+});
+
+for (const mode of ['active', 'archived', 'all']) {
+  test(`Saved Recipes ${mode} query uses exact bound, filter-before-limit and parent cursor`, async () => {
+    const records = seed({cafeId: 'cafe one'});
+    for (const [i, ch] of ['a', 'b', 'c', 'd'].entries()) records[`cafes/cafe one/saved_recipes/${syntheticRecipeId(ch)}`] = {isArchived: i % 2 === 0};
+    records[`cafes/other/saved_recipes/${syntheticRecipeId('e')}`] = {isArchived: false};
+    const f = fixture(records);
+    const rows = await f.store.runTransaction(tx => tx.savedRecipes('cafe one', {mode, limit: 2, afterId: syntheticRecipeId('a')}));
+    assert.deepEqual(rows.map(r => r.id), (mode === 'active' ? ['b', 'd'] : mode === 'archived' ? ['c'] : ['b', 'c']).map(syntheticRecipeId));
+    const call = f.fake.calls.find(c => c.method === 'runQuery'), q = call.body.structuredQuery;
+    assert.ok(call.url.endsWith('/cafes/cafe%20one:runQuery'));
+    assert.equal(q.limit, 2); assert.deepEqual(q.from, [{collectionId: 'saved_recipes'}]);
+    assert.deepEqual(q.orderBy, [{field: {fieldPath: '__name__'}, direction: 'ASCENDING'}]);
+    assert.deepEqual(q.startAt, {values: [{referenceValue: `${root}/cafes/cafe one/saved_recipes/${syntheticRecipeId('a')}`}], before: false});
+    if (mode === 'all') assert.equal(q.where, undefined);
+    else assert.deepEqual(q.where.fieldFilter.value, {booleanValue: mode === 'archived'});
+    assert.deepEqual(commits(f)[0].body.writes, []);
+  });
+}
+
+test('Saved Recipes domain pagination keeps the E1 look-ahead and scope-bound cursor', async () => {
+  const f = savedFixture(), created = [];
+  for (let i = 0; i < 3; i++) created.push(await f.recipes('save', savedInput(`saved-page-key-${i}00`, `Recipe ${i}`)));
+  const ids = created.map(r => r.recipeId).sort();
+  const first = await f.recipes('list', {mode: 'active', limit: 1, cursor: null});
+  assert.equal(first.items[0].recipeId, ids[0]); assert.equal(first.items[0].recipe, undefined);
+  assert.equal(first.nextCursor.afterId, ids[0]);
+  assert.equal(f.fake.calls.filter(c => c.method === 'runQuery').at(-1).body.structuredQuery.limit, 2);
+  const second = await f.recipes('list', {mode: 'active', limit: 1, cursor: first.nextCursor});
+  assert.equal(second.items[0].recipeId, ids[1]);
+  const last = await f.recipes('list', {mode: 'active', limit: 1, cursor: second.nextCursor});
+  assert.equal(last.items[0].recipeId, ids[2]); assert.equal(last.nextCursor, null);
+  for (const field of ['projectId', 'cafeId', 'uid', 'membershipGeneration', 'mode', 'limit']) {
+    const count = f.fake.calls.filter(c => c.method === 'runQuery').length;
+    const cursor = {...first.nextCursor, [field]: typeof first.nextCursor[field] === 'number' ? 2 : 'other'};
+    await assert.rejects(f.recipes('list', {mode: 'active', limit: 1, cursor}), savedFailure('invalid-argument'));
+    assert.equal(f.fake.calls.filter(c => c.method === 'runQuery').length, count);
+  }
+});
+
+for (const input of [{mode: 'active', limit: 0, afterId: null}, {mode: 'all', limit: 22, afterId: null},
+  {mode: 'all', limit: 1.5, afterId: null}, {mode: 'bad', limit: 1, afterId: null},
+  {mode: 'active', limit: 1}, {mode: 'active', limit: 1, afterId: '../other'},
+  {mode: 'active', limit: 1, afterId: null, collectionId: 'ai_recipe_suggestions'},
+  {mode: 'all', limit: 1, afterId: `${root}/cafes/other/saved_recipes/${syntheticRecipeId('a')}`}]) {
+  test(`Saved Recipes invalid adapter input poisons swallowed errors: ${JSON.stringify(input)}`, async () => {
+    const f = fixture();
+    await assert.rejects(f.store.runTransaction(tx => { assert.throws(() => tx.savedRecipes('cafe', input), storeFailure(false)); }), storeFailure(false));
+    assert.equal(commits(f).length, 0); assert.equal(f.fake.calls.filter(c => c.method === 'runQuery').length, 0);
+  });
+}
+test('Saved Recipes adapter accepts max 21 and detaches mutable input while waiting', async () => {
+  const f = fixture(), input = {mode: 'active', limit: 21, afterId: null};
+  const result = f.store.runTransaction(async tx => {
+    const rows = tx.savedRecipes('cafe', input);
+    input.mode = 'archived'; input.limit = 99; input.afterId = 'bad';
+    return rows;
+  });
+  assert.deepEqual(await result, []);
+  const q = f.fake.calls.find(c => c.method === 'runQuery').body.structuredQuery;
+  assert.equal(q.limit, 21); assert.equal(q.where.fieldFilter.value.booleanValue, false); assert.equal(q.startAt, undefined);
+});
+
+for (const mode of ['foreign-cafe', 'foreign-project', 'nested', 'bad-id', 'duplicate', 'unsorted', 'overflow', 'cursor', 'filter', 'look-ahead-codec']) {
+  test(`Saved Recipes rejects malformed native query ${mode} without commit`, async () => {
+    const f = fixture();
+    f.fake.hooks.runQuery = () => {
+      let ids = ['b', 'c'];
+      if (mode === 'duplicate') ids = ['b', 'b'];
+      if (mode === 'unsorted') ids = ['c', 'b'];
+      if (mode === 'overflow') ids = ['b', 'c', 'd'];
+      if (mode === 'cursor') ids = ['a', 'b'];
+      const rows = ids.map(ch => ({document: f.fake.doc(`cafes/cafe/saved_recipes/${syntheticRecipeId(ch)}`, {isArchived: false})}));
+      if (mode === 'foreign-cafe') rows[0].document.name = `${root}/cafes/other/saved_recipes/${syntheticRecipeId('b')}`;
+      if (mode === 'foreign-project') rows[0].document.name = rows[0].document.name.replace(projectId, 'velora-73222');
+      if (mode === 'nested') rows[0].document.name += '/nested/child';
+      if (mode === 'bad-id') rows[0].document.name = `${root}/cafes/cafe/saved_recipes/arbitrary`;
+      if (mode === 'filter') rows[1].document.fields.isArchived = {booleanValue: true};
+      if (mode === 'look-ahead-codec') rows[1].document.fields.version = {integerValue: '9007199254740992'};
+      return f.fake.json(rows);
+    };
+    await assert.rejects(f.store.runTransaction(tx => tx.savedRecipes('cafe', {mode: 'active', limit: 2, afterId: syntheticRecipeId('a')})), storeFailure(false));
+    assert.equal(commits(f).length, 0);
+  });
+}
+
+test('Saved Recipes malformed full look-ahead record fails at domain boundary', async () => {
+  const f = savedFixture();
+  await f.recipes('save', savedInput()); await f.recipes('save', savedInput('second-saved-0001', 'Other recipe'));
+  const paths = Object.keys(f.fake.snapshot()).filter(p => p.includes('/saved_recipes/')).sort();
+  f.fake.replace(paths[1], {...f.fake.snapshot()[paths[1]], provenanceEvidence: 'verified-groq'});
+  const count = commits(f).length;
+  await assert.rejects(f.recipes('list', {mode: 'all', limit: 1, cursor: null}), savedFailure('failed-precondition'));
+  assert.equal(commits(f).length, count);
+});
+
+for (const mode of ['lost', 'applied-lost', 'malformed', 'bad-transform']) {
+  test(`Saved Recipes ${mode} commit is unknown; no retry; reconciliation remains read-only`, async () => {
+    const f = savedFixture(); f.fake.commitModes.push(mode);
+    await assert.rejects(f.recipes('save', savedInput()), savedFailure('unavailable', true));
+    assert.equal(begins(f).length, 1); assert.equal(commits(f).length, 1); assert.equal(f.sleeps.length, 0);
+    assert.equal(f.fake.calls.filter(c => c.method === 'rollback').length, 0);
+    const before = f.fake.snapshot();
+    const observed = await f.recipes('reconcile', {operation: 'save', request: {...context, ...savedInput()}});
+    assert.equal(observed.status, mode === 'lost' ? 'unknown' : 'committed');
+    assert.deepEqual(commits(f).at(-1).body.writes, []); assert.deepEqual(f.fake.snapshot(), before);
+    if (mode !== 'lost') assert.equal(observed.result.replayed, true);
+  });
+}
+test('Saved Recipes private receipt corruption cannot be reconciled as success', async () => {
+  const f = savedFixture(), first = await f.recipes('save', savedInput());
+  f.fake.replace(savedReceipt(first), {...f.fake.snapshot()[savedReceipt(first)], payloadHash: 'b'.repeat(64)});
+  const before = f.fake.snapshot(), count = commits(f).length;
+  await assert.rejects(f.recipes('reconcile', {operation: 'save', request: {...context, ...savedInput()}}), savedFailure('already-exists'));
+  assert.deepEqual(f.fake.snapshot(), before); assert.equal(commits(f).length, count);
+});
+test('Saved Recipes commit precondition failure rolls back the fake draft atomically', async () => {
+  const f = savedFixture();
+  f.fake.hooks.commit = call => {
+    // First recipe create is valid, second receipt create must fail. The fake
+    // must discard the entire draft, rather than publish the first write.
+    call.body.writes[1].currentDocument = {exists: true};
+  };
+  await assert.rejects(f.recipes('save', savedInput()), savedFailure('unavailable', true));
+  assert.equal(Object.keys(f.fake.snapshot()).filter(p => p.includes('/saved_recipe')).length, 0);
+  assert.equal(commits(f).length, 1);
+});
+
+test('Saved Recipes native index/query rejection is unavailable, never an empty page or automatic retry', async () => {
+  const f = savedFixture();
+  f.fake.hooks.runQuery = () => f.fake.nativeError(400, 'FAILED_PRECONDITION');
+  await assert.rejects(f.recipes('list', {mode: 'active', limit: 20, cursor: null}), savedFailure('unavailable'));
+  assert.equal(begins(f).length, 1); assert.equal(commits(f).length, 0); assert.equal(f.sleeps.length, 0);
+});
+
+test('Saved Recipes query uses existing closed/read-before-write transaction safeguards', async () => {
+  const f = fixture(); let closed;
+  await f.store.runTransaction(tx => { closed = tx; });
+  await assert.rejects(closed.savedRecipes('cafe', {mode: 'all', limit: 1, afterId: null}), storeFailure(false));
+  const count = commits(f).length;
+  await assert.rejects(f.store.runTransaction(async tx => {
+    tx.create(`cafes/cafe/saved_recipes/${syntheticRecipeId('a')}`, {isArchived: false});
+    await tx.savedRecipes('cafe', {mode: 'all', limit: 1, afterId: null});
+  }), storeFailure(false));
+  assert.equal(commits(f).length, count);
+  assert.equal(f.fake.calls.filter(c => c.method === 'runQuery').length, 0);
+});

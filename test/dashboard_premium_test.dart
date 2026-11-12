@@ -34,7 +34,7 @@ void main() {
         'https://example.invalid/profile.png',
       );
       await tester.pumpAndSettle();
-      expect(find.text('Alex'), findsOneWidget);
+      expect(find.text('Alex Taylor'), findsOneWidget);
       expect(find.byIcon(Icons.person_outline), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
@@ -196,7 +196,7 @@ void main() {
   );
 
   testWidgets(
-    'Header uses only the supplied first name and shows current date',
+    'Header preserves the supplied full name and shows current date',
     (tester) async {
       await tester.pumpWidget(
         _app(
@@ -206,8 +206,8 @@ void main() {
           ),
         ),
       );
-      expect(find.text('Alex'), findsOneWidget);
-      expect(find.textContaining('Taylor'), findsNothing);
+      expect(find.text('Alex Taylor'), findsOneWidget);
+      expect(find.text('Alex'), findsNothing);
       final context = tester.element(find.byType(DashboardHeader));
       expect(
         find.text(

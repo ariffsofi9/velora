@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'widgets_home/bottom_bar.dart';
 import '../../widgets/dashboard/dashboard_style.dart';
 import '../../services/workspace_session.dart';
+import '../../repositories/workspace_activity_repository.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 
 import '../dashboard/dashboard_page.dart';
@@ -9,7 +10,6 @@ import '../inventory/inventory_page.dart';
 import '../suggestions/suggestions_page.dart';
 import '../settings/settings_page.dart';
 import '../alerts/alerts_page.dart';
-import '../inventory/add_item/add_item_page.dart';
 import '../activity/activity_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -24,12 +24,24 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   int _selectedIndex = 0;
 
-  late final List<Widget> _pages;
-  late final WorkspaceInventoryRepository _inventoryRepository;
+  late List<Widget> _pages;
+  late WorkspaceInventoryRepository _inventoryRepository;
 
   @override
   void initState() {
     super.initState();
+    _configurePages();
+  }
+
+  @override
+  void didUpdateWidget(covariant HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession)) {
+      _configurePages();
+    }
+  }
+
+  void _configurePages() {
     _inventoryRepository = WorkspaceInventoryRepository(
       session: widget.workspaceSession,
     );
@@ -37,6 +49,9 @@ class _HomePageState extends State<HomePage> {
       DashboardPage(
         workspaceSession: widget.workspaceSession,
         inventoryRepository: _inventoryRepository,
+        activityRepository: WorkspaceActivityRepository(
+          session: widget.workspaceSession,
+        ),
         onAddTap: _openAddItem,
         onInventoryTap: () => setState(() => _selectedIndex = 1),
         onAlertTap: _openAlerts,
@@ -51,7 +66,7 @@ class _HomePageState extends State<HomePage> {
         workspaceSession: widget.workspaceSession,
         repository: _inventoryRepository,
       ),
-      const SettingsPage(),
+      SettingsPage(workspaceSession: widget.workspaceSession),
     ];
   }
 
@@ -64,16 +79,14 @@ class _HomePageState extends State<HomePage> {
     setState(() => _selectedIndex = index);
   }
 
-  Future<void> _openAddItem() async {
-    final created = await Navigator.push<bool>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => AddItemPage(workspaceSession: widget.workspaceSession),
+  void _openAddItem() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Inventory changes are unavailable until secure workspace updates are enabled.',
+        ),
       ),
     );
-    if (created == true && mounted) {
-      setState(() => _selectedIndex = 1);
-    }
   }
 
   void _openAlerts() {
@@ -101,7 +114,14 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: DashboardStyle.background,
-      body: _pages[_selectedIndex],
+      body: widget.workspaceSession.isActive
+          ? KeyedSubtree(
+              key: ObjectKey(widget.workspaceSession),
+              child: _pages[_selectedIndex],
+            )
+          : const Center(
+              child: Text('Workspace access could not be verified.'),
+            ),
       bottomNavigationBar: VeloraBottomBar(
         currentIndex: _selectedIndex,
         onTap: _changePage,

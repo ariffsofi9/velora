@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import '../../../services/secure_ai_service.dart';
 import 'dart:async';
 import 'dart:math';
 import '../../../models/fake_recipe_response.dart';
@@ -74,6 +76,26 @@ class RecipePresentation {
     this.imageDescription,
     this.metadata,
   });
+
+  factory RecipePresentation.fromSecure(
+    SecureAiRecipe recipe, {
+    required bool isDemo,
+  }) => RecipePresentation(
+    title: recipe.title,
+    description: recipe.whyRecommended,
+    metadata: isDemo
+        ? 'Injected mock recipe - no AI provider was called.'
+        : 'Validated AI recipe',
+    ingredients: [
+      for (final ingredient in recipe.ingredients)
+        RecipeIngredientPresentation(
+          'Ingredient ID: ${ingredient.itemId}',
+          ingredient.quantity.toString(),
+          ingredient.unit,
+        ),
+    ],
+    instructions: List<String>.unmodifiable(recipe.steps),
+  );
 
   factory RecipePresentation.fromFake(FakeRecipe recipe) => RecipePresentation(
     title: recipe.title,
@@ -457,14 +479,39 @@ class RecipeDemoResult extends StatelessWidget {
 class RecipePresentationDetails extends StatelessWidget {
   final RecipePresentation recipe;
   final bool isDemo;
+  final ValueListenable<bool>? access;
+  final bool Function()? isCurrent;
   const RecipePresentationDetails({
     super.key,
     required this.recipe,
     this.isDemo = true,
+    this.access,
+    this.isCurrent,
   });
 
   @override
   Widget build(BuildContext context) {
+    final guard = access;
+    if (guard == null) return _body(context);
+    return ValueListenableBuilder<bool>(
+      valueListenable: guard,
+      builder: (context, allowed, _) => allowed && (isCurrent?.call() ?? false)
+          ? _body(context)
+          : Scaffold(
+              appBar: AppBar(title: const Text('Recipe Details')),
+              body: const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(AppSpacing.lg),
+                  child: Text(
+                    'This recipe is no longer available because workspace access changed.',
+                  ),
+                ),
+              ),
+            ),
+    );
+  }
+
+  Widget _body(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: const Text('Recipe Details')),

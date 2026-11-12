@@ -1,62 +1,82 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
+import '../../../models/workspace_activity.dart';
+import '../../../repositories/workspace_activity_repository.dart';
+import '../../../services/workspace_session.dart';
 import '../../../widgets/dashboard/dashboard_style.dart';
 import '../../../widgets/dashboard/activity_thumbnail.dart';
 
-class RecentActivityCard extends StatelessWidget {
-  final Stream<QuerySnapshot<Map<String, dynamic>>>? activityStream;
+class RecentActivityCard extends StatefulWidget {
+  final WorkspaceSession? workspaceSession;
+  final WorkspaceActivityRepository? activityRepository;
   final Map<String, Map<String, dynamic>> inventoryItems;
   final VoidCallback? onViewAll;
   const RecentActivityCard({
     super.key,
-    this.activityStream,
+    this.workspaceSession,
+    this.activityRepository,
     this.inventoryItems = const {},
     this.onViewAll,
   });
 
-  String _formatType(String type) {
-    switch (type) {
-      case 'stock_in':
-        return 'Stock In';
-      case 'stock_out':
-        return 'Stock Out';
-      case 'add_item':
-        return 'Item Added';
-      default:
-        return 'Activity';
+  @override
+  State<RecentActivityCard> createState() => _RecentActivityCardState();
+}
+
+class _RecentActivityCardState extends State<RecentActivityCard> {
+  Future<WorkspaceActivityPage>? _page;
+
+  bool get _valid =>
+      widget.workspaceSession != null &&
+      widget.workspaceSession!.isActive &&
+      identical(widget.activityRepository?.session, widget.workspaceSession);
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant RecentActivityCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.activityRepository, widget.activityRepository)) {
+      _load();
     }
   }
 
-  IconData _icon(String type) {
-    switch (type) {
-      case 'stock_in':
-      case 'add_item':
-        return Icons.add_circle_rounded;
-      case 'stock_out':
-        return Icons.remove_circle_rounded;
-      default:
-        return Icons.history_rounded;
-    }
+  void _load() {
+    _page = _valid ? widget.activityRepository!.getActivities() : null;
   }
 
-  Color _color(String type) {
-    switch (type) {
-      case 'stock_in':
-      case 'add_item':
-        return DashboardStyle.primary;
-      case 'stock_out':
-        return DashboardStyle.danger;
-      default:
-        return DashboardStyle.secondary;
-    }
-  }
+  String _formatType(WorkspaceActivity activity) => switch (activity.type) {
+    WorkspaceActivityType.inventoryCreated => 'Item Created',
+    WorkspaceActivityType.inventoryUpdated => 'Item Updated',
+    WorkspaceActivityType.inventoryUpdateNoop => 'Update Checked',
+    WorkspaceActivityType.inventoryStockAdjusted =>
+      activity.direction == 'in' ? 'Stock In' : 'Stock Out',
+    WorkspaceActivityType.inventoryArchived => 'Item Archived',
+    WorkspaceActivityType.inventoryRestored => 'Item Restored',
+  };
 
-  String _timeAgo(dynamic rawTime) {
-    if (rawTime is! Timestamp) return 'Recently';
+  IconData _icon(WorkspaceActivity activity) => switch (activity.type) {
+    WorkspaceActivityType.inventoryCreated => Icons.add_circle_rounded,
+    WorkspaceActivityType.inventoryStockAdjusted =>
+      activity.direction == 'in'
+          ? Icons.add_circle_rounded
+          : Icons.remove_circle_rounded,
+    _ => Icons.history_rounded,
+  };
 
-    final time = rawTime.toDate();
+  Color _color(WorkspaceActivity activity) =>
+      activity.type == WorkspaceActivityType.inventoryStockAdjusted &&
+          activity.direction == 'out'
+      ? DashboardStyle.danger
+      : DashboardStyle.primary;
+
+  String _timeAgo(DateTime time) {
     final diff = DateTime.now().difference(time);
-
     if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
     if (diff.inHours < 24) {
@@ -65,20 +85,20 @@ class RecentActivityCard extends StatelessWidget {
     return '${diff.inDays} ${diff.inDays == 1 ? 'day' : 'days'} ago';
   }
 
-  String _message(Map<String, dynamic> data) {
-    final type = (data['type'] ?? '').toString();
-    final itemName = (data['itemName'] ?? data['name'] ?? 'Item').toString();
-    final quantity = data['quantity'] ?? data['usedQuantity'] ?? '';
-
-    if (type == 'stock_in' || type == 'add_item') {
-      return '$itemName added to inventory';
-    }
-
-    if (type == 'stock_out') {
-      return '$itemName used from inventory${quantity == '' ? '' : ' • $quantity used'}';
-    }
-
-    return '$itemName updated';
+  String _message(WorkspaceActivity activity) {
+    final item =
+        activity.itemName ??
+        widget.inventoryItems[activity.itemId]?['name'] as String? ??
+        'Inventory item';
+    return switch (activity.type) {
+      WorkspaceActivityType.inventoryCreated => '$item added to inventory',
+      WorkspaceActivityType.inventoryUpdated => '$item metadata updated',
+      WorkspaceActivityType.inventoryUpdateNoop => '$item was already current',
+      WorkspaceActivityType.inventoryStockAdjusted =>
+        '$item \u2022 ${activity.direction == 'in' ? '+' : '-'}${activity.quantity} ${activity.unit}',
+      WorkspaceActivityType.inventoryArchived => '$item archived',
+      WorkspaceActivityType.inventoryRestored => '$item restored',
+    };
   }
 
   @override
@@ -102,28 +122,38 @@ class RecentActivityCard extends StatelessWidget {
                   ),
                 ),
               ),
-              if (onViewAll != null)
+              if (widget.onViewAll != null)
                 TextButton(
                   key: const ValueKey('open-activity'),
-                  onPressed: onViewAll,
+                  onPressed: widget.onViewAll,
                   child: const Text('View All'),
                 ),
             ],
           ),
           const SizedBox(height: 12),
-          if (activityStream == null)
+          if (widget.workspaceSession == null)
             const Text(
               'Open Activity to view your workspace inventory history.',
               style: TextStyle(color: DashboardStyle.secondary),
             )
           else
-            StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-              stream: activityStream,
+            FutureBuilder<WorkspaceActivityPage>(
+              key: ObjectKey(_page),
+              future: _page,
               builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  return const Text(
-                    'Recent activity cannot load right now.',
-                    style: TextStyle(color: DashboardStyle.danger),
+                if (!_valid || snapshot.hasError) {
+                  return Column(
+                    children: [
+                      const Text(
+                        'Recent activity cannot load right now.',
+                        style: TextStyle(color: DashboardStyle.danger),
+                      ),
+                      if (_valid)
+                        TextButton(
+                          onPressed: () => setState(_load),
+                          child: const Text('Retry'),
+                        ),
+                    ],
                   );
                 }
                 if (!snapshot.hasData) {
@@ -136,7 +166,11 @@ class RecentActivityCard extends StatelessWidget {
                     ),
                   );
                 }
-                final docs = snapshot.data!.docs;
+                final docs = [...snapshot.data!.activities]
+                  ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+                final visible = docs
+                    .take(WorkspaceActivityRepository.pageSize)
+                    .toList();
                 if (docs.isEmpty) {
                   return const Text(
                     'No stock activity yet.',
@@ -144,19 +178,17 @@ class RecentActivityCard extends StatelessWidget {
                   );
                 }
                 return Column(
-                  children: docs.map((doc) {
-                    final data = doc.data();
-                    final type = (data['type'] ?? '').toString();
+                  children: visible.map((doc) {
+                    final type = doc;
                     final color = _color(type);
-                    final item =
-                        inventoryItems[data['itemId']?.toString()] ??
-                        const <String, dynamic>{};
-                    final image = (data['imageUrl'] ?? item['imageUrl'] ?? '')
-                        .toString();
+                    final image =
+                        (widget.inventoryItems[doc.itemId]?['imageUrl'] ?? '')
+                            .toString();
                     return Container(
+                      key: ValueKey('recent-${doc.id}'),
                       padding: const EdgeInsets.symmetric(vertical: 10),
                       decoration: BoxDecoration(
-                        border: doc == docs.last
+                        border: doc == visible.last
                             ? null
                             : const Border(
                                 bottom: BorderSide(
@@ -188,7 +220,7 @@ class RecentActivityCard extends StatelessWidget {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  _message(data),
+                                  _message(doc),
                                   style: text.bodySmall?.copyWith(
                                     color: DashboardStyle.secondary,
                                     fontWeight: FontWeight.w400,
@@ -199,7 +231,7 @@ class RecentActivityCard extends StatelessWidget {
                                     MediaQuery.sizeOf(context).width < 375) ...[
                                   const SizedBox(height: 4),
                                   Text(
-                                    _timeAgo(data['createdAt']),
+                                    _timeAgo(doc.createdAt),
                                     style: text.bodySmall?.copyWith(
                                       color: DashboardStyle.secondary,
                                     ),
@@ -213,7 +245,7 @@ class RecentActivityCard extends StatelessWidget {
                               MediaQuery.sizeOf(context).width >= 375) ...[
                             const SizedBox(width: 8),
                             Text(
-                              _timeAgo(data['createdAt']),
+                              _timeAgo(doc.createdAt),
                               style: text.bodySmall?.copyWith(
                                 color: DashboardStyle.secondary,
                               ),

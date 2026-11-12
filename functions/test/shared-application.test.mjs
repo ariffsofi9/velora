@@ -97,6 +97,96 @@ const operations = [['create', createData], ['update', updateData], ['adjust-sto
 const commits = f => f.fake.calls.filter(call => call.method === 'commit');
 const invite = f => f.call('/staff/create', {...f.context, ...invitationData});
 
+const savedInput = (context, key = 'saved-composed-request-0001') => ({...context, idempotencyKey: key,
+  recipe: {title: 'Rice meal', ingredients: [{itemId: 'item', quantity: 0.125, unit: 'kg'}],
+    steps: ['Cook safely.'], whyRecommended: 'Uses rice.'},
+  attribution: {kind: 'unspecified', provider: null, ticketId: null}});
+const recipePaths = ['save', 'list', 'get', 'lifecycle', 'reconcile'].map(op => `/recipes/${op}`);
+
+test('Saved Recipes stays default-off including preflight; trusted opt-in is boolean and inert', async () => {
+  const f = fixture();
+  for (const path of recipePaths) {
+    assert.equal((await f.call(path)).status, 404);
+    assert.equal((await f.call(path, {}, {method: 'OPTIONS', headers: {'access-control-request-method': 'POST'}})).status, 404);
+  }
+  assert.equal(f.wireCalls.length, 0);
+  const enabled = fixture({enableSavedRecipes: true}); assert.equal(enabled.wireCalls.length, 0);
+  for (const enableSavedRecipes of [null, 'true', 1, {}]) {
+    assert.throws(() => createApplication({...f.config, enableSavedRecipes}));
+  }
+  assert.throws(() => createApplication({...enabled.config, projectId: 'velora-73222'}));
+});
+
+for (const generation of [0, 7]) test(`composed Saved Recipes uses signed identity, scoped storage and E2 envelopes generation=${generation}`, async () => {
+  const f = fixture({generation, enableSavedRecipes: true}), request = savedInput(f.context);
+  const initial = f.fake.snapshot();
+  const saved = await f.call('/recipes/save', request, {uid: 'staff'}); assert.equal(saved.status, 200);
+  const ack = saved.body;
+  assert.equal(ack.outcome, 'created'); assert.equal(ack.changed, true);
+  const detail = await f.call('/recipes/get', {...f.context, recipeId: ack.recipeId});
+  assert.equal(detail.body.item.createdBy, 'staff'); assert.deepEqual(detail.body.item.recipe, request.recipe);
+  const listed = await f.call('/recipes/list', {...f.context, mode: 'active', limit: 20, cursor: null}, {uid: 'staff'});
+  assert.equal(listed.body.items[0].recipeId, ack.recipeId); assert.equal(listed.body.nextCursor, null);
+  const archive = {...f.context, idempotencyKey: 'saved-composed-archive-0001', recipeId: ack.recipeId, expectedVersion: 1, action: 'archive'};
+  assert.equal((await f.call('/recipes/lifecycle', archive, {uid: 'staff'})).status, 403);
+  assert.equal((await f.call('/recipes/lifecycle', archive)).body.version, 2);
+  assert.equal((await f.call('/recipes/reconcile', {operation: 'lifecycle', request: archive}, {uid: 'staff'})).status, 403);
+  assert.equal((await f.call('/recipes/lifecycle', {...archive, idempotencyKey: 'saved-composed-restore-0001', expectedVersion: 2, action: 'restore'})).body.version, 3);
+  assert.deepEqual((await f.call('/recipes/reconcile', {operation: 'save', request}, {uid: 'staff'})).body,
+    {schemaVersion: 1, status: 'committed', result: {...ack, replayed: true}});
+  assert.deepEqual(f.fake.snapshot()['cafes/cafe/inventory/item'], initial['cafes/cafe/inventory/item']);
+  assert.ok(commits(f).flatMap(c => c.body.writes).every(w => /\/saved_recipe(s|_requests)\//.test(w.update.name)));
+  assert.ok(f.wireCalls.filter(c => c.url.includes('accounts:lookup')).length >= 3);
+  assert.ok(f.wireCalls.every(c => !c.url.includes('groq')));
+});
+
+for (const mode of ['signature', 'project', 'unverified', 'disabled', 'revoked', 'cafe', 'generation', 'actor', 'origin']) {
+  test(`composed Saved Recipes rejects ${mode} without mutation`, async () => {
+    const f = fixture({enableSavedRecipes: true}), request = savedInput(f.context), options = {};
+    let expected = 401;
+    if (mode === 'signature') options.bearer = f.token().slice(0, -8) + 'AAAAAAAA';
+    if (mode === 'project') options.bearer = f.token('owner', {aud: 'velora-73222'});
+    if (mode === 'unverified') options.bearer = f.token('owner', {email_verified: false});
+    if (mode === 'disabled') f.accounts.owner.disabled = true;
+    if (mode === 'revoked') f.accounts.owner.validSince = String(initial / 1000 + 1);
+    if (mode === 'cafe') { request.expectedCafeId = 'other'; expected = 409; }
+    if (mode === 'generation') { request.expectedMembershipGeneration = 1; expected = 409; }
+    if (mode === 'actor') { request.actorUid = 'staff'; expected = 400; }
+    if (mode === 'origin') { options.from = 'https://foreign.invalid'; expected = 403; }
+    assert.equal((await f.call('/recipes/save', request, options)).status, expected);
+    assert.equal(commits(f).length, 0);
+  });
+}
+
+test('composed Saved Recipes lost commit remains unknown and observation does not resend', async () => {
+  const f = fixture({enableSavedRecipes: true}), request = savedInput(f.context);
+  f.fake.commitModes.push('applied-lost');
+  assert.deepEqual(await f.call('/recipes/save', request), {status: 503, body: {error: 'unavailable', outcomeUnknown: true}});
+  assert.equal(commits(f).length, 1);
+  assert.equal((await f.call('/recipes/reconcile', {operation: 'save', request})).body.status, 'committed');
+  assert.deepEqual((await f.call('/recipes/reconcile', {operation: 'save', request: savedInput(f.context, 'saved-composed-missing-0001')})).body,
+    {schemaVersion: 1, status: 'unknown'});
+  assert.ok(commits(f).slice(1).every(c => c.body.writes.length === 0));
+});
+
+test('composed Saved Recipes concurrent requests isolate authenticated receipt actors', async () => {
+  const f = fixture({enableSavedRecipes: true});
+  const results = await Promise.all(['owner', 'staff'].map(uid => f.call('/recipes/save',
+    savedInput(f.context, `saved-composed-${uid}-0001`), {uid})));
+  assert.ok(results.every(r => r.status === 200));
+  const receipts = Object.entries(f.fake.snapshot()).filter(([p]) => p.includes('/saved_recipe_requests/')).map(([,v]) => v.actorUid);
+  assert.deepEqual(receipts.sort(), ['owner', 'staff']);
+});
+
+test('composed Saved Recipes revocation after initial verification prevents store dispatch', async () => {
+  const f = fixture({enableSavedRecipes: true}); let lookups = 0;
+  f.hooks.transport = url => {
+    if (url.includes('accounts:lookup') && ++lookups === 2) f.accounts.owner.disabled = true;
+  };
+  assert.equal((await f.call('/recipes/save', savedInput(f.context))).status, 401);
+  assert.equal(f.fake.calls.length, 0);
+});
+
 const aiSecret = 'SYNTHETIC_AI_SECRET';
 const aiCompletion = () => Response.json({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({recipes: [
   {title: 'Rice dish', ingredients: [{itemId: 'i1', quantity: 1, unit: 'kg'}],

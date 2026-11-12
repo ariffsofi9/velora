@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+import 'recipe_suggestions_content.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../../../services/secure_ai_service.dart';
 import '../../../services/workspace_session.dart';
@@ -20,12 +22,70 @@ class _SecureAiSuggestionsState extends State<SecureAiSuggestions> {
   int _revision = 0;
   SecureAiResult? _result;
   String? _message;
+  final _openDetails = <ValueNotifier<bool>>{};
+
+  void _invalidateDetails() {
+    // Widget replacement/disposal can happen during a frame. Notify the route
+    // after that frame rather than rebuilding a sibling Overlay during build.
+    for (final access in _openDetails.toList()) {
+      void invalidate() {
+        if (_openDetails.contains(access)) access.value = false;
+      }
+
+      if (SchedulerBinding.instance.schedulerPhase ==
+          SchedulerPhase.persistentCallbacks) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => invalidate());
+      } else {
+        invalidate();
+      }
+    }
+  }
+
+  Future<void> _openRecipe(SecureAiRecipe recipe) async {
+    final session = widget.workspaceSession;
+    final service = widget.service;
+    final result = _result;
+    final revision = _revision;
+    bool current() =>
+        mounted &&
+        revision == _revision &&
+        session?.isActive == true &&
+        identical(widget.workspaceSession, session) &&
+        identical(widget.service, service) &&
+        identical(service.currentSession(), session) &&
+        identical(_result, result);
+    if (result == null || !result.recipes.contains(recipe) || !current()) {
+      return;
+    }
+    final access = ValueNotifier(true);
+    _openDetails.add(access);
+    try {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute(
+          builder: (_) => RecipePresentationDetails(
+            recipe: RecipePresentation.fromSecure(
+              recipe,
+              isDemo: result.isDemo,
+            ),
+            isDemo: false,
+            access: access,
+            isCurrent: current,
+          ),
+        ),
+      );
+    } finally {
+      _openDetails.remove(access);
+      access.dispose();
+    }
+  }
+
   @override
   void didUpdateWidget(covariant SecureAiSuggestions oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.workspaceSession != widget.workspaceSession ||
         oldWidget.service != widget.service) {
       _revision++;
+      _invalidateDetails();
       _loading = false;
       _result = null;
       _message = null;
@@ -35,12 +95,14 @@ class _SecureAiSuggestionsState extends State<SecureAiSuggestions> {
   @override
   void dispose() {
     _revision++;
+    _invalidateDetails();
     super.dispose();
   }
 
   Future<void> _generate() async {
     if (_loading) return;
     final revision = ++_revision;
+    _invalidateDetails();
     final session = widget.workspaceSession;
     if (session == null ||
         !session.isActive ||
@@ -101,6 +163,7 @@ class _SecureAiSuggestionsState extends State<SecureAiSuggestions> {
     final active =
         (widget.workspaceSession?.isActive ?? false) &&
         identical(widget.service.currentSession(), widget.workspaceSession);
+    if (!active) _invalidateDetails();
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.lg),
@@ -153,6 +216,11 @@ class _SecureAiSuggestionsState extends State<SecureAiSuggestions> {
                   ),
                 for (final step in recipe.steps) Text(step),
                 Text(recipe.whyRecommended),
+                TextButton.icon(
+                  onPressed: () => _openRecipe(recipe),
+                  icon: const Icon(Icons.open_in_new_rounded),
+                  label: const Text('View recipe'),
+                ),
               ],
             ],
           ],

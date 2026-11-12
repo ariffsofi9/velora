@@ -6,6 +6,7 @@ import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/suggestions/suggestions_page.dart';
 import 'package:velora/screens/suggestions/widgets_suggestions/recipe_suggestions_content.dart';
 import 'package:velora/services/workspace_session.dart';
+import 'package:velora/services/secure_ai_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _Source implements WorkspaceInventoryDataSource {
@@ -250,4 +251,86 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+  for (final demo in [true, false]) {
+    for (final width in [320.0, 768.0]) {
+      testWidgets(
+        'secure details preserve canonical fields at $width demo=$demo',
+        (tester) async {
+          tester.view.physicalSize = Size(width, 852);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          const canonical = SecureAiRecipe(
+            'Supplied title',
+            [SecureAiIngredient('milk-id', 0.125, 'L')],
+            ['Stir for 4 minutes.'],
+            'Uses eligible inventory.',
+          );
+          final recipe = RecipePresentation.fromSecure(canonical, isDemo: demo);
+          expect(recipe.ingredients.single.quantity, '0.125');
+          expect(recipe.ingredients.single.name, 'Ingredient ID: milk-id');
+          expect(recipe.instructions, canonical.steps);
+          expect(recipe.description, canonical.whyRecommended);
+          await tester.pumpWidget(
+            _app(RecipePresentationDetails(recipe: recipe, isDemo: false), 2),
+          );
+          await tester.pumpAndSettle();
+          await tester.scrollUntilVisible(
+            find.text('0.125 L \u00b7 Ingredient ID: milk-id'),
+            200,
+          );
+          expect(
+            find.text('0.125 L \u00b7 Ingredient ID: milk-id'),
+            findsOneWidget,
+          );
+          await tester.scrollUntilVisible(
+            find.text('No preparation notes supplied.'),
+            150,
+          );
+          expect(find.text('No preparation notes supplied.'), findsOneWidget);
+          await tester.scrollUntilVisible(
+            find.text('Stir for 4 minutes.'),
+            150,
+          );
+          expect(find.text('Stir for 4 minutes.'), findsOneWidget);
+          expect(
+            recipe.metadata,
+            demo
+                ? 'Injected mock recipe - no AI provider was called.'
+                : 'Validated AI recipe',
+          );
+          expect(find.text('Cook Now'), findsNothing);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  testWidgets('guarded details hide all supplied content after access loss', (
+    tester,
+  ) async {
+    final access = ValueNotifier(true);
+    await tester.pumpWidget(
+      _app(
+        RecipePresentationDetails(
+          recipe: sampleRecipe,
+          access: access,
+          isCurrent: () => true,
+        ),
+        1,
+      ),
+    );
+    expect(find.text(sampleRecipe.title), findsOneWidget);
+    access.value = false;
+    await tester.pumpAndSettle();
+    expect(find.text(sampleRecipe.title), findsNothing);
+    expect(
+      find.text(
+        'This recipe is no longer available because workspace access changed.',
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    access.dispose();
+  });
 }

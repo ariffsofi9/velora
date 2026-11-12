@@ -16,6 +16,7 @@ const validToken = token => typeof token === 'string' && token.trim() === token 
 const validTransaction = value => typeof value === 'string' && value.length > 0 && value.length <= 8192 &&
   Buffer.from(value, 'base64').toString('base64') === value;
 const ownKeys = (value, keys) => record(value) && Object.keys(value).every(key => keys.includes(key));
+const recipeId = value => typeof value === 'string' && /^recipe_[a-f0-9]{64}$/.test(value);
 
 // Unlike the generic dependency helper, preserve callback exception identity.
 async function wait(action, ms, expired) {
@@ -200,14 +201,16 @@ export function createFirestoreStore({projectId, databaseId = '(default)', http,
           return read(async () => {
             const segment = firestoreCafeSegment(cafeId);
             if (!Number.isInteger(limit) || limit < 1 || limit > 101) invalid('invalid-query');
+            const saved = collectionId === 'saved_recipes';
+            const archived = saved ? (input.mode === 'all' ? null : input.mode === 'archived')
+              : input && !input.includeArchived ? false : null;
+            const cursor = saved ? input.afterId : input?.cursor ?? null;
             const prefix = `${name(`cafes/${cafeId}`)}/${collectionId}/`;
             const structuredQuery = {from: [{collectionId}], orderBy: [{field: {fieldPath: '__name__'}, direction: 'ASCENDING'}], limit};
-            if (input) {
-              if (!input.includeArchived) structuredQuery.where = {fieldFilter: {
-                field: {fieldPath: 'isArchived'}, op: 'EQUAL', value: {booleanValue: false}}};
-              if (input.cursor !== null) structuredQuery.startAt = {
-                values: [{referenceValue: prefix + input.cursor}], before: false};
-            }
+            if (archived !== null) structuredQuery.where = {fieldFilter: {
+              field: {fieldPath: 'isArchived'}, op: 'EQUAL', value: {booleanValue: archived}}};
+            if (cursor !== null) structuredQuery.startAt = {
+              values: [{referenceValue: prefix + cursor}], before: false};
             const rows = await rpc('runQuery', {transaction, structuredQuery}, `${endpoint}/cafes/${segment}:runQuery`);
             if (!Array.isArray(rows) || rows.length > limit + 2) invalid('invalid-response');
             const result = [], seen = new Set();
@@ -222,10 +225,11 @@ export function createFirestoreStore({projectId, databaseId = '(default)', http,
               const full = row.document.name;
               if (typeof full !== 'string' || !full.startsWith(prefix)) invalid('invalid-response');
               const id = full.slice(prefix.length);
-              if (!validId(id) || seen.has(id) || (result.length && Buffer.compare(Buffer.from(result.at(-1).id), Buffer.from(id)) >= 0)) invalid('invalid-response');
+              if (!validId(id) || (saved && !recipeId(id)) || seen.has(id) ||
+                  (result.length && Buffer.compare(Buffer.from(result.at(-1).id), Buffer.from(id)) >= 0)) invalid('invalid-response');
               const data = document(row.document, full);
-              if (input && ((!input.includeArchived && data.isArchived !== false) ||
-                  (input.cursor !== null && Buffer.compare(Buffer.from(id), Buffer.from(input.cursor)) <= 0))) invalid('invalid-response');
+              if ((archived !== null && data.isArchived !== archived) ||
+                  (cursor !== null && Buffer.compare(Buffer.from(id), Buffer.from(cursor)) <= 0)) invalid('invalid-response');
               result.push({id, data}); seen.add(id);
             }
             if (result.length > limit) invalid('invalid-response');
@@ -264,6 +268,20 @@ export function createFirestoreStore({projectId, databaseId = '(default)', http,
               const failure = new FirestoreStoreError('invalid-query'); poison ??= failure; throw failure;
             }
             return query(cafeId, 'menu_items', input.limit + 1, input);
+          },
+          savedRecipes: (cafeId, input) => {
+            if (!ownKeys(input, ['mode', 'limit', 'afterId']) ||
+                !['mode', 'limit', 'afterId'].every(key => Object.hasOwn(input, key)) ||
+                !['active', 'archived', 'all'].includes(input.mode) ||
+                !Number.isInteger(input.limit) || input.limit < 1 || input.limit > 21 ||
+                (input.afterId !== null && !recipeId(input.afterId))) {
+              const failure = new FirestoreStoreError('invalid-query'); poison ??= failure; throw failure;
+            }
+            // E2 already includes its one-row look-ahead in limit. Copy the
+            // primitive parameters so in-flight caller mutation cannot change
+            // response validation or the query's scope/filter/cursor contract.
+            return query(cafeId, 'saved_recipes', input.limit,
+              {mode: input.mode, afterId: input.afterId});
           },
         });
         try {

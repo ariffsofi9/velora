@@ -53,13 +53,35 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
 
   @override
   void initState() {
-    _repository = widget.repository;
-    final session = widget.workspaceSession;
-    if (_repository == null && session != null) {
-      _repository = WorkspaceInventoryRepository(session: session);
-    }
-    _itemsStream = _repository?.watchItems();
+    _configureInventory();
     super.initState();
+  }
+
+  bool get _verified =>
+      widget.workspaceSession?.isActive == true &&
+      identical(_repository?.session, widget.workspaceSession);
+
+  void _configureInventory() {
+    final session = widget.workspaceSession;
+    _repository = widget.repository;
+    if (_repository == null && session?.isActive == true) {
+      _repository = WorkspaceInventoryRepository(session: session!);
+    }
+    _itemsStream = _verified ? _repository!.watchItems() : null;
+  }
+
+  @override
+  void didUpdateWidget(covariant SuggestionsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.repository, widget.repository)) {
+      _configureInventory();
+    }
+  }
+
+  void _retryInventory() {
+    if (!_verified) return;
+    setState(() => _itemsStream = _repository!.watchItems());
   }
 
   @override
@@ -153,7 +175,7 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
   @override
   Widget build(BuildContext context) {
     final itemsStream = _itemsStream;
-    if (itemsStream == null) {
+    if (!_verified || itemsStream == null) {
       return const Scaffold(
         backgroundColor: AppColors.background,
         body: SafeArea(
@@ -176,23 +198,37 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
         child: StreamBuilder<List<InventoryItem>>(
           stream: itemsStream,
           builder: (context, snapshot) {
-            if (snapshot.hasError) {
-              return const Center(
+            if (snapshot.hasError &&
+                snapshot.connectionState != ConnectionState.waiting) {
+              return Center(
                 child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                    'Inventory is unavailable. Check your connection and try again.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w400,
-                    ),
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Inventory is unavailable. Check your connection and try again.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: AppColors.textSecondary,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        key: const ValueKey('discover-inventory-retry'),
+                        onPressed: _verified ? _retryInventory : null,
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('Retry'),
+                      ),
+                    ],
                   ),
                 ),
               );
             }
 
-            if (!snapshot.hasData) {
+            if (!snapshot.hasData ||
+                snapshot.connectionState == ConnectionState.waiting) {
               return const Center(
                 child: CircularProgressIndicator(color: AppColors.primary),
               );
@@ -221,6 +257,7 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
                       const SizedBox(height: 18),
                       if (widget.aiService != null)
                         SecureAiSuggestions(
+                          key: ObjectKey(widget.aiService),
                           workspaceSession: widget.workspaceSession,
                           service: widget.aiService!,
                         )
