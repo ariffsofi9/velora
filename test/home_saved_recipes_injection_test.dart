@@ -2,8 +2,10 @@ import 'package:velora/services/android_pilot_policy.dart';
 // Test-only plugin delegates keep Home's existing inventory construction offline.
 // ignore_for_file: depend_on_referenced_packages
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_core_platform_interface/firebase_core_platform_interface.dart';
@@ -14,7 +16,11 @@ import 'package:velora/repositories/workspace_saved_recipe_repository.dart'
 import 'package:velora/screens/home/home_page.dart';
 import 'package:velora/screens/home/widgets_home/bottom_bar.dart';
 import 'package:velora/screens/dashboard/dashboard_page.dart';
+import 'package:velora/screens/inventory/add_item/add_item_page.dart';
+import 'package:velora/screens/inventory/inventory_page.dart';
 import 'package:velora/screens/suggestions/suggestions_page.dart';
+import 'package:velora/services/workspace_inventory_create_service.dart';
+import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_session.dart';
 
 WorkspaceSession e8Session({CafeRole role = CafeRole.owner}) =>
@@ -169,6 +175,39 @@ final _normalPolicy = AndroidPilotPolicy.parse(
   platform: TargetPlatform.android,
 );
 
+InventoryHttpsSession _inventorySession(
+  WorkspaceSession workspace, {
+  String projectId = OfflineInventoryRest.projectId,
+  bool verified = true,
+}) => InventoryHttpsSession(
+  workspace: workspace,
+  uid: workspace.uid,
+  projectId: projectId,
+  emailVerified: verified,
+  revision: 1,
+);
+
+WorkspaceInventoryCreateRequest _createRequest() =>
+    WorkspaceInventoryCreateRequest(
+      idempotencyKey: 'synthetic-request-0001',
+      name: 'Synthetic item',
+      category: 'Meat',
+      quantity: 1,
+      unit: 'kg',
+      expiryDate: DateTime.utc(2027),
+      imageUrl: '',
+    );
+
+http.Response _createResponse(String cafeId) => http.Response(
+  jsonEncode({
+    'cafeId': cafeId,
+    'itemId': 'item_${List.filled(64, 'a').join()}',
+    'created': true,
+  }),
+  200,
+  headers: {'content-type': 'application/json'},
+);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late FirebasePlatform oldCore;
@@ -183,6 +222,179 @@ void main() {
   tearDown(() {
     FirebaseFirestorePlatform.instance = oldFirestore;
     FirebasePlatform.instance = oldCore;
+  });
+
+  testWidgets('Home requires a matching verified offline inventory transport', (
+    tester,
+  ) async {
+    final workspace = e8Session();
+    var dispatches = 0;
+    for (final session in [
+      null,
+      _inventorySession(e8Session()),
+      _inventorySession(workspace, projectId: 'velora-73222'),
+      _inventorySession(workspace, verified: false),
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(
+            workspaceSession: workspace,
+            offlineInventoryRest: session == null
+                ? null
+                : OfflineInventoryRest(
+                    session: session,
+                    respond: (_) async {
+                      dispatches++;
+                      return _createResponse(workspace.cafeId);
+                    },
+                  ),
+          ),
+        ),
+      );
+      final bottomBar = tester.widget<VeloraBottomBar>(
+        find.byType(VeloraBottomBar),
+      );
+      bottomBar.onTap(1);
+      await tester.pump();
+      final inventory = tester.widget<InventoryPage>(
+        find.byType(InventoryPage),
+      );
+      expect(inventory.inventoryCreator, isNull);
+      expect(inventory.inventoryUpdater, isNull);
+      expect(inventory.stockAdjuster, isNull);
+      expect(inventory.lifecycleManager, isNull);
+      bottomBar.onTap(2);
+      await tester.pump();
+      expect(find.byType(AddItemPage), findsNothing);
+    }
+    expect(dispatches, 0);
+  });
+
+  testWidgets('Home forwards one synthetic REST adapter to the inventory UI', (
+    tester,
+  ) async {
+    final workspace = e8Session(role: CafeRole.staff);
+    final requests = <http.Request>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: HomePage(
+          workspaceSession: workspace,
+          offlineInventoryRest: OfflineInventoryRest(
+            session: _inventorySession(workspace),
+            respond: (request) async {
+              requests.add(request);
+              return _createResponse(workspace.cafeId);
+            },
+          ),
+        ),
+      ),
+    );
+    final bottomBar = tester.widget<VeloraBottomBar>(
+      find.byType(VeloraBottomBar),
+    );
+    bottomBar.onTap(1);
+    await tester.pump();
+    final inventory = tester.widget<InventoryPage>(find.byType(InventoryPage));
+    final creator = inventory.inventoryCreator!;
+    expect(creator, isA<HttpsWorkspaceInventory>());
+    expect(inventory.inventoryUpdater, same(creator));
+    expect(inventory.stockAdjuster, same(creator));
+    expect(inventory.lifecycleManager, same(creator));
+    bottomBar.onTap(2);
+    await tester.pumpAndSettle();
+    final add = tester.widget<AddItemPage>(find.byType(AddItemPage));
+    expect(add.workspaceSession, same(workspace));
+    expect(add.creator, same(creator));
+    final request = _createRequest();
+    await tester.runAsync(() async {
+      final result = await add.creator!.createItem(request);
+      expect(result.created, isTrue);
+    });
+    final sent = requests.single;
+    expect(
+      sent.url.toString(),
+      'https://inventory.offline.invalid/inventory/create',
+    );
+    expect(sent.headers['authorization'], 'Bearer synthetic-inventory-token');
+    final body = jsonDecode(sent.body) as Map<String, dynamic>;
+    expect(body['expectedCafeId'], workspace.cafeId);
+    expect(
+      body['expectedMembershipGeneration'],
+      workspace.membershipGeneration,
+    );
+    expect(body['idempotencyKey'], request.idempotencyKey);
+  });
+
+  testWidgets('Home replacement fences a pending synthetic acknowledgement', (
+    tester,
+  ) async {
+    final original = e8Session();
+    var workspace = original;
+    late StateSetter replace;
+    var dispatches = 0;
+    late Completer<void> started;
+    late Completer<http.Response> reply;
+    final offline = OfflineInventoryRest(
+      session: _inventorySession(original),
+      respond: (_) {
+        dispatches++;
+        if (!started.isCompleted) started.complete();
+        return reply.future;
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (_, setState) {
+            replace = setState;
+            return HomePage(
+              workspaceSession: workspace,
+              offlineInventoryRest: offline,
+            );
+          },
+        ),
+      ),
+    );
+    tester.widget<VeloraBottomBar>(find.byType(VeloraBottomBar)).onTap(1);
+    await tester.pump();
+    final oldCreator = tester
+        .widget<InventoryPage>(find.byType(InventoryPage))
+        .inventoryCreator!;
+    late Future<void> pending;
+    await tester.runAsync(() async {
+      started = Completer<void>();
+      reply = Completer<http.Response>();
+      pending = expectLater(
+        oldCreator.createItem(_createRequest()),
+        throwsA(
+          isA<InventoryHttpsCreateException>()
+              .having((e) => e.transport.code, 'code', 'session-changed')
+              .having(
+                (e) => e.transport.outcomeUnknown,
+                'outcome unknown',
+                true,
+              ),
+        ),
+      );
+      await started.future.timeout(const Duration(seconds: 5));
+    });
+    expect(dispatches, 1);
+    replace(() => workspace = e8Session());
+    await tester.pump();
+    expect(original.isActive, isTrue);
+    expect(
+      tester.widget<InventoryPage>(find.byType(InventoryPage)).inventoryCreator,
+      isNull,
+    );
+    await tester.runAsync(() async {
+      reply.complete(_createResponse(original.cafeId));
+      await pending;
+      await expectLater(
+        oldCreator.createItem(_createRequest()),
+        throwsA(isA<InventoryHttpsCreateException>()),
+      );
+    });
+    expect(dispatches, 1);
   });
 
   for (final role in [CafeRole.owner, CafeRole.staff]) {
