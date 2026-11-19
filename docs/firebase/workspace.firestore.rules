@@ -41,7 +41,9 @@ service cloud.firestore {
         link(ownerMapping, owner, cafeId) &&
         matchingGeneration(ownerMapping, ownerMember);
     }
-    function isMember(cafeId) { return signedIn() && member(cafeId); }
+    function isMember(cafeId) {
+      return signedIn() && request.auth.token.email_verified == true && member(cafeId);
+    }
     function isOwner(cafeId) {
       return isMember(cafeId) &&
         get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == request.auth.uid;

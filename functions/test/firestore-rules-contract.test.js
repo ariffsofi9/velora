@@ -52,7 +52,7 @@ test('generation checks are conjunctive with existing caller and owner authoriza
   assert.ok(!member.includes('|| matchingGeneration'));
 });
 
-test('active link schema and signed-in/owner gates remain unchanged', () => {
+test('active links and sign-in are preserved; workspace reads require verified email', () => {
   const link = between('    function link(', '    // Active-link');
   assert.equal(compact(link), compact(`function link(data, uid, cafeId) {
     return data.uid == uid && data.cafeId == cafeId &&
@@ -60,11 +60,33 @@ test('active link schema and signed-in/owner gates remain unchanged', () => {
   }`));
   assert.ok(rules.includes('function signedIn() { return request.auth != null; }'));
   assert.equal(compact(between('    function isMember(', '    // S2 LOCAL DRAFT:')), compact(`
-    function isMember(cafeId) { return signedIn() && member(cafeId); }
+    function isMember(cafeId) {
+      return signedIn() && request.auth.token.email_verified == true && member(cafeId);
+    }
     function isOwner(cafeId) {
       return isMember(cafeId) &&
         get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == request.auth.uid;
     }`));
+});
+
+test('verified-email source contract applies equally to Owner and Staff', () => {
+  const gate = compact(between('    function isMember(', '    function isOwner('));
+  const match = gate.match(/^function isMember\(cafeId\) \{ return signedIn\(\) && request\.auth\.token\.email_verified == (true|false) && member\(cafeId\); \}$/);
+  assert.ok(match, 'signed-in, email claim and canonical membership must all be required');
+  const requiredClaim = JSON.parse(match[1]);
+  // Host projection of the source claim check for an otherwise eligible member.
+  // Firestore evaluation, including behavior on missing fields, is not run here.
+  for (const role of ['owner', 'staff']) {
+    for (const [token, expected] of [
+      [{email_verified: true}, true],
+      [{email_verified: false}, false],
+      [{}, false],
+      [{email_verified: 'true'}, false],
+    ]) {
+      assert.equal(token.email_verified === requiredClaim, expected,
+        `${role} with token ${JSON.stringify(token)}`);
+    }
+  }
 });
 
 test('only the three bootstrap create grants change the previous match contract', () => {
