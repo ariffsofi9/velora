@@ -1,3 +1,6 @@
+import 'dart:collection';
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -78,6 +81,7 @@ class _Fixture {
   final Object scope = Object();
   final WorkspaceSession w;
   int time = 1000000;
+  int sessionReads = 0, clockReads = 0;
   late SecureAiHttpsSession? current;
   late final SecureAiHttpsTransport transport;
   Future<String?> Function(SecureAiHttpsSession) token = (_) async =>
@@ -105,19 +109,27 @@ class _Fixture {
     if (op == 'generate') 'ticketId': ticketId,
   };
   SecureAiHttpsTransport build({
+    AndroidPilotPolicy? policy,
     bool enabled = true,
     Duration timeout = const Duration(seconds: 1),
     Stream<SecureAiHttpsSession?>? stream,
   }) => SecureAiHttpsTransport(
+    pilotPolicy: policy ?? _normalPolicy,
     endpoint: Uri.parse('https://backend.invalid'),
     projectId: 'velora-spark-test',
     endpointProjectId: 'velora-spark-test',
     client: client,
-    currentSession: () => current,
+    currentSession: () {
+      sessionReads++;
+      return current;
+    },
     sessionChanges: stream ?? changes.stream,
     idToken: (s) => token(s),
     sessionScope: scope,
-    now: () => time,
+    now: () {
+      clockReads++;
+      return time;
+    },
     enabled: enabled,
     timeout: timeout,
     cleanupTimeout: const Duration(milliseconds: 10),
@@ -135,7 +147,119 @@ Matcher failure({bool unknown = false, String? code, String? reason}) =>
         .having((e) => reason == null || e.reason == reason, 'reason', true)
         .having((e) => e.toString().contains('PRIVATE'), 'safe failure', false);
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+class _InputProbe extends MapBase<String, Object> {
+  final Map<String, Object> value;
+  int reads = 0;
+  _InputProbe(this.value);
+  @override
+  Iterable<String> get keys {
+    reads++;
+    return value.keys;
+  }
+
+  @override
+  Object? operator [](Object? key) {
+    reads++;
+    return value[key];
+  }
+
+  @override
+  void operator []=(String key, Object entry) =>
+      throw StateError('Unexpected mutation');
+  @override
+  void clear() => throw StateError('Unexpected mutation');
+  @override
+  Object? remove(Object? key) => throw StateError('Unexpected mutation');
+}
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final enabled in [false, true]) {
+      for (final operation in ['issue', 'generate']) {
+        test(
+          'HTTPS AI invalid=$invalid enabled=$enabled $operation has zero preparation/token/HTTP activity',
+          () async {
+            final f = _Fixture();
+            var tokens = 0;
+            f.token = (_) async {
+              tokens++;
+              return 'synthetic.token';
+            };
+            final policy = _pilotPolicy(invalid);
+            final transport = f.build(policy: policy, enabled: enabled),
+                input = _InputProbe(f.data(operation));
+            expect(transport.pilotPolicy, same(policy));
+            expect(transport.available, false);
+            final captured = transport.call;
+            await expectLater(
+              captured(input),
+              throwsA(failure(code: 'pilot-policy-denied')),
+            );
+            await expectLater(
+              captured(input),
+              throwsA(failure(code: 'pilot-policy-denied')),
+            );
+            expect(input.reads, 0);
+            expect(f.sessionReads, 0);
+            expect(f.clockReads, 0);
+            expect(tokens, 0);
+            expect(f.client.calls, isEmpty);
+          },
+        );
+      }
+    }
+    test(
+      'HTTPS AI policy invalid=$invalid cannot consume a normal ticket',
+      () async {
+        final f = _Fixture();
+        await f.issue();
+        final before = f.client.calls.length;
+        final blocked = f.build(policy: _pilotPolicy(invalid));
+        await expectLater(
+          blocked.call(f.data('generate')),
+          throwsA(failure(code: 'pilot-policy-denied')),
+        );
+        expect(f.client.calls, hasLength(before));
+        await f.generate();
+        expect(f.client.calls, hasLength(before + 1));
+      },
+    );
+    test(
+      'HTTPS AI policy invalid=$invalid cannot clear prior uncertain state',
+      () async {
+        final f = _Fixture();
+        f.client.handle = (_) async =>
+            response({'error': 'unavailable'}, status: 500);
+        await expectLater(f.issue(), throwsA(failure(unknown: true)));
+        final before = f.client.calls.length;
+        await expectLater(
+          f.build(policy: _pilotPolicy(invalid)).call(f.data('issue')),
+          throwsA(failure(code: 'pilot-policy-denied')),
+        );
+        await expectLater(f.issue(), throwsA(failure(unknown: true)));
+        expect(f.client.calls, hasLength(before));
+      },
+    );
+  }
+
   test(
     'construction is inert, disabled by default, non-demo and TEST-only',
     () async {
@@ -159,6 +283,7 @@ void main() {
       ]) {
         expect(
           () => SecureAiHttpsTransport(
+            pilotPolicy: _normalPolicy,
             endpoint: Uri.parse(url),
             projectId: 'velora-spark-test',
             endpointProjectId: 'velora-spark-test',
@@ -174,6 +299,7 @@ void main() {
       }
       expect(
         () => SecureAiHttpsTransport(
+          pilotPolicy: _normalPolicy,
           endpoint: Uri.parse('https://backend.invalid'),
           projectId: 'velora-73222',
           endpointProjectId: 'velora-73222',
@@ -194,6 +320,7 @@ void main() {
       () async {
         final f = _Fixture(role: role),
             service = SecureAiService(
+              pilotPolicy: _normalPolicy,
               currentSession: () => f.w,
               transport: f.transport,
               timeout: const Duration(seconds: 2),
@@ -565,6 +692,7 @@ void main() {
               'outcomeUnknown': true,
             }, status: 503);
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => f.w,
         transport: f.transport,
       );

@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,13 +43,110 @@ Map<String, Object> result() => {
 Matcher failure(SecureAiFailure value) =>
     isA<SecureAiException>().having((e) => e.failure, 'failure', value);
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+class _ProbeTransport implements SecureAiTransport {
+  int availabilityReads = 0, demoReads = 0, calls = 0;
+  @override
+  bool get available {
+    availabilityReads++;
+    return true;
+  }
+
+  @override
+  bool get isDemo {
+    demoReads++;
+    return true;
+  }
+
+  @override
+  Future<Object?> call(Map<String, Object> data) async {
+    calls++;
+    throw StateError('Unexpected external side effect');
+  }
+}
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final max in [-1, 1, 3]) {
+      test(
+        'AI service invalid=$invalid max=$max rejects before providers and unrestricted dependency',
+        () async {
+          var providers = 0;
+          final dependency = _ProbeTransport(), policy = _pilotPolicy(invalid);
+          final service = SecureAiService(
+            pilotPolicy: policy,
+            currentSession: () {
+              providers++;
+              return session();
+            },
+            transport: dependency,
+          );
+          expect(service.pilotPolicy, same(policy));
+          expect(service.available, false);
+          expect(service.isDemo, false);
+          expect(service.currentSession(), isNull);
+          final captured = service.generate;
+          await expectLater(
+            captured(maxRecipes: max),
+            throwsA(isA<SecureAiPilotPolicyException>()),
+          );
+          await expectLater(
+            captured(maxRecipes: max),
+            throwsA(failure(SecureAiFailure.denied)),
+          );
+          expect(providers, 0);
+          expect(dependency.availabilityReads, 0);
+          expect(dependency.demoReads, 0);
+          expect(dependency.calls, 0);
+        },
+      );
+    }
+    test(
+      'AI policy invalid=$invalid preserves default unavailable transport without provider lookup',
+      () async {
+        var providers = 0;
+        final service = SecureAiService(
+          pilotPolicy: _pilotPolicy(invalid),
+          currentSession: () {
+            providers++;
+            throw StateError('Unexpected provider access');
+          },
+        );
+        expect(service.available, false);
+        expect(service.currentSession(), isNull);
+        await expectLater(
+          service.generate(),
+          throwsA(failure(SecureAiFailure.denied)),
+        );
+        expect(providers, 0);
+      },
+    );
+  }
+
   test(
     'valid mock sends only exact backend fields and labels result demo',
     () async {
       final current = session();
       final requests = <Map<String, Object>>[];
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: MockSecureAiTransport((data) async {
           requests.add(data);
@@ -75,7 +174,10 @@ void main() {
     },
   );
   test('default unavailable transport cannot invoke Firebase', () async {
-    final s = SecureAiService(currentSession: () => session());
+    final s = SecureAiService(
+      pilotPolicy: _normalPolicy,
+      currentSession: () => session(),
+    );
     expect(s.available, false);
     await expectLater(
       s.generate(),
@@ -87,6 +189,7 @@ void main() {
     final current = session()..invalidate();
     for (final candidate in [null, current]) {
       final s = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => candidate,
         transport: MockSecureAiTransport((_) async {
           calls++;
@@ -107,6 +210,7 @@ void main() {
       final pending = Completer<Object?>();
       var calls = 0;
       final s = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: MockSecureAiTransport((_) {
           calls++;
@@ -134,6 +238,7 @@ void main() {
       final pending = Completer<Object?>();
       final started = Completer<void>();
       final s = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: MockSecureAiTransport((data) async {
           if (data['operation'] == 'issue') return issued();
@@ -170,6 +275,7 @@ void main() {
       final current = session();
       var calls = 0;
       final s = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: MockSecureAiTransport((_) async {
           calls++;
@@ -185,6 +291,7 @@ void main() {
     final pending = Completer<Object?>();
     var calls = 0;
     final s = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => current,
       timeout: const Duration(milliseconds: 5),
       transport: MockSecureAiTransport((_) {
@@ -202,6 +309,7 @@ void main() {
     final pending = Completer<Object?>();
     var calls = 0;
     final s = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => current,
       transport: MockSecureAiTransport((data) async {
         calls++;
@@ -244,6 +352,7 @@ void main() {
       }
       if (malformed == 'oversized') recipe['title'] = 'x' * 66000;
       final s = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: MockSecureAiTransport(
           (request) async => request['operation'] == 'issue' ? issued() : data,
@@ -259,6 +368,7 @@ void main() {
     final current = session();
     var calls = 0;
     final s = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => current,
       transport: MockSecureAiTransport((_) async {
         calls++;
@@ -274,6 +384,7 @@ void main() {
   test('raw exceptions are sanitized', () async {
     final current = session();
     final s = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => current,
       transport: MockSecureAiTransport(
         (_) async => throw StateError('private account/provider details'),
@@ -305,6 +416,7 @@ void main() {
       var calls = 0;
       final pending = Completer<Object?>();
       final s = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         timeout: const Duration(milliseconds: 5),
         transport: MockSecureAiTransport((data) async {
@@ -330,6 +442,7 @@ void main() {
       data['recipes'] = [];
       data['status'] = 'no_suggestions';
       final s = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: MockSecureAiTransport(
           (request) async => request['operation'] == 'issue' ? issued() : data,

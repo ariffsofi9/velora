@@ -1,3 +1,5 @@
+import 'package:velora/services/android_pilot_policy.dart';
+import 'package:velora/screens/auth/workspace_gate.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -72,7 +74,169 @@ final session = WorkspaceSession.fromVerified(
   ),
 );
 
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final archived in [false, true]) {
+      test(
+        'independent lifecycle invalid=$invalid archived=$archived rejects before preparation',
+        () async {
+          var invokes = 0;
+          final service = FirebaseWorkspaceInventoryLifecycleManager(
+            pilotPolicy: _pilotPolicy(invalid),
+            invoke: (_) async {
+              invokes++;
+              return {};
+            },
+          );
+          await expectLater(
+            service.setLifecycle(
+              WorkspaceInventoryLifecycleRequest(
+                idempotencyKey: 'lifecycle-key-01',
+                itemId: 'item-a',
+                action: archived
+                    ? InventoryLifecycleAction.restore
+                    : InventoryLifecycleAction.archive,
+                expectedVersion: 2,
+              ),
+            ),
+            throwsA(isA<InventoryLifecyclePilotPolicyException>()),
+          );
+          expect(invokes, 0);
+        },
+      );
+      testWidgets(
+        'direct lifecycle invalid=$invalid archived=$archived rejects injected manager',
+        (tester) async {
+          final manager = Manager(),
+              item = InventoryItem.fromMap(
+                'item-a',
+                data(lifecycle: archived ? 'archived' : null),
+              );
+          var changed = 0;
+          await tester.pumpWidget(
+            AndroidPilotAuthScope(
+              dependencies: AndroidPilotAuthDependencies(
+                policy: _pilotPolicy(invalid),
+              ),
+              child: MaterialApp(
+                home: Scaffold(
+                  body: InventoryLifecycleActionButton(
+                    item: item,
+                    workspaceSession: session,
+                    manager: manager,
+                    onChanged: () => changed++,
+                  ),
+                ),
+              ),
+            ),
+          );
+          expect(find.byType(OutlinedButton), findsNothing);
+          expect(manager.requests, isEmpty);
+          expect(changed, 0);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+      testWidgets(
+        'captured lifecycle invalid=$invalid archived=$archived cannot dispatch',
+        (tester) async {
+          final manager = Manager(),
+              item = InventoryItem.fromMap(
+                'item-a',
+                data(lifecycle: archived ? 'archived' : null),
+              );
+          var changed = 0;
+          var policy = _normalPolicy;
+          late StateSetter update;
+          await tester.pumpWidget(
+            StatefulBuilder(
+              builder: (context, setState) {
+                update = setState;
+                return AndroidPilotAuthScope(
+                  dependencies: AndroidPilotAuthDependencies(policy: policy),
+                  child: MaterialApp(
+                    home: Scaffold(
+                      body: InventoryLifecycleActionButton(
+                        item: item,
+                        workspaceSession: session,
+                        manager: manager,
+                        onChanged: () => changed++,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+          final submit = tester
+              .widget<OutlinedButton>(find.byType(OutlinedButton))
+              .onPressed!;
+          update(() => policy = _pilotPolicy(invalid));
+          await tester.pump();
+          submit();
+          submit();
+          await tester.pump();
+          expect(manager.requests, isEmpty);
+          expect(changed, 0);
+          expect(find.byType(AlertDialog), findsNothing);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+  }
+  testWidgets(
+    'lifecycle policy replacement during confirmation stops dispatch',
+    (tester) async {
+      final manager = Manager(), item = InventoryItem.fromMap('item-a', data());
+      var policy = _normalPolicy;
+      late StateSetter update;
+      await tester.pumpWidget(
+        StatefulBuilder(
+          builder: (context, setState) {
+            update = setState;
+            return AndroidPilotAuthScope(
+              dependencies: AndroidPilotAuthDependencies(policy: policy),
+              child: MaterialApp(
+                home: Scaffold(
+                  body: InventoryLifecycleActionButton(
+                    item: item,
+                    workspaceSession: session,
+                    manager: manager,
+                    onChanged: () {},
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+      tester.widget<OutlinedButton>(find.byType(OutlinedButton)).onPressed!();
+      await tester.pumpAndSettle();
+      update(() => policy = _pilotPolicy(false));
+      await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('lifecycle-confirm')));
+      await tester.pumpAndSettle();
+      expect(manager.requests, isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   test('legacy items are active and unknown lifecycle fails closed', () {
     expect(InventoryItem.fromMap('legacy', data()).isArchived, isFalse);
     expect(

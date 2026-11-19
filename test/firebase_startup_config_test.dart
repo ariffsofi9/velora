@@ -1,3 +1,4 @@
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:velora/firebase_options.dart';
@@ -33,6 +34,217 @@ FirebaseOptions resolve(
   TargetPlatform platform = TargetPlatform.android,
 }) => config.resolve(isWeb: isWeb, platform: platform, webOptions: web);
 void main() {
+  group('validation-only Android pilot workflow', () {
+    const mode = '--dart-define=VELORA_ANDROID_READ_ONLY_PILOT=true';
+    const project = '--dart-define=VELORA_FIREBASE_PROJECT=velora-73222';
+    String binding(String raw) =>
+        '--dart-define=VELORA_ANDROID_PILOT_BINDINGS=$raw';
+    final valid = [
+      mode,
+      project,
+      binding('[["synthetic-user","synthetic-cafe"]]'),
+    ];
+    Future<ProcessResult> validate(List<String> arguments) {
+      final encoded = base64Encode(utf8.encode(jsonEncode(arguments)));
+      // Only synthetic fixtures cross this subprocess boundary. The validator
+      // itself launches no processes and never starts Flutter or Gradle.
+      return Process.run('powershell.exe', [
+        '-ExecutionPolicy',
+        'Bypass',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '\$a = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString('
+            '[Convert]::FromBase64String(\'$encoded\'))); '
+            '& ./tool/validate_android_pilot_arguments.ps1 -PilotArguments \$a',
+      ]).timeout(const Duration(seconds: 15));
+    }
+
+    final cases = <String, List<String>>{
+      'valid': valid,
+      'missing flag': valid.skip(1).toList(),
+      'misspelled flag': [
+        mode.replaceFirst('PILOT', 'PILTO'),
+        ...valid.skip(1),
+      ],
+      'missing project': [mode, valid.last],
+      'wrong project': [mode, '$project-wrong', valid.last],
+      'missing bindings': [mode, project],
+      'duplicate identical': [...valid, mode],
+      'duplicate conflicting': [
+        mode,
+        mode.replaceFirst('true', 'false'),
+        valid.last,
+      ],
+      'unknown pilot key': [
+        mode,
+        project,
+        '--dart-define=VELORA_ANDROID_PILOT_EXTRA=x',
+      ],
+      'unexpected argument': [...valid, '--release'],
+      'normal separation': [],
+      'explicit false': [mode.replaceFirst('true', 'false'), ...valid.skip(1)],
+      'split define syntax': ['--dart-define', ...valid],
+      'lowercase key': [mode.toLowerCase(), ...valid.skip(1)],
+      for (final key in AndroidPilotPolicy.conflictingKeys)
+        'conflicting $key': [...valid, '--dart-define=$key=false'],
+    };
+    final bindings = <String, String>{
+      'valid escaped': r'[["synthetic\u002duser","synthetic-cafe"]]',
+      'valid multiple': '[["u","c"],["U","d"]]',
+      'confirmed wrapper escape':
+          '[["synthetic-user","synthetic-cafe"]],"extra":[]',
+      'appended property': '[["u","c"]],"other":true',
+      'duplicate wrapper property': '[],"bindings":[["u","c"]]',
+      'closed wrapper': '[["u","c"]]}',
+      'trailing text': '[["u","c"]] trailing',
+      'trailing JSON number': '[["u","c"]] 1',
+      'concatenated arrays': '[["u","c"]][["v","d"]]',
+      'concatenated null': '[["u","c"]] null',
+      'concatenated object': '[["u","c"]] {}',
+      'root string': '"u"',
+      'root null': 'null',
+      'empty entry': '[[]]',
+      'extra entry field': '[["u","c","extra"]]',
+      'single quoted strings': "[['u','c']]",
+      'raw control in string': '[["u\nc","c"]]',
+      'valid pretty JSON': '[\n ["u", "c"]\n ]\n',
+      'empty': '[]',
+      'malformed': '[',
+      'object': '{}',
+      'flat': '["u","c"]',
+      'numeric': '[[1,"c"]]',
+      'missing id': '[["","c"]]',
+      'invalid id': '[["u/x","c"]]',
+      'duplicate uid': '[["u","c"],["u","d"]]',
+      'trailing comma': '[["u","c"],]',
+      'comment': '[["u","c"] /*comment*/]',
+      'too many': jsonEncode(List.generate(21, (i) => ['u$i', 'c'])),
+      'maximum': jsonEncode(List.generate(20, (i) => ['u$i', 'c'])),
+      'long id': jsonEncode([
+        ['u' * 129, 'c'],
+      ]),
+    };
+    final invalidIdentifiers = <String, String>{
+      'terminal LF': 'a\n',
+      'terminal CR': 'a\r',
+      'terminal CRLF': 'a\r\n',
+      'embedded LF': 'a\nb',
+      'leading LF': '\na',
+      'embedded CR': 'a\rb',
+      'terminal tab': 'a\t',
+      'terminal NUL': 'a\u0000',
+      'terminal line separator': 'a\u2028',
+      'terminal paragraph separator': 'a\u2029',
+      'leading space': ' a',
+      'terminal space': 'a ',
+    };
+    for (final entry in invalidIdentifiers.entries) {
+      for (final position in [0, 1]) {
+        final pair = ['synthetic-owner', 'synthetic-cafe-a']
+          ..[position] = entry.value;
+        // jsonEncode exercises decoded characters, including the exact two
+        // reported terminal-LF fixtures; every case must be canonically invalid.
+        bindings['identifier ${entry.key} at $position'] = jsonEncode([pair]);
+      }
+    }
+    bindings['valid identifier boundaries'] = jsonEncode([
+      ['A_0-z', 'c' * 128],
+      ['Z' * 128, '_'],
+    ]);
+    for (final entry in bindings.entries) {
+      final policy = AndroidPilotPolicy.parse(
+        {
+          AndroidPilotPolicy.modeKey: 'true',
+          AndroidPilotPolicy.projectKey: AndroidPilotPolicy.approvedProject,
+          AndroidPilotPolicy.bindingsKey: entry.value,
+        },
+        isWeb: false,
+        platform: TargetPlatform.android,
+      );
+      test('canonical bindings ${entry.key}', () {
+        expect(
+          policy.isRestricted,
+          entry.key.startsWith('valid') || entry.key == 'maximum',
+        );
+      });
+      cases['bindings ${entry.key}'] = [mode, project, binding(entry.value)];
+    }
+    for (final entry in cases.entries) {
+      test(entry.key, () async {
+        final definitions = <String, String>{};
+        var structurallyValid = entry.value.length == 3;
+        for (final argument in entry.value) {
+          final match = RegExp(
+            r'^--dart-define=([A-Z_]+)=(.*)$',
+            dotAll: true,
+          ).firstMatch(argument);
+          if (match == null ||
+              !{
+                AndroidPilotPolicy.modeKey,
+                AndroidPilotPolicy.projectKey,
+                AndroidPilotPolicy.bindingsKey,
+              }.contains(match[1]) ||
+              definitions.containsKey(match[1])) {
+            structurallyValid = false;
+          } else {
+            definitions[match[1]!] = match[2]!;
+          }
+        }
+        final canonical = AndroidPilotPolicy.parse(
+          definitions,
+          isWeb: false,
+          platform: TargetPlatform.android,
+        );
+        final accepted = structurallyValid && canonical.isRestricted;
+        final result = await validate(entry.value);
+        expect(result.exitCode, accepted ? 0 : 1, reason: entry.key);
+        expect(result.stderr, isEmpty);
+        expect(
+          result.stdout,
+          accepted ? contains('PASS:') : contains('REJECTED:'),
+        );
+        expect(result.stdout, isNot(contains('synthetic-user')));
+        expect(result.stdout, isNot(contains('synthetic-cafe')));
+      }, skip: !Platform.isWindows);
+    }
+    test(
+      'validator command surface contains no process or network dispatch',
+      () {
+        final source = File(
+          'tool/validate_android_pilot_arguments.ps1',
+        ).readAsStringSync();
+        // Inspect actual PowerShell commands, not comments or string literals.
+        const command =
+            r"$tokens=$null; $errors=$null; $ast=[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $pwd 'tool/validate_android_pilot_arguments.ps1'),[ref]$tokens,[ref]$errors); if($errors.Count){exit 1}; $ast.FindAll({param($n) $n -is [System.Management.Automation.Language.CommandAst]},$true) | ForEach-Object { $_.GetCommandName() }";
+        return Process.run('powershell.exe', [
+          '-ExecutionPolicy',
+          'Bypass',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          command,
+        ]).then((result) {
+          expect(result.exitCode, 0);
+          final commands = (result.stdout as String)
+              .split(RegExp(r'\s+'))
+              .where((x) => x.isNotEmpty)
+              .toSet();
+          expect(
+            commands.difference({
+              'Set-StrictMode',
+              'ConvertFrom-Json',
+              'Write-Output',
+            }),
+            isEmpty,
+          );
+          expect(source, contains('bypass this validator'));
+        });
+      },
+      skip: !Platform.isWindows,
+    );
+  });
+
   const sparkOptions = FirebaseOptions(
     apiKey: 'offline-test-key',
     appId: '1:123456789:web:offline',

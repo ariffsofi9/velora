@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'user_profile_service.dart';
+import 'android_pilot_policy.dart';
 
 class AuthFlowException implements Exception {
   final String message;
@@ -15,19 +18,36 @@ class AuthService {
   static const _manualLoginKey = 'velora_registration_requires_login';
   final FirebaseAuth? _firebaseAuth;
   final UserProfileService? _profileService;
+  final AndroidPilotPolicy? _pilotPolicy;
 
-  AuthService({FirebaseAuth? auth, UserProfileService? profiles})
-    : _firebaseAuth = auth,
-      _profileService = profiles;
+  AuthService({
+    FirebaseAuth? auth,
+    UserProfileService? profiles,
+    AndroidPilotPolicy? pilotPolicy,
+  }) : _firebaseAuth = auth,
+       _profileService = profiles,
+       _pilotPolicy = pilotPolicy;
 
   FirebaseAuth get _auth => _firebaseAuth ?? FirebaseAuth.instance;
-  UserProfileService get _profiles => _profileService ?? UserProfileService();
+  UserProfileService get _profiles =>
+      _profileService ?? UserProfileService(pilotPolicy: _pilotPolicy);
+
+  void _requireCapability(AndroidPilotCapability capability) {
+    final policy = _pilotPolicy;
+    if (policy == null || policy.state == AndroidPilotState.normal) return;
+    if (!policy.isValid || !policy.permits(capability)) {
+      throw const AuthFlowException(
+        'This authentication operation is unavailable under the pilot policy.',
+      );
+    }
+  }
 
   static bool isValidResetEmail(String email) =>
       email.trim().length <= 254 &&
       RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email.trim());
 
   Future<void> sendPasswordResetEmail({required String email}) async {
+    _requireCapability(AndroidPilotCapability.passwordResetEmail);
     final address = email.trim();
     if (!isValidResetEmail(address)) {
       throw FirebaseAuthException(code: 'invalid-email');
@@ -48,6 +68,7 @@ class AuthService {
     required String email,
     required String password,
   }) async {
+    _requireCapability(AndroidPilotCapability.registration);
     final prefs = await SharedPreferences.getInstance();
     final previousRegistrationGuard = prefs.getBool(_manualLoginKey) ?? false;
     // Persist before Firebase creates/signs in the account, including reloads.
@@ -105,6 +126,10 @@ class AuthService {
   }
 
   Future<void> signIn({required String email, required String password}) async {
+    _requireCapability(AndroidPilotCapability.existingAccountAuthentication);
+    if (_pilotPolicy?.isRestricted == true) {
+      return _signInPilot(email: email, password: password);
+    }
     final prefs = await SharedPreferences.getInstance();
     final pendingRegistration = prefs.getBool(_manualLoginKey) ?? false;
     var signedIn = false;
@@ -148,7 +173,125 @@ class AuthService {
     }
   }
 
+  Future<void> _signInPilot({
+    required String email,
+    required String password,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final pendingRegistration = prefs.getBool(_manualLoginKey) ?? false;
+    final result = await _auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+    final user = result.user;
+    if (user == null) {
+      throw const AuthFlowException('Login could not be confirmed.');
+    }
+    await _requirePilotProfileEligibility(
+      expectedUid: user.uid,
+      signOutOnFailure: true,
+      onEligible: () async {
+        // Retain the existing manual-login guard, after secure eligibility only.
+        if (pendingRegistration &&
+            !await prefs.setBool(_manualLoginKey, false)) {
+          throw const AuthFlowException('Unable to finish login.');
+        }
+      },
+    );
+  }
+
+  /// Reusable startup/restored-session gate. Normal mode is unchanged (no-op).
+  /// With no cafeId, only the configured account is checked. The canonical
+  /// resolver must verify membership and its resolved cafeId must match the
+  /// policy before workspace entry. This method grants no workspace authority.
+  /// WorkspaceGate/startup integration is deliberately NOT included here.
+  Future<void> requirePilotProfileEligibility({String? cafeId}) =>
+      _requirePilotProfileEligibility(cafeId: cafeId);
+
+  Future<void> _requirePilotProfileEligibility({
+    String? expectedUid,
+    String? cafeId,
+    bool signOutOnFailure = false,
+    Future<void> Function()? onEligible,
+  }) async {
+    _requireCapability(AndroidPilotCapability.existingAccountAuthentication);
+    final policy = _pilotPolicy;
+    if (policy?.isRestricted != true) return;
+    final auth = _auth;
+    final user = auth.currentUser;
+    if (user == null || (expectedUid != null && user.uid != expectedUid)) {
+      throw const AuthFlowException('Pilot session could not be verified.');
+    }
+    final uid = user.uid;
+    final email = user.email;
+    var changed = false;
+    final initial = Completer<void>();
+    // authStateChanges starts with the current state. Any subsequent event
+    // fences this operation, including sign-out/relogin with the SAME UID.
+    final subscription = auth.authStateChanges().listen(
+      (current) {
+        if (initial.isCompleted || current?.uid != uid) changed = true;
+        if (!initial.isCompleted) initial.complete();
+      },
+      onError: (Object error, StackTrace stack) {
+        changed = true;
+        if (!initial.isCompleted) initial.complete();
+      },
+      onDone: () {
+        changed = true;
+        if (!initial.isCompleted) initial.complete();
+      },
+    );
+    bool sameSession() =>
+        !changed &&
+        auth.currentUser?.uid == uid &&
+        auth.currentUser?.email == email;
+    void requireCurrent() {
+      if (!sameSession() || auth.currentUser?.emailVerified != true) {
+        throw const AuthFlowException('Pilot session could not be verified.');
+      }
+    }
+
+    try {
+      await initial.future.timeout(const Duration(seconds: 15));
+      requireCurrent();
+      if (!policy!.bindings.any(
+        (binding) =>
+            policy.matchesBinding(uid: uid, cafeId: cafeId ?? binding.cafeId),
+      )) {
+        throw const AuthFlowException(
+          'Pilot account/workspace is not approved.',
+        );
+      }
+      await _profiles
+          .readExistingServerProfile(user)
+          .timeout(const Duration(seconds: 15));
+      requireCurrent();
+      await onEligible?.call();
+      requireCurrent();
+    } catch (_) {
+      // Never sign out a replacement session in response to an obsolete read.
+      if (signOutOnFailure && sameSession()) {
+        try {
+          await auth.signOut().timeout(const Duration(seconds: 15));
+        } catch (_) {
+          /* Failure remains closed even if sign-out is unavailable. */
+        }
+      }
+      throw const AuthFlowException(
+        'Pilot profile eligibility could not be verified.',
+      );
+    } finally {
+      await subscription.cancel();
+    }
+    requireCurrent();
+  }
+
+  /// Logout remains available for restricted and invalid configurations.
+  Future<void> signOut() => _auth.signOut();
+
   Future<bool> canRestoreSession() async {
+    _requireCapability(AndroidPilotCapability.existingAccountAuthentication);
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool(_manualLoginKey) ?? false) {
       try {
@@ -157,6 +300,14 @@ class AuthService {
         /* Never route this session home. */
       }
       return false;
+    }
+    if (_pilotPolicy?.isRestricted == true) {
+      try {
+        await requirePilotProfileEligibility();
+        return true;
+      } on AuthFlowException {
+        return false;
+      }
     }
     return _auth.currentUser != null;
   }

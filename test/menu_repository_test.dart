@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 // Offline Firebase interface doubles only.
 // ignore_for_file: subtype_of_sealed_class
 import 'dart:async';
@@ -70,7 +72,64 @@ class CallableDouble implements MenuCallable {
   }
 }
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    final policy = AndroidPilotPolicy.parse(
+      invalid
+          ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+          : {
+              'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+              'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+              'VELORA_ANDROID_PILOT_BINDINGS': '[["owner-a","cafe-a"]]',
+            },
+      isWeb: false,
+      platform: TargetPlatform.android,
+    );
+    for (final action in [
+      'resolve',
+      'list',
+      'get',
+      'save',
+      'availability',
+      'archive',
+      'restore',
+      'raw',
+    ]) {
+      test(
+        'Menu policy invalid=$invalid rejects $action before SDK lookup',
+        () async {
+          final blocked = FirebaseMenuRepository(pilotPolicy: policy);
+          expect(blocked.pilotPolicy, same(policy));
+          final item = MenuItem.fromMap(menuData());
+          await expectLater(switch (action) {
+            'resolve' => blocked.resolve(),
+            'list' => blocked.list(),
+            'get' => blocked.get(item.id),
+            'save' => blocked.save(
+              draft: const MenuDraft('Latte', 'Coffee', 1200, true),
+              key: 'create-request-0001',
+            ),
+            'availability' => blocked.availability(
+              item,
+              false,
+              'availability-key-0001',
+            ),
+            'archive' => blocked.lifecycle(item, true, 'archive-key-00001'),
+            'restore' => blocked.lifecycle(item, false, 'restore-key-00001'),
+            _ => FirebaseMenuCallable(
+              pilotPolicy: policy,
+            ).call('createMenuItem', {}),
+          }, throwsA(isA<MenuPilotPolicyException>()));
+        },
+      );
+    }
+  }
   test(
     'same-UID generation change rejects old menu repository before dispatch',
     () async {
@@ -78,6 +137,7 @@ void main() {
       final resolver = ResolverDouble();
       final callable = CallableDouble();
       final repo = FirebaseMenuRepository(
+        pilotPolicy: _normalPolicy,
         auth: auth,
         resolver: resolver,
         callable: callable,
@@ -107,6 +167,7 @@ void main() {
     final resolver = ResolverDouble();
     final callable = CallableDouble();
     final repo = FirebaseMenuRepository(
+      pilotPolicy: _normalPolicy,
       auth: auth,
       resolver: resolver,
       callable: callable,
@@ -146,6 +207,7 @@ void main() {
     resolver = ResolverDouble();
     callable = CallableDouble();
     repo = FirebaseMenuRepository(
+      pilotPolicy: _normalPolicy,
       auth: auth,
       resolver: resolver,
       callable: callable,

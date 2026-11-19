@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'firebase_emulator_config.dart';
 import '../models/cafe_workspace.dart';
+import 'android_pilot_policy.dart';
 
 enum StaffRedeemStage {
   emulatorConfig,
@@ -283,11 +284,27 @@ Map<String, Object> captureInvitationOwnerContext(
 }
 
 class FirebaseStaffInvitations implements StaffInvitations {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseFunctions? functions;
   final FirebaseAuth? auth;
-  FirebaseStaffInvitations({this.functions, this.auth});
+  FirebaseStaffInvitations({
+    required this.pilotPolicy,
+    this.functions,
+    this.auth,
+  });
+
+  void _requirePolicy() {
+    if (pilotPolicy.state != AndroidPilotState.normal &&
+        !pilotPolicy.permits(AndroidPilotCapability.teamCallables)) {
+      throw const StaffInvitationFailure._(
+        StaffRedeemStage.callableConfig,
+        'pilot-policy-denied',
+      );
+    }
+  }
 
   bool get creationBlocked {
+    if (pilotPolicy.state != AndroidPilotState.normal) return true;
     final identity = auth ?? FirebaseAuth.instance;
     final uid = identity.currentUser?.uid;
     return uid != null &&
@@ -300,6 +317,7 @@ class FirebaseStaffInvitations implements StaffInvitations {
     void Function(StaffRedeemStage)? onStage,
     String? acknowledgement,
   }) async {
+    _requirePolicy();
     onStage?.call(StaffRedeemStage.callableConfig);
     if (!FirebaseEmulatorConfig.invitationsAvailable) {
       throw StateError(
@@ -358,6 +376,7 @@ class FirebaseStaffInvitations implements StaffInvitations {
     String email, {
     required CafeWorkspace workspace,
   }) async {
+    _requirePolicy();
     final identity = auth ?? FirebaseAuth.instance;
     final uid = identity.currentUser?.uid;
     if (uid == null) {
@@ -383,6 +402,7 @@ class FirebaseStaffInvitations implements StaffInvitations {
 
   @override
   Future<void> revoke(String id, {required CafeWorkspace workspace}) async {
+    _requirePolicy();
     var stage = StaffRedeemStage.callableConfig;
     try {
       final expected = _ownerData(workspace);
@@ -410,6 +430,7 @@ class FirebaseStaffInvitations implements StaffInvitations {
 
   @override
   Future<void> redeem(String code) async {
+    _requirePolicy();
     var stage = StaffRedeemStage.emulatorConfig;
     StreamSubscription<User?>? subscription;
     var changed = false;

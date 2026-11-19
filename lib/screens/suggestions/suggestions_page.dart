@@ -13,6 +13,7 @@ import '../../logic/groq_service.dart';
 import '../../logic/suggestion_helper.dart';
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
+import '../../repositories/workspace_saved_recipe_repository.dart' as saved;
 import '../../services/workspace_session.dart';
 import '../../services/secure_ai_service.dart';
 import 'widgets_suggestions/secure_ai_suggestions.dart';
@@ -27,6 +28,7 @@ import 'logic_suggestions/local_restock_formatter.dart';
 import 'logic_suggestions/skipped_recipe_service.dart';
 import 'restock_suggestion_service.dart';
 import 'widgets_suggestions/recipe_suggestions_content.dart';
+import 'saved_recipes_page.dart' as saved_ui;
 
 part 'suggestions_foundation.dart';
 part 'suggestions_generation.dart';
@@ -34,12 +36,14 @@ part 'suggestions_generation.dart';
 class SuggestionsPage extends StatefulWidget {
   final WorkspaceSession? workspaceSession;
   final WorkspaceInventoryRepository? repository;
+  final saved.WorkspaceSavedRecipeRepository? savedRecipesRepository;
   final SecureAiService? aiService;
 
   const SuggestionsPage({
     super.key,
     this.workspaceSession,
     this.repository,
+    this.savedRecipesRepository,
     this.aiService,
   });
 
@@ -50,10 +54,16 @@ class SuggestionsPage extends StatefulWidget {
 class _SuggestionsPageState extends _SuggestionsGeneration {
   WorkspaceInventoryRepository? _repository;
   Stream<List<InventoryItem>>? _itemsStream;
+  StreamSubscription<void>? _savedRecipesSubscription;
+  saved.WorkspaceSavedRecipeRepository? _savedRecipesRepository;
+  saved.SavedRecipeSession? _savedRecipesSession;
+  MaterialPageRoute<void>? _savedRecipesRoute;
+  bool _openingSavedRecipes = false, _savedRecipesInvalidated = false;
 
   @override
   void initState() {
     _configureInventory();
+    _configureSavedRecipes();
     super.initState();
   }
 
@@ -70,6 +80,108 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
     _itemsStream = _verified ? _repository!.watchItems() : null;
   }
 
+  bool get _savedRecipesAvailable {
+    final workspace = widget.workspaceSession;
+    final repository = _savedRecipesRepository;
+    final session = _savedRecipesSession;
+    if (_savedRecipesInvalidated ||
+        workspace?.isActive != true ||
+        repository == null ||
+        session == null ||
+        !identical(repository, widget.savedRecipesRepository) ||
+        !session.valid ||
+        !identical(session.workspace, workspace)) {
+      return false;
+    }
+    try {
+      return session.matches(repository.currentSession());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _configureSavedRecipes() {
+    unawaited(_savedRecipesSubscription?.cancel());
+    _savedRecipesSubscription = null;
+    _savedRecipesRepository = widget.savedRecipesRepository;
+    _savedRecipesSession = null;
+    _savedRecipesInvalidated = false;
+    final repository = _savedRecipesRepository;
+    try {
+      _savedRecipesSession = repository?.currentSession();
+    } catch (_) {
+      _savedRecipesInvalidated = true;
+    }
+    if (!_savedRecipesAvailable || repository == null) {
+      _savedRecipesInvalidated = true;
+      return;
+    }
+    _savedRecipesSubscription = repository.sessionChanges.listen(
+      (_) => _invalidateSavedRecipes(repository),
+      onError: (Object _) => _invalidateSavedRecipes(repository),
+      onDone: () => _invalidateSavedRecipes(repository),
+    );
+  }
+
+  void _invalidateSavedRecipes(saved.WorkspaceSavedRecipeRepository source) {
+    if (!identical(source, _savedRecipesRepository)) return;
+    _savedRecipesInvalidated = true;
+    _closeSavedRecipesRoute();
+    if (mounted) setState(() {});
+  }
+
+  void _closeSavedRecipesRoute() {
+    final route = _savedRecipesRoute;
+    if (route == null || !route.isActive || !mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !route.isActive) return;
+      final navigator = Navigator.of(context);
+      navigator.popUntil((candidate) => candidate == route);
+      if (route.isActive) navigator.pop();
+    });
+  }
+
+  bool _savedRecipesCurrent(
+    saved.WorkspaceSavedRecipeRepository repository,
+    saved.SavedRecipeSession session,
+  ) {
+    if (!_savedRecipesAvailable ||
+        !identical(repository, _savedRecipesRepository) ||
+        !identical(session, _savedRecipesSession)) {
+      return false;
+    }
+    try {
+      return session.matches(repository.currentSession());
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _openSavedRecipes() async {
+    if (_openingSavedRecipes) return;
+    final repository = _savedRecipesRepository;
+    final session = _savedRecipesSession;
+    if (repository == null ||
+        session == null ||
+        !_savedRecipesCurrent(repository, session)) {
+      if (repository != null) _invalidateSavedRecipes(repository);
+      return;
+    }
+    _openingSavedRecipes = true;
+    late final MaterialPageRoute<void> route;
+    route = MaterialPageRoute<void>(
+      builder: (_) => saved_ui.SavedRecipesPage(repository: repository),
+    );
+    _savedRecipesRoute = route;
+    try {
+      await Navigator.of(context).push<void>(route);
+    } finally {
+      if (identical(_savedRecipesRoute, route)) _savedRecipesRoute = null;
+      _openingSavedRecipes = false;
+      if (mounted) setState(() {});
+    }
+  }
+
   @override
   void didUpdateWidget(covariant SuggestionsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -77,6 +189,22 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
         !identical(oldWidget.repository, widget.repository)) {
       _configureInventory();
     }
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(
+          oldWidget.savedRecipesRepository,
+          widget.savedRecipesRepository,
+        )) {
+      _closeSavedRecipesRoute();
+      _configureSavedRecipes();
+    } else if (!_savedRecipesAvailable && _savedRecipesRepository != null) {
+      _invalidateSavedRecipes(_savedRecipesRepository!);
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_savedRecipesSubscription?.cancel());
+    super.dispose();
   }
 
   void _retryInventory() {
@@ -175,9 +303,20 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
   @override
   Widget build(BuildContext context) {
     final itemsStream = _itemsStream;
+    final savedRecipesAction = TextButton(
+      key: const ValueKey('discover-saved-recipes'),
+      onPressed: _savedRecipesAvailable && !_openingSavedRecipes
+          ? _openSavedRecipes
+          : null,
+      child: const Text('Saved Recipes'),
+    );
     if (!_verified || itemsStream == null) {
-      return const Scaffold(
+      return Scaffold(
         backgroundColor: AppColors.background,
+        appBar: AppBar(
+          title: const Text('Discover'),
+          actions: [savedRecipesAction],
+        ),
         body: SafeArea(
           child: Center(
             child: Padding(
@@ -194,6 +333,10 @@ class _SuggestionsPageState extends _SuggestionsGeneration {
     }
     return Scaffold(
       backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Discover'),
+        actions: [savedRecipesAction],
+      ),
       body: SafeArea(
         child: StreamBuilder<List<InventoryItem>>(
           stream: itemsStream,

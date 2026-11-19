@@ -16,8 +16,11 @@ import 'inventory_preferences_step.dart';
 import 'setup_complete_step.dart';
 import '../../services/owner_email_verification.dart';
 import '../auth/owner_email_verification_page.dart';
+import '../auth/workspace_gate.dart';
+import '../../services/android_pilot_policy.dart';
 
 class BusinessSetupPage extends StatefulWidget {
+  final AndroidPilotAuthDependencies? pilot;
   final WorkspaceProvisioner? provisioner;
   final WorkspaceResolver? resolver;
   final OwnerEmailVerification? verification;
@@ -28,6 +31,7 @@ class BusinessSetupPage extends StatefulWidget {
 
   const BusinessSetupPage({
     super.key,
+    this.pilot,
     this.provisioner,
     this.resolver,
     this.verification,
@@ -40,6 +44,10 @@ class BusinessSetupPage extends StatefulWidget {
 }
 
 class _BusinessSetupPageState extends State<BusinessSetupPage> {
+  AndroidPilotAuthDependencies? get _pilot =>
+      widget.pilot ?? AndroidPilotAuthScope.read(context);
+  bool get _canSetup =>
+      _pilot?.allows(AndroidPilotCapability.businessSetup) ?? true;
   final _draft = BusinessSetupDraft();
   final _name = TextEditingController();
   final _address = TextEditingController();
@@ -52,7 +60,11 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   bool _creationUncertain = false;
   String? _submissionError;
   late final OwnerEmailVerification _verification =
-      widget.verification ?? FirebaseOwnerEmailVerification();
+      widget.verification ??
+      FirebaseOwnerEmailVerification(
+        auth: _pilot?.auth,
+        pilotPolicy: _pilot?.policy,
+      );
   bool _needsVerification = false;
 
   @override
@@ -64,19 +76,21 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   }
 
   void _goToStep(int step) {
+    if (!mounted || !_canSetup) return;
     FocusScope.of(context).unfocus();
     setState(() => _step = step);
     if (_scroll.hasClients) _scroll.jumpTo(0);
   }
 
   void _back() {
-    if (_submitting || _leaving) return;
+    if (!mounted || _submitting || _leaving) return;
     FocusScope.of(context).unfocus();
     if (_step > 0) {
       _goToStep(_step - 1);
       return;
     }
     _leaving = true;
+    final pilot = _pilot;
     final navigator = Navigator.of(context);
     if (navigator.canPop()) {
       navigator.pop();
@@ -85,7 +99,7 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
       // safe entry screen; returning to the gate would redirect back to setup.
       navigator.pushAndRemoveUntil(
         MaterialPageRoute<void>(
-          builder: (_) => const LoginPage(),
+          builder: (_) => LoginPage(pilot: pilot),
           settings: const RouteSettings(name: '/login'),
         ),
         (_) => false,
@@ -94,6 +108,7 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   }
 
   void _next() {
+    if (!mounted || !_canSetup) return;
     if (_step == 0) {
       if (!_form.currentState!.validate()) return;
       _draft.businessName = _name.text.trim();
@@ -113,7 +128,9 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   );
 
   Future<void> _submit() async {
-    if (_submitting) return;
+    if (!mounted || _submitting || !_canSetup) return;
+    final pilot = _pilot;
+    bool current() => mounted && identical(pilot, _pilot) && _canSetup;
     setState(() {
       _submitting = true;
       _submissionError = null;
@@ -126,20 +143,25 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
             WorkspaceProvisioningFailure.emailUnverified,
           );
         }
-        if (!mounted) return;
-        await (widget.provisioner ?? FirebaseWorkspaceProvisioner())
+        if (!mounted || !current()) return;
+        await (widget.provisioner ??
+                FirebaseWorkspaceProvisioner(
+                  pilotPolicy: pilot?.policy,
+                  verification: _verification,
+                ))
             .createWorkspace(_request.normalized());
-        if (!mounted) return;
+        if (!mounted || !current()) return;
         setState(() => _creationAccepted = true);
       }
       final workspace = await (widget.resolver ?? WorkspaceResolver())
           .resolve();
-      if (!mounted) return;
+      if (!mounted || !current()) return;
       final session = WorkspaceSession.fromVerified(workspace);
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (context) => WorkspaceSessionBoundary(
+            pilot: pilot,
             session: session,
             identities: widget.sessionIdentities,
             authority: widget.sessionAuthority,
@@ -204,6 +226,7 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   }
 
   Future<void> _openVerification() async {
+    if (!mounted || !_canSetup) return;
     final verified = await Navigator.of(context).push<bool>(
       MaterialPageRoute<bool>(
         builder: (_) => OwnerEmailVerificationPage(verification: _verification),
@@ -339,95 +362,109 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
   };
 
   @override
-  Widget build(BuildContext context) => PopScope(
-    canPop:
-        !_submitting && !_leaving && _step == 0 && Navigator.canPop(context),
-    onPopInvokedWithResult: (didPop, result) {
-      if (!didPop) _back();
-    },
-    child: Scaffold(
-      backgroundColor: AppColors.background,
-      bottomNavigationBar: _step == 2
-          ? SafeArea(
-              top: false,
-              minimum: const EdgeInsets.fromLTRB(24, 8, 24, 16),
-              child: Center(
-                heightFactor: 1,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 480),
-                  child: _footer(),
-                ),
-              ),
-            )
-          : null,
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, size) => SingleChildScrollView(
-            controller: _scroll,
-            padding: EdgeInsets.all(size.maxWidth < 360 ? 20 : 24),
-            child: Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: 480,
-                  minHeight: (size.maxHeight - (size.maxWidth < 360 ? 40 : 48))
-                      .clamp(0, double.infinity),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
-                          children: [
-                            SizedBox(
-                              width: 48,
-                              height: 48,
-                              child: IconButton(
-                                key: const ValueKey('setup-header-back'),
-                                tooltip: 'Back',
-                                icon: const Icon(Icons.arrow_back),
-                                onPressed: _submitting || _leaving
-                                    ? null
-                                    : _back,
-                              ),
-                            ),
-                            Expanded(child: SetupProgress(step: _step)),
-                            SizedBox(
-                              width: 48,
-                              height: 48,
-                              child: IconButton(
-                                tooltip: 'Join with invite',
-                                icon: const Icon(Icons.group_add_outlined),
-                                onPressed: () => Navigator.of(context).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => const StaffInvitationPage(),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 24),
-                        _stepBody(),
-                      ],
-                    ),
-                    if (_step < 2)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 28),
-                        child: SizedBox(
-                          width: double.infinity,
-                          child: _footer(),
-                        ),
+  Widget build(BuildContext context) => !_canSetup
+      ? const PilotAccessBlockedPage()
+      : PopScope(
+          canPop:
+              !_submitting &&
+              !_leaving &&
+              _step == 0 &&
+              Navigator.canPop(context),
+          onPopInvokedWithResult: (didPop, result) {
+            if (!didPop) _back();
+          },
+          child: Scaffold(
+            backgroundColor: AppColors.background,
+            bottomNavigationBar: _step == 2
+                ? SafeArea(
+                    top: false,
+                    minimum: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                    child: Center(
+                      heightFactor: 1,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 480),
+                        child: _footer(),
                       ),
-                  ],
+                    ),
+                  )
+                : null,
+            body: SafeArea(
+              child: LayoutBuilder(
+                builder: (context, size) => SingleChildScrollView(
+                  controller: _scroll,
+                  padding: EdgeInsets.all(size.maxWidth < 360 ? 20 : 24),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: 480,
+                        minHeight:
+                            (size.maxHeight - (size.maxWidth < 360 ? 40 : 48))
+                                .clamp(0, double.infinity),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: IconButton(
+                                      key: const ValueKey('setup-header-back'),
+                                      tooltip: 'Back',
+                                      icon: const Icon(Icons.arrow_back),
+                                      onPressed: _submitting || _leaving
+                                          ? null
+                                          : _back,
+                                    ),
+                                  ),
+                                  Expanded(child: SetupProgress(step: _step)),
+                                  SizedBox(
+                                    width: 48,
+                                    height: 48,
+                                    child: IconButton(
+                                      tooltip: 'Join with invite',
+                                      icon: const Icon(
+                                        Icons.group_add_outlined,
+                                      ),
+                                      onPressed: () {
+                                        if (!_canSetup) return;
+                                        final pilot = _pilot;
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) => StaffInvitationPage(
+                                              pilot: pilot,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 24),
+                              _stepBody(),
+                            ],
+                          ),
+                          if (_step < 2)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 28),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: _footer(),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
-        ),
-      ),
-    ),
-  );
+        );
 }

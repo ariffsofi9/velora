@@ -10,15 +10,23 @@ import 'welcome_page.dart';
 import 'workspace_gate.dart';
 
 class SplashPage extends StatefulWidget {
+  final AndroidPilotAuthDependencies? pilot;
   final AuthService? authService;
   final WorkspaceResolver? workspaceResolver;
-  const SplashPage({super.key, this.authService, this.workspaceResolver});
+  const SplashPage({
+    super.key,
+    this.authService,
+    this.workspaceResolver,
+    this.pilot,
+  });
 
   @override
   State<SplashPage> createState() => _SplashPageState();
 }
 
 class _SplashPageState extends State<SplashPage> {
+  AndroidPilotAuthDependencies? get _pilot =>
+      widget.pilot ?? AndroidPilotAuthScope.read(context);
   @override
   void initState() {
     super.initState();
@@ -30,114 +38,128 @@ class _SplashPageState extends State<SplashPage> {
 
     if (!mounted) return;
 
+    final pilot = _pilot;
     var restoreSession = false;
     try {
-      restoreSession = await (widget.authService ?? AuthService())
-          .canRestoreSession();
+      restoreSession =
+          await (pilot?.authService ?? widget.authService ?? AuthService())
+              .canRestoreSession();
     } catch (_) {
       // Storage/auth recovery failures must never grant automatic access.
     }
-    if (!mounted) return;
+    if (!mounted || !identical(pilot, _pilot)) return;
     if (restoreSession) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => WorkspaceGate(resolver: widget.workspaceResolver),
+          builder: (_) =>
+              WorkspaceGate(pilot: pilot, resolver: widget.workspaceResolver),
         ),
       );
     } else {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const WelcomePage()),
+        MaterialPageRoute(builder: (_) => WelcomePage(pilot: pilot)),
       );
     }
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: AppColors.background,
-    body: Stack(
-      children: [
-        const Positioned.fill(
-          child: IgnorePointer(child: CustomPaint(painter: _EntryCurves())),
-        ),
-        SafeArea(
-          child: LayoutBuilder(
-            builder: (context, size) => SingleChildScrollView(
-              padding: const EdgeInsets.all(28),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: (size.maxHeight - 56).clamp(0, double.infinity),
+  Widget build(BuildContext context) => _pilot?.policy.isValid == false
+      ? const PilotAccessBlockedPage()
+      : Scaffold(
+          backgroundColor: AppColors.background,
+          body: Stack(
+            children: [
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: CustomPaint(painter: _EntryCurves()),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    SizedBox(height: (size.maxHeight * .08).clamp(24, 72)),
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Row(
+              ),
+              SafeArea(
+                child: LayoutBuilder(
+                  builder: (context, size) => SingleChildScrollView(
+                    padding: const EdgeInsets.all(28),
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: (size.maxHeight - 56).clamp(
+                          0,
+                          double.infinity,
+                        ),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          SizedBox(
+                            height: (size.maxHeight * .08).clamp(24, 72),
+                          ),
+                          Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(
-                                'Velora',
-                                style: Theme.of(context).textTheme.displayLarge
-                                    ?.copyWith(
-                                      fontFamily: 'Georgia',
-                                      color: AppColors.textPrimary,
-                                      fontWeight: FontWeight.w600,
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      'Velora',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .displayLarge
+                                          ?.copyWith(
+                                            fontFamily: 'Georgia',
+                                            color: AppColors.textPrimary,
+                                            fontWeight: FontWeight.w600,
+                                          ),
                                     ),
+                                    const SizedBox(width: 8),
+                                    Image.asset(
+                                      'assets/images/auth/logo_mark.png',
+                                      width: 48,
+                                      height: 48,
+                                      fit: BoxFit.contain,
+                                      semanticLabel: 'Velora leaf logo',
+                                    ),
+                                  ],
+                                ),
                               ),
-                              const SizedBox(width: 8),
-                              Image.asset(
-                                'assets/images/auth/logo_mark.png',
-                                width: 48,
-                                height: 48,
-                                fit: BoxFit.contain,
-                                semanticLabel: 'Velora leaf logo',
+                              const SizedBox(height: 16),
+                              Text(
+                                'AI Smart Inventory\nfor F&B Businesses',
+                                textAlign: TextAlign.center,
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(fontWeight: FontWeight.w400),
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'AI Smart Inventory\nfor F&B Businesses',
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w400),
-                        ),
-                      ],
+                          const SizedBox(height: 48),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Manage ingredients.\nReduce waste.\nCreate more possibilities.',
+                                style: Theme.of(context).textTheme.bodyMedium
+                                    ?.copyWith(fontWeight: FontWeight.w400),
+                              ),
+                              const SizedBox(height: 24),
+                              const LinearProgressIndicator(
+                                color: AppColors.primary,
+                                backgroundColor: AppColors.nude,
+                                minHeight: 2,
+                                semanticsLabel: 'Loading Velora',
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 48),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Manage ingredients.\nReduce waste.\nCreate more possibilities.',
-                          style: Theme.of(context).textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w400),
-                        ),
-                        const SizedBox(height: 24),
-                        const LinearProgressIndicator(
-                          color: AppColors.primary,
-                          backgroundColor: AppColors.nude,
-                          minHeight: 2,
-                          semanticsLabel: 'Loading Velora',
-                        ),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
+            ],
           ),
-        ),
-      ],
-    ),
-  );
+        );
 }
 
 class _EntryCurves extends CustomPainter {

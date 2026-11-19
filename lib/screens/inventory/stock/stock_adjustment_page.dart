@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
+import '../../../services/android_pilot_policy.dart';
+import '../../auth/workspace_gate.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_tokens.dart';
@@ -82,6 +86,41 @@ class StockAdjustmentPage extends StatefulWidget {
 }
 
 class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
+  late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    androidFlavor: appFlavor,
+  );
+  AndroidPilotPolicy get _policy =>
+      AndroidPilotAuthScope.read(context)?.policy ?? _buildPolicy;
+  AndroidPilotPolicy? _boundPolicy;
+  bool _policyBlocked = false;
+  bool get _allowed =>
+      !_policyBlocked &&
+      widget.workspaceSession?.isActive != false &&
+      (_policy.state == AndroidPilotState.normal ||
+          _policy.permits(AndroidPilotCapability.inventoryMutations));
+  bool get _current => mounted && _allowed;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPolicy, _policy)) _policyBlocked = true;
+  }
+
+  @override
+  void didUpdateWidget(covariant StockAdjustmentPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.adjuster, widget.adjuster) ||
+        !identical(oldWidget.repository, widget.repository) ||
+        !identical(oldWidget.item, widget.item) ||
+        !identical(oldWidget.type, widget.type)) {
+      _policyBlocked = true;
+    }
+  }
+
   static const maxSafeInteger = 9007199254740991;
   static int _keySequence = 0;
   final quantityController = TextEditingController();
@@ -122,12 +161,16 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   @override
   void initState() {
     super.initState();
+    _boundPolicy = _policy;
     item = widget.item;
-    adjuster =
-        widget.adjuster ??
-        FirebaseWorkspaceInventoryStockAdjuster(
-          session: widget.workspaceSession,
-        );
+    if (_allowed) {
+      adjuster =
+          widget.adjuster ??
+          FirebaseWorkspaceInventoryStockAdjuster(
+            pilotPolicy: _policy,
+            session: widget.workspaceSession,
+          );
+    }
   }
 
   @override
@@ -144,6 +187,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   }
 
   Future<void> submit() async {
+    if (!mounted || !_current) return;
     setState(() => touched = true);
     if (!verified) return message('A verified workspace item is required.');
     if (saving || needsReload || completed || quantityError != null) return;
@@ -176,7 +220,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
         reason: draft.reason,
       );
       await adjuster.adjustStock(request);
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() {
         saving = false;
         completed = true;
@@ -184,7 +228,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
       message('$title completed successfully.');
       Navigator.pop(context, true);
     } on WorkspaceInventoryStockException catch (error) {
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       final reload =
           error.failure == WorkspaceInventoryStockFailure.stale ||
           error.failure == WorkspaceInventoryStockFailure.insufficientStock;
@@ -194,13 +238,14 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
       });
       message(failureMessage(error.failure));
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() => saving = false);
       message('Unable to start the stock adjustment. Please try again.');
     }
   }
 
   Future<void> reload() async {
+    if (!mounted || !_current) return;
     final repository = widget.repository;
     if (repository == null || refreshing) return;
     setState(() => refreshing = true);
@@ -211,7 +256,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
         if (candidate.id == item.id) latest = candidate;
       }
       if (latest == null) return message('This item is no longer available.');
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() {
         item = latest!;
         needsReload = false;
@@ -222,7 +267,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
     } catch (_) {
       message('Unable to reload the latest item. Try again.');
     } finally {
-      if (mounted) setState(() => refreshing = false);
+      if (_current) setState(() => refreshing = false);
     }
   }
 
@@ -250,13 +295,15 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   };
 
   void message(String text) {
-    if (mounted) {
+    if (!mounted || !_current) return;
+    if (_current) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!_allowed) return const PilotAccessBlockedPage();
     final horizontal = MediaQuery.sizeOf(context).width < 370 ? 16.0 : 20.0;
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -294,7 +341,9 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
                   key: const ValueKey('stock-quantity-field'),
                   controller: quantityController,
                   keyboardType: TextInputType.number,
-                  onChanged: (_) => setState(() => touched = true),
+                  onChanged: (_) {
+                    if (_current) setState(() => touched = true);
+                  },
                   decoration: InputDecoration(
                     hintText: '0',
                     errorText: quantityError,
@@ -318,7 +367,9 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
                   minLines: 3,
                   maxLines: 4,
                   maxLength: 200,
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (_) {
+                    if (_current) setState(() {});
+                  },
                   decoration: const InputDecoration(
                     hintText: 'Add a short reason...',
                   ),

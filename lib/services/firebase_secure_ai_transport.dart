@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'secure_ai_service.dart';
@@ -13,20 +14,33 @@ typedef SecureAiCallableInvoker =
 /// Opt-in adapter. Default service/startup never selects this. Tests inject an
 /// invoker returning SDK-shaped fakes; constructing it initializes no Firebase app.
 class FirebaseSecureAiTransport implements SecureAiTransport {
-  final SecureAiCallableInvoker invoke;
+  final AndroidPilotPolicy pilotPolicy;
+  bool get _policyAllowed =>
+      pilotPolicy.state == AndroidPilotState.normal ||
+      pilotPolicy.permits(AndroidPilotCapability.liveAi);
+  final SecureAiCallableInvoker _invoke;
+  SecureAiCallableInvoker get invoke =>
+      _policyAllowed ? _invoke : _denyInvocation;
+  static Future<HttpsCallableResult<dynamic>> _denyInvocation(
+    String name,
+    Map<String, Object> data,
+  ) async => throw const SecureAiPilotPolicyException();
   final bool enabled;
   @override
   final bool isDemo;
   const FirebaseSecureAiTransport({
-    required this.invoke,
+    required this.pilotPolicy,
+    required SecureAiCallableInvoker invoke,
     this.enabled = false,
     this.isDemo = true,
-  });
+  }) : _invoke = invoke;
 
   factory FirebaseSecureAiTransport.fromFunctions(
     FirebaseFunctions functions, {
+    required AndroidPilotPolicy pilotPolicy,
     bool enabled = false,
   }) => FirebaseSecureAiTransport(
+    pilotPolicy: pilotPolicy,
     enabled: enabled,
     isDemo: false,
     invoke: (name, data) => functions
@@ -38,10 +52,11 @@ class FirebaseSecureAiTransport implements SecureAiTransport {
   );
 
   @override
-  bool get available => enabled;
+  bool get available => _policyAllowed && enabled;
 
   @override
   Future<Object?> call(Map<String, Object> data) async {
+    if (!_policyAllowed) throw const SecureAiPilotPolicyException();
     if (!enabled) throw const SecureAiException(SecureAiFailure.unavailable);
     final operation = data['operation'];
     final fields = {

@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -318,17 +319,25 @@ class SecureAiResult {
 }
 
 class SecureAiService {
-  final WorkspaceSession? Function() currentSession;
+  final AndroidPilotPolicy pilotPolicy;
+  final WorkspaceSession? Function() _currentSession;
+  bool get _policyAllowed =>
+      pilotPolicy.state == AndroidPilotState.normal ||
+      pilotPolicy.permits(AndroidPilotCapability.liveAi);
+  static WorkspaceSession? _noSession() => null;
+  WorkspaceSession? Function() get currentSession =>
+      _policyAllowed ? _currentSession : _noSession;
   final SecureAiTransport transport;
   final Duration timeout;
   bool _busy = false;
-  bool get available => transport.available;
-  bool get isDemo => transport.isDemo;
+  bool get available => _policyAllowed && transport.available;
+  bool get isDemo => _policyAllowed && transport.isDemo;
   SecureAiService({
-    required this.currentSession,
+    required this.pilotPolicy,
+    required WorkspaceSession? Function() currentSession,
     this.transport = const UnavailableSecureAiTransport(),
     this.timeout = const Duration(seconds: 30),
-  });
+  }) : _currentSession = currentSession;
 
   void _check(WorkspaceSession captured) {
     final current = currentSession();
@@ -340,6 +349,7 @@ class SecureAiService {
   }
 
   Future<SecureAiResult> generate({int maxRecipes = 1}) async {
+    if (!_policyAllowed) throw const SecureAiPilotPolicyException();
     if (_busy) throw const SecureAiException(SecureAiFailure.busy);
     final session = currentSession();
     if (session == null ||
@@ -411,4 +421,8 @@ class SecureAiService {
       _busy = false;
     }
   }
+}
+
+class SecureAiPilotPolicyException extends SecureAiException {
+  const SecureAiPilotPolicyException() : super(SecureAiFailure.denied);
 }

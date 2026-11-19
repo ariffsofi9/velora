@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 // Offline Auth/Functions doubles; never dispatches network requests.
 // ignore_for_file: subtype_of_sealed_class
 import 'dart:async';
@@ -96,6 +98,12 @@ class _Functions extends Fake implements FirebaseFunctions {
       });
 }
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
   late InvitationFirebase core;
   late _Auth auth;
@@ -111,7 +119,11 @@ void main() {
     core = installInvitationFirebase();
     auth = _Auth();
     functions = _Functions();
-    service = FirebaseStaffInvitations(auth: auth, functions: functions);
+    service = FirebaseStaffInvitations(
+      pilotPolicy: _normalPolicy,
+      auth: auth,
+      functions: functions,
+    );
   });
   tearDown(() async {
     await auth.changes.close();

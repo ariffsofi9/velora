@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/user_profile.dart';
+import 'android_pilot_policy.dart';
 
 class ProfileValidationException implements Exception {
   final String message;
@@ -14,12 +15,25 @@ class ProfileValidationException implements Exception {
 class UserProfileService {
   final FirebaseFirestore? _instance;
   final void Function(String message)? _debugLog;
+  final AndroidPilotPolicy? _pilotPolicy;
 
   UserProfileService({
     FirebaseFirestore? firestore,
     void Function(String message)? debugLog,
+    AndroidPilotPolicy? pilotPolicy,
   }) : _instance = firestore,
-       _debugLog = debugLog;
+       _debugLog = debugLog,
+       _pilotPolicy = pilotPolicy;
+
+  void _requireCapability(AndroidPilotCapability capability) {
+    final policy = _pilotPolicy;
+    if (policy == null || policy.state == AndroidPilotState.normal) return;
+    if (!policy.isValid || !policy.permits(capability)) {
+      throw const ProfileValidationException(
+        'This profile operation is unavailable under the pilot policy.',
+      );
+    }
+  }
 
   FirebaseFirestore get _firestore => _instance ?? FirebaseFirestore.instance;
 
@@ -31,6 +45,7 @@ class UserProfileService {
     User user, {
     String? initialUsername,
   }) async {
+    _requireCapability(AndroidPilotCapability.profileWrites);
     var operation = 'read-self-profile';
     try {
       final docRef = _usersRef.doc(user.uid);
@@ -67,6 +82,42 @@ class UserProfileService {
     }
   }
 
+  /// No creation, repair, cached fallback or presentation defaults. This is
+  /// profile eligibility only; users.role never authorizes workspace access.
+  /// AuthService fences the authenticated session around this read.
+  Future<UserProfile> readExistingServerProfile(User user) async {
+    _requireCapability(AndroidPilotCapability.existingAccountAuthentication);
+    final policy = _pilotPolicy;
+    if (policy?.isRestricted == true &&
+        (!user.emailVerified ||
+            !policy!.bindings.any((binding) => binding.uid == user.uid))) {
+      throw const ProfileValidationException('Pilot account is not eligible.');
+    }
+    final doc = await _usersRef
+        .doc(user.uid)
+        .get(const GetOptions(source: Source.server));
+    final data = doc.data();
+    if (!doc.exists ||
+        doc.id != user.uid ||
+        doc.metadata.isFromCache ||
+        doc.metadata.hasPendingWrites ||
+        data == null ||
+        data['username'] is! String ||
+        data['email'] is! String ||
+        data['email'] != user.email ||
+        (data['email'] as String).isEmpty ||
+        data['photoUrl'] is! String ||
+        (data['role'] != 'owner' && data['role'] != 'staff') ||
+        data['createdAt'] is! Timestamp ||
+        data['updatedAt'] is! Timestamp) {
+      throw const ProfileValidationException(
+        'An existing server-confirmed profile is required.',
+      );
+    }
+    _validate(data['username'] as String, data['photoUrl'] as String);
+    return UserProfile.fromMap(doc.id, data);
+  }
+
   void _diagnose(String operation, FirebaseException error) {
     if (!kDebugMode) return;
     String safe(String value) {
@@ -84,6 +135,14 @@ class UserProfileService {
   }
 
   Stream<UserProfile?> getUserProfileStream(String uid) {
+    // The legacy stream can deliver cached data and has no auth-session fence.
+    // Pilot consumers must use the server-only eligibility path instead.
+    if (_pilotPolicy != null &&
+        _pilotPolicy.state != AndroidPilotState.normal) {
+      throw const ProfileValidationException(
+        'Profile streams are unavailable under the pilot policy.',
+      );
+    }
     return _usersRef.doc(uid).snapshots().map((doc) {
       if (!doc.exists || doc.data() == null) return null;
 
@@ -96,6 +155,7 @@ class UserProfileService {
     required String username,
     required String photoUrl,
   }) async {
+    _requireCapability(AndroidPilotCapability.profileWrites);
     _validate(username, photoUrl);
     await _usersRef.doc(uid).update({
       'username': username,

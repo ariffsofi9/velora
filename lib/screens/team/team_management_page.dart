@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
+import '../../services/android_pilot_policy.dart';
+import '../auth/workspace_gate.dart';
 import 'dart:async';
 
 import 'package:firebase_auth/firebase_auth.dart';
@@ -23,9 +27,21 @@ class TeamManagementPage extends StatefulWidget {
 }
 
 class _TeamManagementPageState extends State<TeamManagementPage> {
+  late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    androidFlavor: appFlavor,
+  );
+  AndroidPilotPolicy get _policy =>
+      AndroidPilotAuthScope.read(context)?.policy ?? _buildPolicy;
+  bool get _allowed =>
+      _policy.state == AndroidPilotState.normal ||
+      _policy.permits(AndroidPilotCapability.teamCallables);
+
   late Future<TeamRoster> _workspace;
   StreamSubscription<User?>? _authChanges;
   int _generation = 0;
+  AndroidPilotPolicy? _boundPolicy;
 
   FirebaseAuth get _auth => widget.auth ?? FirebaseAuth.instance;
   WorkspaceResolver get _resolver =>
@@ -34,6 +50,15 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
   @override
   void initState() {
     super.initState();
+    _bind();
+  }
+
+  void _bind() {
+    _boundPolicy = _policy;
+    _generation++;
+    unawaited(_authChanges?.cancel());
+    _authChanges = null;
+    if (!_allowed) return;
     _workspace = _load();
     _workspace.ignore();
     _authChanges = _auth.authStateChanges().listen((_) {
@@ -41,11 +66,21 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
     });
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPolicy, _policy)) _bind();
+  }
+
   Future<TeamRoster> _load() async {
+    if (!mounted || !_allowed) throw const TeamPilotPolicyException();
     final generation = ++_generation;
     final uid = _auth.currentUser?.uid;
     final workspace = await _resolver.resolve();
-    if (uid == null ||
+    if (!mounted ||
+        !_allowed ||
+        uid == null ||
         workspace.uid != uid ||
         _auth.currentUser?.uid != uid ||
         generation != _generation) {
@@ -53,9 +88,14 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
     }
     final roster =
         await (widget.members ??
-                FirebaseTeamMembers(auth: _auth, resolver: _resolver))
+                FirebaseTeamMembers(
+                  pilotPolicy: _policy,
+                  auth: _auth,
+                  resolver: _resolver,
+                ))
             .load(workspace);
     if (!mounted ||
+        !_allowed ||
         generation != _generation ||
         _auth.currentUser?.uid != uid) {
       throw StateError('Session changed.');
@@ -64,6 +104,7 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
   }
 
   void _retry() {
+    if (!mounted || !_allowed) return;
     setState(() {
       _workspace = _load();
       // Auth errors can complete before the next build attaches FutureBuilder.
@@ -80,41 +121,49 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: AppColors.background,
-    appBar: AppBar(
-      backgroundColor: AppColors.background,
-      title: const Text(
-        'Team Management',
-        style: TextStyle(fontWeight: FontWeight.w700),
-      ),
-    ),
-    body: SafeArea(
-      top: false,
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 680),
-          child: FutureBuilder<TeamRoster>(
-            future: _workspace,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                );
-              }
-
-              final workspace = snapshot.data;
-              if (snapshot.hasError || workspace == null) {
-                return _NoTrustedTeam(onRetry: _retry);
-              }
-
-              return _VerifiedTeamView(roster: workspace, onRefresh: _retry, auth: _auth);
-            },
+  Widget build(BuildContext context) => !_allowed
+      ? const PilotAccessBlockedPage()
+      : Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            backgroundColor: AppColors.background,
+            title: const Text(
+              'Team Management',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
           ),
-        ),
-      ),
-    ),
-  );
+          body: SafeArea(
+            top: false,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 680),
+                child: FutureBuilder<TeamRoster>(
+                  future: _workspace,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(
+                        child: CircularProgressIndicator(
+                          color: AppColors.primary,
+                        ),
+                      );
+                    }
+
+                    final workspace = snapshot.data;
+                    if (snapshot.hasError || workspace == null) {
+                      return _NoTrustedTeam(onRetry: _retry);
+                    }
+
+                    return _VerifiedTeamView(
+                      roster: workspace,
+                      onRefresh: _retry,
+                      auth: _auth,
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
 }
 
 class _VerifiedTeamView extends StatelessWidget {
@@ -122,7 +171,11 @@ class _VerifiedTeamView extends StatelessWidget {
   final VoidCallback onRefresh;
   final FirebaseAuth auth;
 
-  const _VerifiedTeamView({required this.roster, required this.onRefresh, required this.auth});
+  const _VerifiedTeamView({
+    required this.roster,
+    required this.onRefresh,
+    required this.auth,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +226,11 @@ class _TeamHeader extends StatelessWidget {
   final CafeWorkspace workspace;
   final FirebaseAuth auth;
 
-  const _TeamHeader({required this.role, required this.workspace, required this.auth});
+  const _TeamHeader({
+    required this.role,
+    required this.workspace,
+    required this.auth,
+  });
 
   @override
   Widget build(BuildContext context) => Container(
@@ -233,8 +290,11 @@ class _TeamHeader extends StatelessWidget {
                 role == 'Owner' && FirebaseEmulatorConfig.invitationsAvailable
                 ? () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
-                      builder: (_) =>
-                          StaffInvitationPage(ownerMode: true, auth: auth, workspace: workspace),
+                      builder: (_) => StaffInvitationPage(
+                        ownerMode: true,
+                        auth: auth,
+                        workspace: workspace,
+                      ),
                     ),
                   )
                 : null,

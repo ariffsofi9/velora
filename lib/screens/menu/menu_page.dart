@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
+import '../../services/android_pilot_policy.dart';
+import '../auth/workspace_gate.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
@@ -14,7 +18,19 @@ class MenuPage extends StatefulWidget {
 }
 
 class _MenuPageState extends State<MenuPage> {
-  late final MenuRepository _repository;
+  late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    androidFlavor: appFlavor,
+  );
+  AndroidPilotPolicy get _policy =>
+      AndroidPilotAuthScope.read(context)?.policy ?? _buildPolicy;
+  bool get _allowed =>
+      _policy.state == AndroidPilotState.normal ||
+      _policy.permits(AndroidPilotCapability.menuCallables);
+
+  late MenuRepository _repository;
+  AndroidPilotPolicy? _boundPolicy;
   StreamSubscription<void>? _session;
   CafeWorkspace? _workspace;
   List<MenuItem> _items = [];
@@ -30,7 +46,19 @@ class _MenuPageState extends State<MenuPage> {
   @override
   void initState() {
     super.initState();
-    _repository = widget.repository ?? FirebaseMenuRepository();
+    _bind();
+  }
+
+  void _bind() {
+    _boundPolicy = _policy;
+    _generation++;
+    unawaited(_session?.cancel());
+    _session = null;
+    _items = [];
+    _workspace = null;
+    if (!_allowed) return;
+    _repository =
+        widget.repository ?? FirebaseMenuRepository(pilotPolicy: _policy);
     _session = _repository.sessionChanges.listen(
       (_) {
         _invalidate();
@@ -40,6 +68,13 @@ class _MenuPageState extends State<MenuPage> {
       },
     );
     _load();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPolicy, _policy)) _bind();
   }
 
   void _invalidate() {
@@ -70,6 +105,7 @@ class _MenuPageState extends State<MenuPage> {
       ? error.message
       : 'Menu is unavailable. Please retry.';
   Future<void> _load({bool more = false}) async {
+    if (!mounted || !_allowed) return;
     if (more && (_more || _loading || _cursor == null)) return;
     final generation = more ? _generation : ++_generation;
     setState(() {
@@ -86,12 +122,12 @@ class _MenuPageState extends State<MenuPage> {
     });
     try {
       final workspace = await _repository.resolve();
-      if (!mounted || generation != _generation) return;
+      if (!mounted || !_allowed || generation != _generation) return;
       final page = await _repository.list(
         includeArchived: _includeArchived,
         cursor: more ? _cursor : null,
       );
-      if (!mounted || generation != _generation) return;
+      if (!mounted || !_allowed || generation != _generation) return;
       setState(() {
         _workspace = workspace;
         _items = more
@@ -131,7 +167,7 @@ class _MenuPageState extends State<MenuPage> {
   }
 
   Future<void> _edit([MenuItem? item]) async {
-    if (!_owner || _busy) return;
+    if (!mounted || !_allowed || !_owner || _busy) return;
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => MenuEditPage(repository: _repository, item: item),
@@ -141,7 +177,9 @@ class _MenuPageState extends State<MenuPage> {
   }
 
   Future<void> _action(MenuItem item, {bool lifecycle = false}) async {
-    if (_busy || _loading || (lifecycle && !_owner)) return;
+    if (!mounted || !_allowed || _busy || _loading || (lifecycle && !_owner)) {
+      return;
+    }
     final generation = _generation;
     final action = lifecycle
         ? (item.isArchived ? 'Restore' : 'Archive')
@@ -169,7 +207,12 @@ class _MenuPageState extends State<MenuPage> {
           ],
         ),
       );
-      if (confirmed != true || !mounted || generation != _generation) return;
+      if (confirmed != true ||
+          !mounted ||
+          !_allowed ||
+          generation != _generation) {
+        return;
+      }
       setState(() => _confirming = false);
       final fingerprint = '${item.id}/${item.version}/$action';
       final key = _keys.putIfAbsent(fingerprint, newMenuRequestKey);
@@ -212,169 +255,179 @@ class _MenuPageState extends State<MenuPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: AppColors.background,
-    appBar: AppBar(
-      title: const Text('Menu Management'),
-      backgroundColor: AppColors.background,
-      actions: [
-        IconButton(
-          tooltip: 'Refresh menu',
-          onPressed: _loading || _busy ? null : () => _load(),
-          icon: const Icon(Icons.refresh_rounded),
-        ),
-      ],
-    ),
-    body: Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 720),
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  Text(
-                    'Your café menu',
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  const Text('Menu items and current availability.'),
-                  const SizedBox(height: 16),
-                  if (_owner) ...[
-                    FilledButton.icon(
-                      key: const ValueKey('menu-add'),
-                      onPressed: _busy ? null : () => _edit(),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add Menu Item'),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  if (_error == null)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: FilterChip(
-                        label: const Text('Include archived'),
-                        selected: _includeArchived,
-                        onSelected: _busy
-                            ? null
-                            : (value) {
-                                _includeArchived = value;
-                                _load();
-                              },
-                      ),
-                    ),
-                  if (_error != null) ...[
-                    Text(_error!, key: const ValueKey('menu-error')),
-                    OutlinedButton(
-                      onPressed: () => _load(),
-                      child: const Text('Retry'),
-                    ),
-                  ] else if (_items.isEmpty) ...[
-                    const SizedBox(height: 24),
-                    const Icon(
-                      Icons.restaurant_menu_rounded,
-                      size: 48,
-                      color: AppColors.primary,
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'No menu items yet.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ] else ...[
-                    const SizedBox(height: 12),
-                    for (final item in _items) ...[
-                      Container(
-                        key: ValueKey('menu-card-${item.id}'),
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: AppColors.surface,
-                          border: Border.all(color: AppColors.border),
-                          borderRadius: BorderRadius.circular(14),
+  Widget build(BuildContext context) => !_allowed
+      ? const PilotAccessBlockedPage()
+      : Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            title: const Text('Menu Management'),
+            backgroundColor: AppColors.background,
+            actions: [
+              IconButton(
+                tooltip: 'Refresh menu',
+                onPressed: _loading || _busy ? null : () => _load(),
+                icon: const Icon(Icons.refresh_rounded),
+              ),
+            ],
+          ),
+          body: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : ListView(
+                      padding: const EdgeInsets.all(20),
+                      children: [
+                        Text(
+                          'Your café menu',
+                          style: Theme.of(context).textTheme.headlineSmall,
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              item.name,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(item.category),
-                            const SizedBox(height: 8),
-                            Text(
-                              item.formattedPrice,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(item.isArchived ? 'Archived' : 'Active'),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                item.isArchived
-                                    ? 'Unavailable (archived)'
-                                    : item.isAvailable
-                                    ? 'Available'
-                                    : 'Unavailable',
-                              ),
-                              value: !item.isArchived && item.isAvailable,
-                              onChanged: _busy || item.isArchived
+                        const SizedBox(height: 8),
+                        const Text('Menu items and current availability.'),
+                        const SizedBox(height: 16),
+                        if (_owner) ...[
+                          FilledButton.icon(
+                            key: const ValueKey('menu-add'),
+                            onPressed: _busy ? null : () => _edit(),
+                            icon: const Icon(Icons.add),
+                            label: const Text('Add Menu Item'),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        if (_error == null)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: FilterChip(
+                              label: const Text('Include archived'),
+                              selected: _includeArchived,
+                              onSelected: _busy
                                   ? null
-                                  : (_) => _action(item),
+                                  : (value) {
+                                      if (!mounted || !_allowed) return;
+                                      _includeArchived = value;
+                                      _load();
+                                    },
                             ),
-                            if (_owner)
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
+                          ),
+                        if (_error != null) ...[
+                          Text(_error!, key: const ValueKey('menu-error')),
+                          OutlinedButton(
+                            onPressed: () => _load(),
+                            child: const Text('Retry'),
+                          ),
+                        ] else if (_items.isEmpty) ...[
+                          const SizedBox(height: 24),
+                          const Icon(
+                            Icons.restaurant_menu_rounded,
+                            size: 48,
+                            color: AppColors.primary,
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'No menu items yet.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 12),
+                          for (final item in _items) ...[
+                            Container(
+                              key: ValueKey('menu-card-${item.id}'),
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                border: Border.all(color: AppColors.border),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  OutlinedButton(
-                                    onPressed: _busy || item.isArchived
-                                        ? null
-                                        : () => _edit(item),
-                                    child: const Text('Edit'),
+                                  Text(
+                                    item.name,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
                                   ),
-                                  OutlinedButton(
-                                    onPressed: _busy
-                                        ? null
-                                        : () => _action(item, lifecycle: true),
-                                    child: Text(
-                                      item.isArchived ? 'Restore' : 'Archive',
+                                  const SizedBox(height: 4),
+                                  Text(item.category),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    item.formattedPrice,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
+                                  const SizedBox(height: 8),
+                                  Text(item.isArchived ? 'Archived' : 'Active'),
+                                  SwitchListTile(
+                                    contentPadding: EdgeInsets.zero,
+                                    title: Text(
+                                      item.isArchived
+                                          ? 'Unavailable (archived)'
+                                          : item.isAvailable
+                                          ? 'Available'
+                                          : 'Unavailable',
+                                    ),
+                                    value: !item.isArchived && item.isAvailable,
+                                    onChanged: _busy || item.isArchived
+                                        ? null
+                                        : (_) => _action(item),
+                                  ),
+                                  if (_owner)
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: [
+                                        OutlinedButton(
+                                          onPressed: _busy || item.isArchived
+                                              ? null
+                                              : () => _edit(item),
+                                          child: const Text('Edit'),
+                                        ),
+                                        OutlinedButton(
+                                          onPressed: _busy
+                                              ? null
+                                              : () => _action(
+                                                  item,
+                                                  lifecycle: true,
+                                                ),
+                                          child: Text(
+                                            item.isArchived
+                                                ? 'Restore'
+                                                : 'Archive',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                 ],
                               ),
+                            ),
+                            const SizedBox(height: 12),
                           ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (_moreError != null) Text(_moreError!),
-                    if (_cursor != null)
-                      OutlinedButton(
-                        onPressed: _more || _busy
-                            ? null
-                            : () => _load(more: true),
-                        child: Text(
-                          _more
-                              ? 'Loading…'
-                              : _moreError == null
-                              ? 'Load More'
-                              : 'Retry Load More',
-                        ),
-                      ),
-                  ],
-                  if (_busy && !_confirming)
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(12),
-                        child: CircularProgressIndicator(),
-                      ),
+                          if (_moreError != null) Text(_moreError!),
+                          if (_cursor != null)
+                            OutlinedButton(
+                              onPressed: _more || _busy
+                                  ? null
+                                  : () => _load(more: true),
+                              child: Text(
+                                _more
+                                    ? 'Loading…'
+                                    : _moreError == null
+                                    ? 'Load More'
+                                    : 'Retry Load More',
+                              ),
+                            ),
+                        ],
+                        if (_busy && !_confirming)
+                          const Center(
+                            child: Padding(
+                              padding: EdgeInsets.all(12),
+                              child: CircularProgressIndicator(),
+                            ),
+                          ),
+                      ],
                     ),
-                ],
-              ),
-      ),
-    ),
-  );
+            ),
+          ),
+        );
 }

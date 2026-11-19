@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
@@ -89,13 +90,17 @@ abstract interface class WorkspaceInventoryStockCallable {
 
 class FirebaseWorkspaceInventoryStockCallable
     implements WorkspaceInventoryStockCallable {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseFunctions? _functions;
 
-  FirebaseWorkspaceInventoryStockCallable({FirebaseFunctions? functions})
-    : _functions = functions;
+  FirebaseWorkspaceInventoryStockCallable({
+    required this.pilotPolicy,
+    FirebaseFunctions? functions,
+  }) : _functions = functions;
 
   @override
   Future<Map<String, dynamic>> call(Map<String, Object> data) async {
+    _requirePolicy(pilotPolicy);
     final callable =
         (_functions ?? FirebaseFunctions.instanceFor(region: 'asia-southeast1'))
             .httpsCallable('adjustInventoryStock');
@@ -106,21 +111,27 @@ class FirebaseWorkspaceInventoryStockCallable
 
 class FirebaseWorkspaceInventoryStockAdjuster
     implements WorkspaceInventoryStockAdjuster {
+  final AndroidPilotPolicy pilotPolicy;
   final WorkspaceSession? session;
   final WorkspaceInventoryStockCallable _callable;
 
   FirebaseWorkspaceInventoryStockAdjuster({
+    required this.pilotPolicy,
     this.session,
     FirebaseFunctions? functions,
     WorkspaceInventoryStockCallable? callable,
   }) : _callable =
            callable ??
-           FirebaseWorkspaceInventoryStockCallable(functions: functions);
+           FirebaseWorkspaceInventoryStockCallable(
+             pilotPolicy: pilotPolicy,
+             functions: functions,
+           );
 
   @override
   Future<WorkspaceInventoryStockResult> adjustStock(
     WorkspaceInventoryStockRequest request,
   ) async {
+    _requirePolicy(pilotPolicy);
     try {
       final captured = captureMutationSession(request, session);
       final payload = {...request.toCallableData(), ...captured.mutationData};
@@ -180,4 +191,17 @@ class FirebaseWorkspaceInventoryStockAdjuster
     'deadline-exceeded' => WorkspaceInventoryStockFailure.unavailable,
     _ => WorkspaceInventoryStockFailure.internal,
   };
+}
+
+class InventoryStockPilotPolicyException
+    extends WorkspaceInventoryStockException {
+  const InventoryStockPilotPolicyException()
+    : super(WorkspaceInventoryStockFailure.permissionDenied);
+}
+
+void _requirePolicy(AndroidPilotPolicy policy) {
+  if (policy.state != AndroidPilotState.normal &&
+      !policy.permits(AndroidPilotCapability.inventoryMutations)) {
+    throw const InventoryStockPilotPolicyException();
+  }
 }

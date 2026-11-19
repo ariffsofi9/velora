@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
+import '../../../services/android_pilot_policy.dart';
+import '../../auth/workspace_gate.dart';
 import '../../../services/workspace_session.dart';
 import 'dart:math';
 
@@ -27,7 +31,47 @@ class InventoryLifecycleActionButton extends StatefulWidget {
 
 class _InventoryLifecycleActionButtonState
     extends State<InventoryLifecycleActionButton> {
+  late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    androidFlavor: appFlavor,
+  );
+  AndroidPilotPolicy get _policy =>
+      AndroidPilotAuthScope.read(context)?.policy ?? _buildPolicy;
+  AndroidPilotPolicy? _boundPolicy;
+  bool _policyBlocked = false;
+  bool get _allowed =>
+      !_policyBlocked &&
+      widget.workspaceSession?.isActive != false &&
+      (_policy.state == AndroidPilotState.normal ||
+          _policy.permits(AndroidPilotCapability.inventoryMutations));
+  bool get _current => mounted && _allowed;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPolicy, _policy)) _policyBlocked = true;
+  }
+
+  @override
+  void didUpdateWidget(covariant InventoryLifecycleActionButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.manager, widget.manager) ||
+        !identical(oldWidget.item, widget.item)) {
+      _policyBlocked = true;
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _boundPolicy = _policy;
+  }
+
   bool _loading = false;
+  bool _confirming = false;
   String? _key;
 
   String _newKey() {
@@ -39,7 +83,9 @@ class _InventoryLifecycleActionButtonState
   }
 
   Future<void> _submit() async {
-    if (_loading) return;
+    if (!mounted || !_current) return;
+    if (_loading || _confirming) return;
+    _confirming = true;
     final archived = widget.item.isArchived;
     final action = archived
         ? InventoryLifecycleAction.restore
@@ -67,12 +113,14 @@ class _InventoryLifecycleActionButtonState
         ],
       ),
     );
-    if (confirmed != true || !mounted) return;
+    _confirming = false;
+    if (confirmed != true || !_current) return;
     setState(() => _loading = true);
     try {
       final manager =
           widget.manager ??
           FirebaseWorkspaceInventoryLifecycleManager(
+            pilotPolicy: _policy,
             session: widget.workspaceSession,
           );
       _key ??= _newKey();
@@ -84,10 +132,10 @@ class _InventoryLifecycleActionButtonState
           expectedVersion: widget.item.version,
         ),
       );
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       widget.onChanged();
     } on WorkspaceInventoryLifecycleException catch (error) {
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       final message = switch (error.failure) {
         WorkspaceInventoryLifecycleFailure.stale =>
           'This item changed. Return to the list and try again.',
@@ -104,24 +152,30 @@ class _InventoryLifecycleActionButtonState
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (_current) setState(() => _loading = false);
     }
   }
 
   @override
-  Widget build(BuildContext context) => OutlinedButton.icon(
-    key: ValueKey(widget.item.isArchived ? 'restore-item' : 'archive-item'),
-    onPressed: _loading ? null : _submit,
-    icon: _loading
-        ? const SizedBox.square(
-            dimension: 18,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
-        : Icon(
-            widget.item.isArchived
-                ? Icons.unarchive_outlined
-                : Icons.archive_outlined,
+  Widget build(BuildContext context) => !_allowed
+      ? const Text(
+          'Inventory changes are unavailable under the Android pilot policy.',
+        )
+      : OutlinedButton.icon(
+          key: ValueKey(
+            widget.item.isArchived ? 'restore-item' : 'archive-item',
           ),
-    label: Text(widget.item.isArchived ? 'Restore Item' : 'Archive Item'),
-  );
+          onPressed: _loading ? null : _submit,
+          icon: _loading
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Icon(
+                  widget.item.isArchived
+                      ? Icons.unarchive_outlined
+                      : Icons.archive_outlined,
+                ),
+          label: Text(widget.item.isArchived ? 'Restore Item' : 'Archive Item'),
+        );
 }

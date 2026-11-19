@@ -1,3 +1,4 @@
+import '../services/android_pilot_policy.dart';
 import 'dart:async';
 import '../models/saved_recipe.dart';
 import '../services/workspace_session.dart';
@@ -86,22 +87,29 @@ class SavedRecipesPage {
 /// One session episode only. No HTTP/Firebase initialization, retries, digest
 /// computation or durable recovery claims. Mutations always fail before I/O.
 class WorkspaceSavedRecipeRepository {
+  final AndroidPilotPolicy pilotPolicy;
   final SavedRecipeReadPort readPort;
   final SavedRecipeObservationPort observationPort;
   final SavedRecipeSession? Function() currentSession;
   final Duration timeout;
   late final SavedRecipeSession _session;
-  late final StreamSubscription<SavedRecipeSession?> _subscription;
+  StreamSubscription<SavedRecipeSession?>? _subscription;
   final _changes = StreamController<void>.broadcast(sync: true);
   bool _invalid = false;
   Stream<void> get sessionChanges => _changes.stream;
   WorkspaceSavedRecipeRepository({
+    required this.pilotPolicy,
     required this.readPort,
     required this.observationPort,
     required this.currentSession,
     required Stream<SavedRecipeSession?> sessionChanges,
     this.timeout = const Duration(seconds: 15),
   }) {
+    if (pilotPolicy.state != AndroidPilotState.normal &&
+        !pilotPolicy.permits(AndroidPilotCapability.savedRecipesReads)) {
+      _invalid = true;
+      return;
+    }
     SavedRecipeSession? s;
     try {
       s = currentSession();
@@ -129,7 +137,18 @@ class WorkspaceSavedRecipeRepository {
     if (!_changes.isClosed) _changes.add(null);
   }
 
+  void _requirePolicy(
+    AndroidPilotCapability capability, {
+    bool observation = false,
+  }) {
+    if (pilotPolicy.state != AndroidPilotState.normal &&
+        !pilotPolicy.permits(capability)) {
+      throw SavedRecipePilotPolicyException(outcomeUnknown: observation);
+    }
+  }
+
   void _check() {
+    _requirePolicy(AndroidPilotCapability.savedRecipesReads);
     bool valid;
     try {
       valid = !_invalid && _session.valid && _session.matches(currentSession());
@@ -299,6 +318,7 @@ class WorkspaceSavedRecipeRepository {
   Future<SavedRecipeReconciliation> reconcile(
     SavedRecipeIntent originalIntent,
   ) async {
+    _requirePolicy(AndroidPilotCapability.reconciliation, observation: true);
     try {
       _check();
     } on SavedRecipeException {
@@ -329,9 +349,14 @@ class WorkspaceSavedRecipeRepository {
   Future<void> dispose() async {
     _invalidate();
     try {
-      await _subscription.cancel().timeout(timeout);
+      await _subscription?.cancel().timeout(timeout);
     } finally {
       unawaited(_changes.close());
     }
   }
+}
+
+class SavedRecipePilotPolicyException extends SavedRecipeException {
+  const SavedRecipePilotPolicyException({bool outcomeUnknown = false})
+    : super(SavedRecipeFailure.permission, outcomeUnknown: outcomeUnknown);
 }

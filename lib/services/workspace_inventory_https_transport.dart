@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -98,6 +99,7 @@ class HttpsWorkspaceInventory
         WorkspaceInventoryUpdater,
         WorkspaceInventoryStockAdjuster,
         WorkspaceInventoryLifecycleManager {
+  final AndroidPilotPolicy pilotPolicy;
   final Uri endpoint;
   final String projectId;
   final http.Client client;
@@ -113,6 +115,7 @@ class HttpsWorkspaceInventory
       (journal == null ? Duration.zero : journal!.timeout * 4 + cleanupTimeout);
 
   HttpsWorkspaceInventory({
+    required this.pilotPolicy,
     required this.endpoint,
     required this.projectId,
     required String endpointProjectId,
@@ -148,6 +151,16 @@ class HttpsWorkspaceInventory
       throw const InventoryHttpsFailure(
         'invalid-configuration',
         outcomeUnknown: false,
+      );
+    }
+  }
+
+  void _requirePolicy({bool outcomeUnknown = false}) {
+    if (pilotPolicy.state != AndroidPilotState.normal &&
+        !pilotPolicy.permits(AndroidPilotCapability.inventoryMutations)) {
+      throw InventoryHttpsFailure(
+        'pilot-policy-denied',
+        outcomeUnknown: outcomeUnknown,
       );
     }
   }
@@ -443,6 +456,7 @@ class HttpsWorkspaceInventory
   Future<MutationReceiptObservation> reconcile(
     PendingMutationOperation pending,
   ) async {
+    _requirePolicy(outcomeUnknown: pending.unresolved);
     StreamSubscription<InventoryHttpsSession?>? monitor;
     var changed = false;
     try {
@@ -563,6 +577,7 @@ class HttpsWorkspaceInventory
     WorkspaceInventoryCreateRequest request,
   ) async {
     try {
+      _requirePolicy();
       return await _call(
         request,
         '/inventory/create',
@@ -585,7 +600,7 @@ class HttpsWorkspaceInventory
         'unauthenticated' => WorkspaceInventoryCreateFailure.unauthenticated,
         'invalid-argument' ||
         'too-large' => WorkspaceInventoryCreateFailure.invalidInput,
-        'permission-denied' || 'failed-precondition' =>
+        'pilot-policy-denied' || 'permission-denied' || 'failed-precondition' =>
           WorkspaceInventoryCreateFailure.permissionDenied,
         'already-exists' ||
         'aborted' => WorkspaceInventoryCreateFailure.conflict,
@@ -599,6 +614,7 @@ class HttpsWorkspaceInventory
     WorkspaceInventoryUpdateRequest request,
   ) async {
     try {
+      _requirePolicy();
       return await _call(
         request,
         '/inventory/update',
@@ -624,7 +640,7 @@ class HttpsWorkspaceInventory
         'unauthenticated' => WorkspaceInventoryUpdateFailure.unauthenticated,
         'invalid-argument' ||
         'too-large' => WorkspaceInventoryUpdateFailure.invalidInput,
-        'permission-denied' || 'failed-precondition' =>
+        'pilot-policy-denied' || 'permission-denied' || 'failed-precondition' =>
           WorkspaceInventoryUpdateFailure.permissionDenied,
         'not-found' => WorkspaceInventoryUpdateFailure.notFound,
         'already-exists' => WorkspaceInventoryUpdateFailure.conflict,
@@ -639,6 +655,7 @@ class HttpsWorkspaceInventory
     WorkspaceInventoryStockRequest request,
   ) async {
     try {
+      _requirePolicy();
       return await _call(
         request,
         '/inventory/adjust-stock',
@@ -674,6 +691,7 @@ class HttpsWorkspaceInventory
         'unauthenticated' => WorkspaceInventoryStockFailure.unauthenticated,
         'invalid-argument' ||
         'too-large' => WorkspaceInventoryStockFailure.invalidInput,
+        'pilot-policy-denied' ||
         'permission-denied' => WorkspaceInventoryStockFailure.permissionDenied,
         'not-found' => WorkspaceInventoryStockFailure.notFound,
         'already-exists' => WorkspaceInventoryStockFailure.conflict,
@@ -691,6 +709,7 @@ class HttpsWorkspaceInventory
     WorkspaceInventoryLifecycleRequest request,
   ) async {
     try {
+      _requirePolicy();
       return await _call(
         request,
         '/inventory/lifecycle',
@@ -720,7 +739,7 @@ class HttpsWorkspaceInventory
         'unauthenticated' => WorkspaceInventoryLifecycleFailure.unauthenticated,
         'invalid-argument' ||
         'too-large' => WorkspaceInventoryLifecycleFailure.invalidInput,
-        'permission-denied' || 'failed-precondition' =>
+        'pilot-policy-denied' || 'permission-denied' || 'failed-precondition' =>
           WorkspaceInventoryLifecycleFailure.permissionDenied,
         'not-found' => WorkspaceInventoryLifecycleFailure.notFound,
         'already-exists' => WorkspaceInventoryLifecycleFailure.conflict,

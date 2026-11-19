@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
@@ -87,13 +88,17 @@ abstract interface class WorkspaceInventoryUpdateCallable {
 
 class FirebaseWorkspaceInventoryUpdateCallable
     implements WorkspaceInventoryUpdateCallable {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseFunctions? _functions;
 
-  FirebaseWorkspaceInventoryUpdateCallable({FirebaseFunctions? functions})
-    : _functions = functions;
+  FirebaseWorkspaceInventoryUpdateCallable({
+    required this.pilotPolicy,
+    FirebaseFunctions? functions,
+  }) : _functions = functions;
 
   @override
   Future<Map<String, dynamic>> call(Map<String, Object> data) async {
+    _requirePolicy(pilotPolicy);
     final callable =
         (_functions ?? FirebaseFunctions.instanceFor(region: 'asia-southeast1'))
             .httpsCallable('updateInventoryItem');
@@ -103,21 +108,27 @@ class FirebaseWorkspaceInventoryUpdateCallable
 }
 
 class FirebaseWorkspaceInventoryUpdater implements WorkspaceInventoryUpdater {
+  final AndroidPilotPolicy pilotPolicy;
   final WorkspaceSession? session;
   final WorkspaceInventoryUpdateCallable _callable;
 
   FirebaseWorkspaceInventoryUpdater({
+    required this.pilotPolicy,
     this.session,
     FirebaseFunctions? functions,
     WorkspaceInventoryUpdateCallable? callable,
   }) : _callable =
            callable ??
-           FirebaseWorkspaceInventoryUpdateCallable(functions: functions);
+           FirebaseWorkspaceInventoryUpdateCallable(
+             pilotPolicy: pilotPolicy,
+             functions: functions,
+           );
 
   @override
   Future<WorkspaceInventoryUpdateResult> updateItem(
     WorkspaceInventoryUpdateRequest request,
   ) async {
+    _requirePolicy(pilotPolicy);
     try {
       final captured = captureMutationSession(request, session);
       final payload = {...request.toCallableData(), ...captured.mutationData};
@@ -159,4 +170,17 @@ class FirebaseWorkspaceInventoryUpdater implements WorkspaceInventoryUpdater {
         'deadline-exceeded' => WorkspaceInventoryUpdateFailure.unavailable,
         _ => WorkspaceInventoryUpdateFailure.internal,
       };
+}
+
+class InventoryUpdatePilotPolicyException
+    extends WorkspaceInventoryUpdateException {
+  const InventoryUpdatePilotPolicyException()
+    : super(WorkspaceInventoryUpdateFailure.permissionDenied);
+}
+
+void _requirePolicy(AndroidPilotPolicy policy) {
+  if (policy.state != AndroidPilotState.normal &&
+      !policy.permits(AndroidPilotCapability.inventoryMutations)) {
+    throw const InventoryUpdatePilotPolicyException();
+  }
 }

@@ -5,17 +5,20 @@ import '../../core/theme/app_tokens.dart';
 import '../../widgets/auth/auth_layout.dart';
 import '../../services/auth_service.dart';
 import '../../services/workspace_resolver.dart';
+import '../../services/android_pilot_policy.dart';
 
 import 'signup_page.dart';
 import 'forgot_password_page.dart';
 import 'workspace_gate.dart';
 
 class LoginPage extends StatefulWidget {
+  final AndroidPilotAuthDependencies? pilot;
   final String? message;
   final AuthService? authService;
   final WorkspaceResolver? workspaceResolver;
   const LoginPage({
     super.key,
+    this.pilot,
     this.message,
     this.authService,
     this.workspaceResolver,
@@ -26,6 +29,10 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
+  AndroidPilotAuthDependencies? get _pilot =>
+      widget.pilot ?? AndroidPilotAuthScope.read(context);
+  bool _allows(AndroidPilotCapability capability) =>
+      _pilot?.allows(capability) ?? true;
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
 
@@ -62,17 +69,19 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => isLoading = true);
 
     try {
-      await (widget.authService ?? AuthService()).signIn(
+      final pilot = _pilot;
+      await (pilot?.authService ?? widget.authService ?? AuthService()).signIn(
         email: email,
         password: password,
       );
 
-      if (!mounted) return;
+      if (!mounted || !identical(pilot, _pilot)) return;
 
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => WorkspaceGate(resolver: widget.workspaceResolver),
+          builder: (_) =>
+              WorkspaceGate(pilot: pilot, resolver: widget.workspaceResolver),
         ),
       );
     } on FirebaseAuthException catch (e) {
@@ -114,72 +123,91 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   @override
-  Widget build(BuildContext context) => AuthLayout(
-    title: 'Welcome Back',
-    subtitle: 'Log in to continue to Velora',
-    children: [
-      AuthField(
-        label: 'Email address',
-        controller: emailController,
-        keyboardType: TextInputType.emailAddress,
-      ),
-      AuthField(
-        label: 'Password',
-        controller: passwordController,
-        obscure: hidePassword,
-        suffix: IconButton(
-          tooltip: hidePassword ? 'Show password' : 'Hide password',
-          icon: Icon(
-            hidePassword
-                ? Icons.visibility_off_outlined
-                : Icons.visibility_outlined,
-          ),
-          onPressed: () {
-            setState(() {
-              hidePassword = !hidePassword;
-            });
-          },
-        ),
-      ),
-      Align(
-        alignment: Alignment.centerRight,
-        child: TextButton(
-          onPressed: isLoading
-              ? null
-              : () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ForgotPasswordPage(
-                        initialEmail: emailController.text.trim(),
-                        authService: widget.authService,
-                      ),
-                    ),
-                  );
+  Widget build(BuildContext context) => _pilot?.policy.isValid == false
+      ? const PilotAccessBlockedPage()
+      : AuthLayout(
+          title: 'Welcome Back',
+          subtitle: 'Log in to continue to Velora',
+          children: [
+            AuthField(
+              label: 'Email address',
+              controller: emailController,
+              keyboardType: TextInputType.emailAddress,
+            ),
+            AuthField(
+              label: 'Password',
+              controller: passwordController,
+              obscure: hidePassword,
+              suffix: IconButton(
+                tooltip: hidePassword ? 'Show password' : 'Hide password',
+                icon: Icon(
+                  hidePassword
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                ),
+                onPressed: () {
+                  setState(() {
+                    hidePassword = !hidePassword;
+                  });
                 },
-          child: const Text('Forgot Password?'),
-        ),
-      ),
-      const SizedBox(height: 8),
-      AuthSubmit(label: 'Log In', busy: isLoading, onPressed: loginUser),
-      const SizedBox(height: 24),
-      AuthAccountLink(
-        prompt: "Don't have an account?",
-        label: 'Sign up',
-        onPressed: isLoading
-            ? null
-            : () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const SignUpPage()),
-                );
-              },
-      ),
-      const Text(
-        'Google sign-in is currently unavailable.',
-        textAlign: TextAlign.center,
-        style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-      ),
-    ],
-  );
+              ),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed:
+                    isLoading ||
+                        !_allows(AndroidPilotCapability.passwordResetEmail)
+                    ? null
+                    : () {
+                        if (!_allows(
+                          AndroidPilotCapability.passwordResetEmail,
+                        )) {
+                          return;
+                        }
+                        final pilot = _pilot;
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ForgotPasswordPage(
+                              initialEmail: emailController.text.trim(),
+                              authService:
+                                  pilot?.authService ?? widget.authService,
+                            ),
+                          ),
+                        );
+                      },
+                child: const Text('Forgot Password?'),
+              ),
+            ),
+            const SizedBox(height: 8),
+            AuthSubmit(label: 'Log In', busy: isLoading, onPressed: loginUser),
+            const SizedBox(height: 24),
+            AuthAccountLink(
+              prompt: "Don't have an account?",
+              label: 'Sign up',
+              onPressed:
+                  isLoading || !_allows(AndroidPilotCapability.registration)
+                  ? null
+                  : () {
+                      if (!_allows(AndroidPilotCapability.registration)) return;
+                      final pilot = _pilot;
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => SignUpPage(
+                            pilot: pilot,
+                            authService: widget.authService,
+                          ),
+                        ),
+                      );
+                    },
+            ),
+            const Text(
+              'Google sign-in is currently unavailable.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
+          ],
+        );
 }

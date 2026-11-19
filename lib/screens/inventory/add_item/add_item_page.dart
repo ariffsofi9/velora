@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
+import '../../../services/android_pilot_policy.dart';
+import '../../auth/workspace_gate.dart';
 import '../../../core/theme/app_tokens.dart';
 import 'dart:math';
 
@@ -29,6 +33,38 @@ class AddItemPage extends StatefulWidget {
 }
 
 class _AddItemPageState extends State<AddItemPage> {
+  late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    androidFlavor: appFlavor,
+  );
+  AndroidPilotPolicy get _policy =>
+      AndroidPilotAuthScope.read(context)?.policy ?? _buildPolicy;
+  AndroidPilotPolicy? _boundPolicy;
+  bool _policyBlocked = false;
+  bool get _allowed =>
+      !_policyBlocked &&
+      widget.workspaceSession?.isActive != false &&
+      (_policy.state == AndroidPilotState.normal ||
+          _policy.permits(AndroidPilotCapability.inventoryMutations));
+  bool get _current => mounted && _allowed;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPolicy, _policy)) _policyBlocked = true;
+  }
+
+  @override
+  void didUpdateWidget(covariant AddItemPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.creator, widget.creator)) {
+      _policyBlocked = true;
+    }
+  }
+
   final itemNameController = TextEditingController();
   final quantityController = TextEditingController();
 
@@ -49,9 +85,15 @@ class _AddItemPageState extends State<AddItemPage> {
   @override
   void initState() {
     super.initState();
-    _creator =
-        widget.creator ??
-        FirebaseWorkspaceInventoryCreator(session: widget.workspaceSession);
+    _boundPolicy = _policy;
+    if (_allowed) {
+      _creator =
+          widget.creator ??
+          FirebaseWorkspaceInventoryCreator(
+            pilotPolicy: _policy,
+            session: widget.workspaceSession,
+          );
+    }
   }
 
   @override
@@ -62,6 +104,7 @@ class _AddItemPageState extends State<AddItemPage> {
   }
 
   Future<void> _pickExpiryDate() async {
+    if (!mounted || !_current) return;
     final pickedDate = await showDatePicker(
       context: context,
       firstDate: DateTime.now(),
@@ -69,12 +112,13 @@ class _AddItemPageState extends State<AddItemPage> {
       initialDate: DateTime.now(),
     );
 
-    if (pickedDate != null) {
+    if (pickedDate != null && _current) {
       setState(() => selectedDate = pickedDate);
     }
   }
 
   Future<void> _saveItem() async {
+    if (!mounted || !_current) return;
     if (!_hasVerifiedWorkspace) {
       _showMessage(
         'Adding items requires a verified workspace. Please sign in again.',
@@ -122,22 +166,23 @@ class _AddItemPageState extends State<AddItemPage> {
     setState(() => isSaving = true);
     try {
       await _creator.createItem(request);
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() => isSaving = false);
       _showMessage('${request.name} added successfully');
       Navigator.pop(context, true);
     } on WorkspaceInventoryCreateException catch (error) {
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() => isSaving = false);
       _showMessage(_failureMessage(error.failure));
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() => isSaving = false);
       _showMessage('Unable to add the item. Check your connection and retry.');
     }
   }
 
   void _showMessage(String message) {
+    if (!mounted || !_current) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
@@ -175,6 +220,7 @@ class _AddItemPageState extends State<AddItemPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_allowed) return const PilotAccessBlockedPage();
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -203,6 +249,7 @@ class _AddItemPageState extends State<AddItemPage> {
                 value: selectedCategory,
                 items: categories,
                 onChanged: (value) {
+                  if (!mounted || !_current) return;
                   setState(() => selectedCategory = value!);
                 },
               ),
@@ -224,6 +271,7 @@ class _AddItemPageState extends State<AddItemPage> {
                       value: selectedUnit,
                       items: units,
                       onChanged: (value) {
+                        if (!mounted || !_current) return;
                         setState(() => selectedUnit = value!);
                       },
                     ),

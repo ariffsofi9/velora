@@ -1,3 +1,5 @@
+import 'package:velora/services/android_pilot_policy.dart';
+import 'package:velora/screens/auth/workspace_gate.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -125,7 +127,143 @@ Future<void> _save(WidgetTester tester) async {
   await tester.tap(find.text('Save Changes'));
 }
 
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    testWidgets('direct Edit invalid=$invalid rejects injected updater', (
+      tester,
+    ) async {
+      final updater = _Updater([]);
+      var keys = 0;
+      await tester.pumpWidget(
+        AndroidPilotAuthScope(
+          dependencies: AndroidPilotAuthDependencies(
+            policy: _pilotPolicy(invalid),
+          ),
+          child: MaterialApp(
+            home: EditItemPage(
+              item: _item(),
+              workspaceSession: _session,
+              updater: updater,
+              idempotencyKeyFactory: () {
+                keys++;
+                return 'edit-request-01';
+              },
+            ),
+          ),
+        ),
+      );
+      expect(find.byType(PilotAccessBlockedPage), findsOneWidget);
+      expect(updater.requests, isEmpty);
+      expect(keys, 0);
+      await tester.pumpWidget(const SizedBox());
+    });
+    testWidgets(
+      'captured valid Edit callback invalid=$invalid allocates nothing',
+      (tester) async {
+        var policy = _normalPolicy;
+        late StateSetter update;
+        final updater = _Updater([]), item = _item();
+        var keys = 0;
+        await tester.pumpWidget(
+          StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return AndroidPilotAuthScope(
+                dependencies: AndroidPilotAuthDependencies(policy: policy),
+                child: MaterialApp(
+                  home: EditItemPage(
+                    item: item,
+                    workspaceSession: _session,
+                    updater: updater,
+                    idempotencyKeyFactory: () {
+                      keys++;
+                      return 'edit-request-01';
+                    },
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+        final submit = tester
+            .widget<ElevatedButton>(
+              find.widgetWithText(ElevatedButton, 'Save Changes'),
+            )
+            .onPressed!;
+        update(() => policy = _pilotPolicy(invalid));
+        await tester.pump();
+        submit();
+        submit();
+        await tester.pump();
+        expect(updater.requests, isEmpty);
+        expect(keys, 0);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+  testWidgets('pending Edit does not publish after policy replacement', (
+    tester,
+  ) async {
+    final pending = Completer<WorkspaceInventoryUpdateResult>(), item = _item();
+    final updater = _Updater([pending.future]);
+    var policy = _normalPolicy;
+    late StateSetter update;
+    await tester.pumpWidget(
+      StatefulBuilder(
+        builder: (context, setState) {
+          update = setState;
+          return AndroidPilotAuthScope(
+            dependencies: AndroidPilotAuthDependencies(policy: policy),
+            child: MaterialApp(
+              home: EditItemPage(
+                item: item,
+                workspaceSession: _session,
+                updater: updater,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    tester
+        .widget<ElevatedButton>(
+          find.widgetWithText(ElevatedButton, 'Save Changes'),
+        )
+        .onPressed!();
+    await tester.pump();
+    expect(updater.requests, hasLength(1));
+    update(() => policy = _pilotPolicy(false));
+    await tester.pump();
+    pending.complete(
+      const WorkspaceInventoryUpdateResult(
+        itemId: 'item-a',
+        updated: true,
+        version: 2,
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Item updated successfully'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   test('legacy items use version 1 while invalid versions fail closed', () {
     final legacy = InventoryItem.fromMap('legacy', {
       'name': 'Legacy',

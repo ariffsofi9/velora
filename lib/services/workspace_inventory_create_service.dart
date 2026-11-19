@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
@@ -81,13 +82,17 @@ abstract interface class WorkspaceInventoryCreateCallable {
 
 class FirebaseWorkspaceInventoryCreateCallable
     implements WorkspaceInventoryCreateCallable {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseFunctions? _functions;
 
-  FirebaseWorkspaceInventoryCreateCallable({FirebaseFunctions? functions})
-    : _functions = functions;
+  FirebaseWorkspaceInventoryCreateCallable({
+    required this.pilotPolicy,
+    FirebaseFunctions? functions,
+  }) : _functions = functions;
 
   @override
   Future<Map<String, dynamic>> call(Map<String, Object> data) async {
+    _requirePolicy(pilotPolicy);
     final callable =
         (_functions ?? FirebaseFunctions.instanceFor(region: 'asia-southeast1'))
             .httpsCallable('createInventoryItem');
@@ -97,21 +102,27 @@ class FirebaseWorkspaceInventoryCreateCallable
 }
 
 class FirebaseWorkspaceInventoryCreator implements WorkspaceInventoryCreator {
+  final AndroidPilotPolicy pilotPolicy;
   final WorkspaceSession? session;
   final WorkspaceInventoryCreateCallable _callable;
 
   FirebaseWorkspaceInventoryCreator({
+    required this.pilotPolicy,
     this.session,
     FirebaseFunctions? functions,
     WorkspaceInventoryCreateCallable? callable,
   }) : _callable =
            callable ??
-           FirebaseWorkspaceInventoryCreateCallable(functions: functions);
+           FirebaseWorkspaceInventoryCreateCallable(
+             pilotPolicy: pilotPolicy,
+             functions: functions,
+           );
 
   @override
   Future<WorkspaceInventoryCreateResult> createItem(
     WorkspaceInventoryCreateRequest request,
   ) async {
+    _requirePolicy(pilotPolicy);
     try {
       final captured = captureMutationSession(request, session);
       final payload = {...request.toCallableData(), ...captured.mutationData};
@@ -149,4 +160,17 @@ class FirebaseWorkspaceInventoryCreator implements WorkspaceInventoryCreator {
         'deadline-exceeded' => WorkspaceInventoryCreateFailure.unavailable,
         _ => WorkspaceInventoryCreateFailure.internal,
       };
+}
+
+class InventoryCreatePilotPolicyException
+    extends WorkspaceInventoryCreateException {
+  const InventoryCreatePilotPolicyException()
+    : super(WorkspaceInventoryCreateFailure.permissionDenied);
+}
+
+void _requirePolicy(AndroidPilotPolicy policy) {
+  if (policy.state != AndroidPilotState.normal &&
+      !policy.permits(AndroidPilotCapability.inventoryMutations)) {
+    throw const InventoryCreatePilotPolicyException();
+  }
 }

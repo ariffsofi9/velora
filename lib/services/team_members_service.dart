@@ -3,6 +3,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/cafe_workspace.dart';
 import 'workspace_resolver.dart';
+import 'android_pilot_policy.dart';
+
+class TeamPilotPolicyException implements Exception {
+  const TeamPilotPolicyException();
+  @override
+  String toString() =>
+      'Team actions are unavailable under the Android pilot policy.';
+}
 
 class TeamMember {
   final String uid, name, email;
@@ -21,10 +29,12 @@ abstract interface class TeamMembers {
 }
 
 class FirebaseTeamMembers implements TeamMembers {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseAuth auth;
   final WorkspaceResolver resolver;
   final FirebaseFunctions? functions;
   FirebaseTeamMembers({
+    required this.pilotPolicy,
     required this.auth,
     required this.resolver,
     this.functions,
@@ -32,6 +42,10 @@ class FirebaseTeamMembers implements TeamMembers {
 
   @override
   Future<TeamRoster> load(CafeWorkspace workspace) async {
+    if (pilotPolicy.state != AndroidPilotState.normal &&
+        !pilotPolicy.permits(AndroidPilotCapability.teamCallables)) {
+      throw const TeamPilotPolicyException();
+    }
     if (auth.currentUser?.uid != workspace.uid) {
       throw StateError('Session changed.');
     }

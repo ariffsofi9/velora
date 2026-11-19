@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -119,6 +121,7 @@ class Fixture {
     );
   }
   HttpsWorkspaceInventory adapter({
+    AndroidPilotPolicy? policy,
     Uri? endpoint,
     String project = 'velora-spark-test',
     String endpointProject = 'velora-spark-test',
@@ -128,6 +131,7 @@ class Fixture {
     Stream<InventoryHttpsSession?>? stream,
     MutationRecoveryJournal? journal,
   }) => HttpsWorkspaceInventory(
+    pilotPolicy: policy ?? _normalPolicy,
     endpoint: endpoint ?? Uri.parse('https://offline.invalid'),
     projectId: project,
     endpointProjectId: endpointProject,
@@ -253,7 +257,124 @@ Matcher failure({bool unknown = true, String? code}) => predicate<Object>((e) {
   return t.outcomeUnknown == unknown && (code == null || t.code == code);
 }, 'sanitized typed transport failure');
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+class _PolicyPersistence extends FakeMutationPersistence {
+  int reads = 0;
+  @override
+  Future<Object?> read(String key) {
+    reads++;
+    return super.read(key);
+  }
+}
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final operation in [
+      'create',
+      'update',
+      'stock-in',
+      'stock-out',
+      'archive',
+      'restore',
+      'reconcile',
+    ]) {
+      test(
+        'HTTPS policy invalid=$invalid $operation has zero token/journal/HTTP dispatch',
+        () async {
+          final f = Fixture();
+          addTearDown(f.close);
+          var tokens = 0;
+          f.token = (_) async {
+            tokens++;
+            return 'synthetic.token';
+          };
+          final storage = _PolicyPersistence();
+          final journal = MutationRecoveryJournal(
+            storage,
+            sha256: syntheticSha256,
+          );
+          final request = {
+            ...stock().toCallableData(),
+            ...f.current!.workspace.mutationData,
+          };
+          final permit = await journal.prepare(
+            projectId: 'velora-spark-test',
+            uid: 'owner',
+            operation: 'adjust-stock',
+            request: request,
+          );
+          await journal.markDispatched(permit);
+          final pending = (await journal.load(
+            'velora-spark-test',
+            'owner',
+            'adjust-stock',
+            stock().idempotencyKey,
+          ))!;
+          final reads = storage.reads,
+              writes = storage.writes,
+              before = jsonEncode(storage.values);
+          final adapter = f.adapter(
+            policy: _pilotPolicy(invalid),
+            journal: journal,
+          );
+          expect(
+            adapter.pilotPolicy.state,
+            invalid ? AndroidPilotState.invalid : AndroidPilotState.restricted,
+          );
+          if (operation == 'reconcile') {
+            await expectLater(
+              adapter.reconcile(pending),
+              throwsA(
+                isA<InventoryHttpsFailure>()
+                    .having((e) => e.code, 'policy', 'pilot-policy-denied')
+                    .having(
+                      (e) => e.outcomeUnknown,
+                      'original unresolved mutation',
+                      true,
+                    ),
+              ),
+            );
+          } else {
+            final request = switch (operation) {
+              'create' => create(),
+              'update' => update(),
+              'stock-in' => stock(direction: StockDirection.stockIn),
+              'stock-out' => stock(),
+              'restore' => lifecycle(action: InventoryLifecycleAction.restore),
+              _ => lifecycle(),
+            };
+            await expectLater(
+              invoke(adapter, request),
+              throwsA(failure(unknown: false, code: 'pilot-policy-denied')),
+            );
+          }
+          expect(tokens, 0);
+          expect(storage.reads, reads);
+          expect(storage.writes, writes);
+          expect(jsonEncode(storage.values), before);
+          expect(f.client.requests, isEmpty);
+        },
+      );
+    }
+  }
+
   test(
     'reconciliation owns one session listener and cancels a single-subscription source',
     () async {
@@ -860,6 +981,7 @@ void main() {
       },
     );
     final a = HttpsWorkspaceInventory(
+      pilotPolicy: _normalPolicy,
       endpoint: Uri.parse('https://offline.invalid'),
       projectId: 'velora-spark-test',
       endpointProjectId: 'velora-spark-test',

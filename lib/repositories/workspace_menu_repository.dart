@@ -5,6 +5,20 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../models/menu_item.dart';
 import '../models/cafe_workspace.dart';
 import '../services/workspace_resolver.dart';
+import '../services/android_pilot_policy.dart';
+
+class MenuPilotPolicyException extends MenuException {
+  const MenuPilotPolicyException() : super(MenuFailure.permission);
+  @override
+  String get message => 'Menu is unavailable under the Android pilot policy.';
+}
+
+void _requireMenuPolicy(AndroidPilotPolicy policy) {
+  if (policy.state != AndroidPilotState.normal &&
+      !policy.permits(AndroidPilotCapability.menuCallables)) {
+    throw const MenuPilotPolicyException();
+  }
+}
 
 enum MenuFailure {
   session,
@@ -68,26 +82,35 @@ abstract interface class MenuCallable {
 }
 
 class FirebaseMenuCallable implements MenuCallable {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseFunctions? functions;
-  FirebaseMenuCallable({this.functions});
+  FirebaseMenuCallable({required this.pilotPolicy, this.functions});
   @override
   Future<Map<String, dynamic>> call(
     String name,
     Map<String, Object> data,
-  ) async =>
-      (await (functions ??
-                  FirebaseFunctions.instanceFor(region: 'asia-southeast1'))
-              .httpsCallable(name)
-              .call<Map<String, dynamic>>(data))
-          .data;
+  ) async {
+    _requireMenuPolicy(pilotPolicy);
+    return (await (functions ??
+                FirebaseFunctions.instanceFor(region: 'asia-southeast1'))
+            .httpsCallable(name)
+            .call<Map<String, dynamic>>(data))
+        .data;
+  }
 }
 
 class FirebaseMenuRepository implements MenuRepository {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseAuth? auth;
   final WorkspaceResolver? resolver;
   final MenuCallable? callable;
   CafeWorkspace? _expected;
-  FirebaseMenuRepository({this.auth, this.resolver, this.callable});
+  FirebaseMenuRepository({
+    required this.pilotPolicy,
+    this.auth,
+    this.resolver,
+    this.callable,
+  });
   FirebaseAuth get _auth => auth ?? FirebaseAuth.instance;
   @override
   Stream<void> get sessionChanges async* {
@@ -102,6 +125,7 @@ class FirebaseMenuRepository implements MenuRepository {
 
   @override
   Future<CafeWorkspace> resolve() async {
+    _requireMenuPolicy(pilotPolicy);
     try {
       final current = await (resolver ?? WorkspaceResolver(auth: _auth))
           .resolve();
@@ -133,6 +157,7 @@ class FirebaseMenuRepository implements MenuRepository {
     bool ownerOnly = false,
     MenuItem? target,
   }) async {
+    _requireMenuPolicy(pilotPolicy);
     var invalidated = false;
     var uid = _auth.currentUser?.uid;
     final subscription = _auth.authStateChanges().listen(
@@ -153,13 +178,16 @@ class FirebaseMenuRepository implements MenuRepository {
       if (ownerOnly && workspace.role != CafeRole.owner) {
         throw const MenuException(MenuFailure.permission);
       }
-      final dataResult = await (callable ?? FirebaseMenuCallable()).call(name, {
-        ...data,
-        if (!['getMenuItem', 'listMenuItems'].contains(name)) ...{
-          'expectedCafeId': workspace.cafeId,
-          'expectedMembershipGeneration': workspace.membershipGeneration,
-        },
-      });
+      final dataResult =
+          await (callable ?? FirebaseMenuCallable(pilotPolicy: pilotPolicy))
+              .call(name, {
+                ...data,
+                if (!['getMenuItem', 'listMenuItems'].contains(name)) ...{
+                  'expectedCafeId': workspace.cafeId,
+                  'expectedMembershipGeneration':
+                      workspace.membershipGeneration,
+                },
+              });
       await resolve();
       if (invalidated) throw const MenuException(MenuFailure.session);
       return dataResult;
@@ -198,6 +226,7 @@ class FirebaseMenuRepository implements MenuRepository {
     bool includeArchived = false,
     String? cursor,
   }) async {
+    _requireMenuPolicy(pilotPolicy);
     if (cursor != null && !MenuItem.validId(cursor)) {
       throw const MenuException(MenuFailure.invalid);
     }
@@ -225,6 +254,7 @@ class FirebaseMenuRepository implements MenuRepository {
 
   @override
   Future<MenuItem> get(String id) async {
+    _requireMenuPolicy(pilotPolicy);
     if (!MenuItem.validId(id)) throw const MenuException(MenuFailure.invalid);
     final item = _item((await _request('getMenuItem', {'itemId': id}))['item']);
     if (item.id != id) throw const MenuException(MenuFailure.invalidData);
@@ -272,6 +302,7 @@ class FirebaseMenuRepository implements MenuRepository {
     required MenuDraft draft,
     required String key,
   }) async {
+    _requireMenuPolicy(pilotPolicy);
     Map<String, Object> edits;
     try {
       edits = draft.toData();
@@ -295,6 +326,7 @@ class FirebaseMenuRepository implements MenuRepository {
 
   @override
   Future<void> availability(MenuItem item, bool available, String key) async {
+    _requireMenuPolicy(pilotPolicy);
     await _write('updateMenuItem', {
       ..._target(item, key),
       'isAvailable': available,
@@ -303,6 +335,7 @@ class FirebaseMenuRepository implements MenuRepository {
 
   @override
   Future<void> lifecycle(MenuItem item, bool archive, String key) async {
+    _requireMenuPolicy(pilotPolicy);
     await _write(
       'setMenuItemLifecycle',
       {..._target(item, key), 'action': archive ? 'archive' : 'restore'},

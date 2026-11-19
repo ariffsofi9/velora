@@ -1,3 +1,5 @@
+import 'package:velora/services/android_pilot_policy.dart';
+import 'package:velora/screens/auth/workspace_gate.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -76,7 +78,138 @@ Widget app(Widget home, {double scale = 1}) => MaterialApp(
   ),
   home: home,
 );
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS':
+              '[["synthetic-owner","synthetic-cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+Widget _scope(AndroidPilotPolicy policy, Widget child) => AndroidPilotAuthScope(
+  dependencies: AndroidPilotAuthDependencies(policy: policy),
+  child: app(child),
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final edit in [false, true]) {
+      testWidgets(
+        'direct Menu edit=$edit invalid=$invalid blocks injected repository',
+        (tester) async {
+          final repo = MenuDouble();
+          await tester.pumpWidget(
+            _scope(
+              _pilotPolicy(invalid),
+              edit
+                  ? MenuEditPage(repository: repo)
+                  : MenuPage(repository: repo),
+            ),
+          );
+          await tester.pump();
+          expect(find.byType(PilotAccessBlockedPage), findsOneWidget);
+          expect(repo.lists, 0);
+          expect(repo.keys, isEmpty);
+          expect(repo.toggles, 0);
+          expect(repo.lifecycles, 0);
+          await tester.pumpWidget(const SizedBox());
+          await repo.changes.close();
+        },
+      );
+    }
+    testWidgets(
+      'captured Menu callbacks reject later invalid=$invalid policy',
+      (tester) async {
+        var policy = _normalPolicy;
+        late StateSetter update;
+        final repo = MenuDouble();
+        await tester.pumpWidget(
+          StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return _scope(policy, MenuPage(repository: repo));
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+        final toggle = tester
+            .widget<SwitchListTile>(find.byType(SwitchListTile))
+            .onChanged!;
+        final add = tester
+            .widget<FilledButton>(find.byKey(const ValueKey('menu-add')))
+            .onPressed!;
+        update(() => policy = _pilotPolicy(invalid));
+        await tester.pump();
+        toggle(false);
+        add();
+        await tester.pump();
+        expect(repo.toggles, 0);
+        expect(repo.keys, isEmpty);
+        expect(find.byType(MenuEditPage), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+        await repo.changes.close();
+      },
+    );
+    testWidgets(
+      'captured Menu Edit save rejects later invalid=$invalid policy',
+      (tester) async {
+        var policy = _normalPolicy;
+        late StateSetter update;
+        final repo = MenuDouble();
+        await tester.pumpWidget(
+          StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return _scope(policy, MenuEditPage(repository: repo));
+            },
+          ),
+        );
+        final save = tester
+            .widget<FilledButton>(find.byType(FilledButton))
+            .onPressed!;
+        update(() => policy = _pilotPolicy(invalid));
+        await tester.pump();
+        save();
+        await tester.pump();
+        expect(repo.keys, isEmpty);
+        await tester.pumpWidget(const SizedBox());
+        await repo.changes.close();
+      },
+    );
+  }
+  testWidgets('policy replacement rejects pending Menu list', (tester) async {
+    var policy = _normalPolicy;
+    late StateSetter update;
+    final repo = MenuDouble()..pending = Completer<MenuItemsPage>();
+    await tester.pumpWidget(
+      StatefulBuilder(
+        builder: (context, setState) {
+          update = setState;
+          return _scope(policy, MenuPage(repository: repo));
+        },
+      ),
+    );
+    await tester.pump();
+    expect(repo.lists, 1);
+    update(() => policy = _pilotPolicy(false));
+    await tester.pump();
+    repo.pending!.complete(MenuItemsPage(repo.items, null));
+    await tester.pump();
+    expect(find.text('Latte'), findsNothing);
+    expect(find.byType(PilotAccessBlockedPage), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await repo.changes.close();
+  });
   testWidgets('Owner sees RM price, availability and management actions', (
     tester,
   ) async {

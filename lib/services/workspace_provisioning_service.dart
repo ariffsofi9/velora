@@ -8,6 +8,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'firebase_startup_config.dart';
 import 'owner_email_verification.dart';
+import 'android_pilot_policy.dart';
 
 class WorkspaceCreationRequest {
   final String businessName;
@@ -171,6 +172,7 @@ class _BootstrapTransaction implements WorkspaceBootstrapTransaction {
 }
 
 class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
+  final AndroidPilotPolicy? _pilotPolicy;
   final WorkspaceBootstrapStore _store;
   final FirebaseOptions Function() _resolveProfile;
   final FirebaseOptions Function() _activeOptions;
@@ -182,7 +184,11 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
     FirebaseOptions Function()? activeOptions,
     String? Function()? currentUid,
     OwnerEmailVerification? verification,
-  }) : _verification = verification ?? FirebaseOwnerEmailVerification(),
+    AndroidPilotPolicy? pilotPolicy,
+  }) : _pilotPolicy = pilotPolicy,
+       _verification =
+           verification ??
+           FirebaseOwnerEmailVerification(pilotPolicy: pilotPolicy),
        _store = store ?? FirestoreWorkspaceBootstrapStore(),
        _resolveProfile =
            resolveProfile ??
@@ -198,6 +204,16 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
   Future<WorkspaceCreationResult> createWorkspace(
     WorkspaceCreationRequest request,
   ) async {
+    final policy = _pilotPolicy;
+    if (policy != null &&
+        policy.state != AndroidPilotState.normal &&
+        (!policy.isValid ||
+            !policy.permits(AndroidPilotCapability.businessSetup))) {
+      throw const WorkspaceProvisioningException(
+        WorkspaceProvisioningFailure.permissionDenied,
+        outcomeUncertain: false,
+      );
+    }
     var transactionStarted = false;
     // Revalidate explicit selection and the initialized app before transport.
     try {

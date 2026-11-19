@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 
 import 'login_page.dart';
+import 'workspace_gate.dart';
 
 /// Signed-out entry. A local cafe photograph can replace the cream fallback
 /// in a later asset-only phase; no remote or missing image is requested here.
 class WelcomePage extends StatelessWidget {
-  const WelcomePage({super.key});
+  final AndroidPilotAuthDependencies? pilot;
+  const WelcomePage({super.key, this.pilot});
 
   static const _cream = AppColors.background;
   static const _coffee = AppColors.primary;
@@ -14,6 +16,10 @@ class WelcomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dependencies = pilot ?? AndroidPilotAuthScope.read(context);
+    if (dependencies?.policy.isValid == false) {
+      return const PilotAccessBlockedPage();
+    }
     final text = Theme.of(context).textTheme;
     return Scaffold(
       backgroundColor: _cream,
@@ -94,7 +100,7 @@ class WelcomePage extends StatelessWidget {
                             onPressed: () => Navigator.pushReplacement(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => const LoginPage(),
+                                builder: (_) => LoginPage(pilot: dependencies),
                               ),
                             ),
                             style: FilledButton.styleFrom(

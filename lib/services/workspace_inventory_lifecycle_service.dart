@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'workspace_session.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 
@@ -63,10 +64,12 @@ abstract interface class WorkspaceInventoryLifecycleManager {
 
 class FirebaseWorkspaceInventoryLifecycleManager
     implements WorkspaceInventoryLifecycleManager {
+  final AndroidPilotPolicy pilotPolicy;
   final FirebaseFunctions? _functions;
   final Future<Map<String, dynamic>> Function(Map<String, Object>)? invoke;
   final WorkspaceSession? session;
   FirebaseWorkspaceInventoryLifecycleManager({
+    required this.pilotPolicy,
     FirebaseFunctions? functions,
     this.session,
     this.invoke,
@@ -76,6 +79,7 @@ class FirebaseWorkspaceInventoryLifecycleManager
   Future<WorkspaceInventoryLifecycleResult> setLifecycle(
     WorkspaceInventoryLifecycleRequest request,
   ) async {
+    _requirePolicy(pilotPolicy);
     try {
       final captured = captureMutationSession(request, session);
       final payload = {...request.toCallableData(), ...captured.mutationData};
@@ -127,4 +131,17 @@ class FirebaseWorkspaceInventoryLifecycleManager
         'deadline-exceeded' => WorkspaceInventoryLifecycleFailure.unavailable,
         _ => WorkspaceInventoryLifecycleFailure.internal,
       };
+}
+
+class InventoryLifecyclePilotPolicyException
+    extends WorkspaceInventoryLifecycleException {
+  const InventoryLifecyclePilotPolicyException()
+    : super(WorkspaceInventoryLifecycleFailure.permissionDenied);
+}
+
+void _requirePolicy(AndroidPilotPolicy policy) {
+  if (policy.state != AndroidPilotState.normal &&
+      !policy.permits(AndroidPilotCapability.inventoryMutations)) {
+    throw const InventoryLifecyclePilotPolicyException();
+  }
 }

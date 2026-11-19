@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -44,6 +46,24 @@ class _Callable extends Fake implements HttpsCallable {
   }
 }
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
   final fixture =
       jsonDecode(
@@ -54,6 +74,63 @@ void main() {
           as Map<String, dynamic>;
   Map<String, Object> request(String operation) =>
       Map<String, Object>.from(fixture['${operation}Request'] as Map);
+  for (final invalid in [false, true]) {
+    for (final enabled in [false, true]) {
+      for (final operation in ['issue', 'generate']) {
+        test(
+          'Firebase AI invalid=$invalid enabled=$enabled $operation rejects before callable lookup',
+          () async {
+            final functions = _Functions(fixture),
+                policy = _pilotPolicy(invalid);
+            final transport = FirebaseSecureAiTransport.fromFunctions(
+              functions,
+              pilotPolicy: policy,
+              enabled: enabled,
+            );
+            expect(transport.pilotPolicy, same(policy));
+            expect(transport.available, false);
+            final captured = transport.call;
+            await expectLater(
+              captured(request(operation)),
+              throwsA(isA<SecureAiPilotPolicyException>()),
+            );
+            await expectLater(
+              captured(request(operation)),
+              throwsA(isA<SecureAiPilotPolicyException>()),
+            );
+            // The SDK-factory invoker is public too; it must not expose an
+            // unrestricted dispatch alias when call() is policy-blocked.
+            final invoker = transport.invoke;
+            await expectLater(
+              invoker(issueWorkspaceAiTicket, request(operation)),
+              throwsA(isA<SecureAiPilotPolicyException>()),
+            );
+            expect(functions.references, 0);
+            expect(functions.invocations, 0);
+          },
+        );
+      }
+    }
+    test(
+      'Firebase AI invalid=$invalid denies explicitly injected unrestricted invoker',
+      () async {
+        var calls = 0;
+        final transport = FirebaseSecureAiTransport(
+          pilotPolicy: _pilotPolicy(invalid),
+          enabled: true,
+          invoke: (name, data) async {
+            calls++;
+            throw StateError('Unexpected callable dispatch');
+          },
+        );
+        await expectLater(
+          transport.call(request('issue')),
+          throwsA(isA<SecureAiPilotPolicyException>()),
+        );
+        expect(calls, 0);
+      },
+    );
+  }
   test('shared names and response-data limit match backend', () {
     expect(issueWorkspaceAiTicket, fixture['names']['issue']);
     expect(generateWorkspaceAiRecipes, fixture['names']['generate']);
@@ -64,6 +141,7 @@ void main() {
     () async {
       final calls = <String>[];
       final transport = FirebaseSecureAiTransport(
+        pilotPolicy: _normalPolicy,
         enabled: true,
         invoke: (name, data) async {
           calls.add(name);
@@ -82,7 +160,10 @@ void main() {
     'fromFunctions uses injected fake SDK and never obtains a global instance',
     () async {
       final functions = _Functions(fixture);
-      final disabled = FirebaseSecureAiTransport.fromFunctions(functions);
+      final disabled = FirebaseSecureAiTransport.fromFunctions(
+        functions,
+        pilotPolicy: _normalPolicy,
+      );
       expect(functions.references, 0);
       expect(disabled.available, false);
       await expectLater(
@@ -92,10 +173,12 @@ void main() {
       expect(functions.invocations, 0);
       final transport = FirebaseSecureAiTransport.fromFunctions(
         functions,
+        pilotPolicy: _normalPolicy,
         enabled: true,
       );
       final current = support.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: transport,
       );
@@ -111,6 +194,7 @@ void main() {
     () async {
       var calls = 0;
       final transport = FirebaseSecureAiTransport(
+        pilotPolicy: _normalPolicy,
         invoke: (_, _) async {
           calls++;
           return _Result<dynamic>(null);
@@ -121,7 +205,13 @@ void main() {
         throwsA(isA<SecureAiException>()),
       );
       expect(calls, 0);
-      expect(SecureAiService(currentSession: () => null).available, false);
+      expect(
+        SecureAiService(
+          pilotPolicy: _normalPolicy,
+          currentSession: () => null,
+        ).available,
+        false,
+      );
     },
   );
   for (final raw in [
@@ -133,11 +223,13 @@ void main() {
   ]) {
     test('invalid/missing SDK data envelope fails closed $raw', () async {
       final transport = FirebaseSecureAiTransport(
+        pilotPolicy: _normalPolicy,
         enabled: true,
         invoke: (_, _) async => _Result<dynamic>(raw),
       );
       final current = support.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => current,
         transport: transport,
       );
@@ -154,6 +246,7 @@ void main() {
         var calls = 0;
         final current = support.session();
         final transport = FirebaseSecureAiTransport(
+          pilotPolicy: _normalPolicy,
           enabled: true,
           invoke: (_, _) async {
             calls++;
@@ -163,6 +256,7 @@ void main() {
           },
         );
         final service = SecureAiService(
+          pilotPolicy: _normalPolicy,
           currentSession: () => current,
           transport: transport,
         );
@@ -185,6 +279,7 @@ void main() {
     'unreviewed details cannot override SDK code or expose provider text',
     () async {
       final transport = FirebaseSecureAiTransport(
+        pilotPolicy: _normalPolicy,
         enabled: true,
         invoke: (_, _) async => throw _SdkError('unavailable', {
           'reason': 'account-disabled',
@@ -206,6 +301,7 @@ void main() {
   );
   test('unknown SDK code is sanitized', () async {
     final transport = FirebaseSecureAiTransport(
+      pilotPolicy: _normalPolicy,
       enabled: true,
       invoke: (_, _) async => throw _SdkError('private-code', 'private'),
     );
@@ -224,6 +320,7 @@ void main() {
   test('unsupported request fields and JSON types never invoke SDK', () async {
     var calls = 0;
     final transport = FirebaseSecureAiTransport(
+      pilotPolicy: _normalPolicy,
       enabled: true,
       invoke: (_, _) async {
         calls++;
@@ -282,6 +379,7 @@ void main() {
     final current = support.session();
     final pending = Completer<HttpsCallableResult<dynamic>>();
     final transport = FirebaseSecureAiTransport(
+      pilotPolicy: _normalPolicy,
       enabled: true,
       invoke: (_, data) async {
         calls++;
@@ -292,6 +390,7 @@ void main() {
       },
     );
     final service = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => current,
       transport: transport,
       timeout: const Duration(milliseconds: 5),
@@ -307,6 +406,7 @@ void main() {
   test('invoker TimeoutException is typed without retry', () async {
     var calls = 0;
     final transport = FirebaseSecureAiTransport(
+      pilotPolicy: _normalPolicy,
       enabled: true,
       invoke: (_, _) async {
         calls++;

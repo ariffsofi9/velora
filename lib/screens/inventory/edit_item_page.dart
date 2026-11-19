@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
+import '../../services/android_pilot_policy.dart';
+import '../auth/workspace_gate.dart';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -29,6 +33,40 @@ class EditItemPage extends StatefulWidget {
 }
 
 class _EditItemPageState extends State<EditItemPage> {
+  late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    androidFlavor: appFlavor,
+  );
+  AndroidPilotPolicy get _policy =>
+      AndroidPilotAuthScope.read(context)?.policy ?? _buildPolicy;
+  AndroidPilotPolicy? _boundPolicy;
+  bool _policyBlocked = false;
+  bool get _allowed =>
+      !_policyBlocked &&
+      widget.workspaceSession?.isActive != false &&
+      (_policy.state == AndroidPilotState.normal ||
+          _policy.permits(AndroidPilotCapability.inventoryMutations));
+  bool get _current => mounted && _allowed;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPolicy, _policy)) _policyBlocked = true;
+  }
+
+  @override
+  void didUpdateWidget(covariant EditItemPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.updater, widget.updater) ||
+        !identical(oldWidget.repository, widget.repository) ||
+        !identical(oldWidget.item, widget.item)) {
+      _policyBlocked = true;
+    }
+  }
+
   static const _units = ['kg', 'g', 'L', 'ml', 'pcs'];
 
   late final TextEditingController _nameController;
@@ -51,13 +89,19 @@ class _EditItemPageState extends State<EditItemPage> {
   @override
   void initState() {
     super.initState();
+    _boundPolicy = _policy;
     _item = widget.item;
     _nameController = TextEditingController();
     _categoryController = TextEditingController();
     _imageUrlController = TextEditingController();
-    _updater =
-        widget.updater ??
-        FirebaseWorkspaceInventoryUpdater(session: widget.workspaceSession);
+    if (_allowed) {
+      _updater =
+          widget.updater ??
+          FirebaseWorkspaceInventoryUpdater(
+            pilotPolicy: _policy,
+            session: widget.workspaceSession,
+          );
+    }
     _repository = widget.repository;
     _loadForm(_item);
   }
@@ -82,16 +126,20 @@ class _EditItemPageState extends State<EditItemPage> {
   }
 
   Future<void> _pickExpiryDate() async {
+    if (!mounted || !_current) return;
     final pickedDate = await showDatePicker(
       context: context,
       initialDate: _expiryDate,
       firstDate: DateTime(2020),
       lastDate: DateTime(2035),
     );
-    if (pickedDate != null) setState(() => _expiryDate = pickedDate);
+    if (pickedDate != null && _current) {
+      setState(() => _expiryDate = pickedDate);
+    }
   }
 
   Future<void> _saveItem() async {
+    if (!mounted || !_current) return;
     if (!_hasVerifiedContext) {
       _showMessage('Editing requires a verified workspace and inventory item.');
       return;
@@ -147,19 +195,19 @@ class _EditItemPageState extends State<EditItemPage> {
     setState(() => _isSaving = true);
     try {
       await _updater.updateItem(request);
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() => _isSaving = false);
       _showMessage('Item updated successfully');
       Navigator.pop(context, true);
     } on WorkspaceInventoryUpdateException catch (error) {
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() {
         _isSaving = false;
         _hasConflict = error.failure == WorkspaceInventoryUpdateFailure.stale;
       });
       _showMessage(_failureMessage(error.failure));
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       setState(() => _isSaving = false);
       _showMessage(
         'Unable to update the item. Check your connection and retry.',
@@ -168,6 +216,7 @@ class _EditItemPageState extends State<EditItemPage> {
   }
 
   Future<void> _reloadItem() async {
+    if (!mounted || !_current) return;
     final repository =
         _repository ??
         (widget.workspaceSession == null
@@ -184,7 +233,7 @@ class _EditItemPageState extends State<EditItemPage> {
           break;
         }
       }
-      if (!mounted) return;
+      if (!mounted || !_current) return;
       if (refreshed == null) {
         _showMessage('This inventory item no longer exists.');
         return;
@@ -194,13 +243,14 @@ class _EditItemPageState extends State<EditItemPage> {
         _hasConflict = false;
       });
     } catch (_) {
-      if (mounted) _showMessage('Unable to reload this inventory item.');
+      if (_current) _showMessage('Unable to reload this inventory item.');
     } finally {
-      if (mounted) setState(() => _isRefreshing = false);
+      if (_current) setState(() => _isRefreshing = false);
     }
   }
 
   void _showMessage(String message) {
+    if (!mounted || !_current) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
@@ -238,6 +288,7 @@ class _EditItemPageState extends State<EditItemPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_allowed) return const PilotAccessBlockedPage();
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -337,7 +388,10 @@ class _EditItemPageState extends State<EditItemPage> {
           items: _units
               .map((unit) => DropdownMenuItem(value: unit, child: Text(unit)))
               .toList(),
-          onChanged: (value) => setState(() => _unit = value ?? _unit),
+          onChanged: (value) {
+            if (!mounted || !_current) return;
+            setState(() => _unit = value ?? _unit);
+          },
         ),
         const SizedBox(height: 14),
         _datePicker(),

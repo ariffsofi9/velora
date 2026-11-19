@@ -13,6 +13,7 @@ import 'package:velora/screens/home/widgets_home/bottom_bar.dart';
 import 'package:velora/screens/home/widgets_home/recent_activity_card.dart';
 import 'package:velora/screens/suggestions/suggestions_page.dart';
 import 'dashboard_test_fakes.dart';
+import 'home_saved_recipes_injection_test.dart' show E8SavedFixture, e8Session;
 
 class _RouteObserver extends NavigatorObserver {
   Route<dynamic>? latest;
@@ -50,6 +51,88 @@ Widget app(Widget child, {double scale = 1, NavigatorObserver? observer}) =>
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+  for (final replacement in ['repository', 'workspace']) {
+    testWidgets(
+      'Discover subtree closes on $replacement replacement without popping unrelated routes',
+      (tester) async {
+        var session = e8Session();
+        final first = E8SavedFixture(session);
+        final next = E8SavedFixture(session);
+        var saved = first.repository;
+        final source = _DiscoverInventorySource();
+        var inventory = WorkspaceInventoryRepository(
+          session: session,
+          dataSource: source,
+        );
+        final db = dashboardFirestore();
+        final observer = _RouteObserver();
+        late StateSetter update;
+        await tester.pumpWidget(
+          app(
+            StatefulBuilder(
+              builder: (_, setState) {
+                update = setState;
+                return DashboardPage(
+                  workspaceSession: session,
+                  inventoryRepository: inventory,
+                  savedRecipesRepository: saved,
+                  firestore: db,
+                );
+              },
+            ),
+            observer: observer,
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(find.text('AI Suggestions'), 150);
+        await tester.tap(find.text('AI Suggestions'));
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<SuggestionsPage>(find.byType(SuggestionsPage))
+              .savedRecipesRepository,
+          same(first.repository),
+        );
+        await tester.tap(find.byKey(const ValueKey('discover-saved-recipes')));
+        await tester.pumpAndSettle();
+        expect(find.text('No active saved recipes.'), findsOneWidget);
+        final outer = observer.latest!.navigator!;
+        outer.push<void>(
+          MaterialPageRoute(
+            builder: (_) => const Scaffold(body: Text('Unrelated route')),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final watches = source.paths.length;
+        update(() {
+          if (replacement == 'repository') {
+            saved = next.repository;
+          } else {
+            session = e8Session();
+            inventory = WorkspaceInventoryRepository(
+              session: session,
+              dataSource: _DiscoverInventorySource(),
+            );
+          }
+        });
+        await tester.pumpAndSettle();
+        expect(find.text('Unrelated route'), findsOneWidget);
+        outer.pop();
+        await tester.pumpAndSettle();
+        expect(find.byType(SuggestionsPage), findsNothing);
+        expect(find.text('Cafe-shared library'), findsNothing);
+        if (replacement == 'repository') {
+          expect(source.paths.length, watches);
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump();
+        await first.repository.list(mode: 'active', limit: 20);
+        expect(first.reconciles + next.reconciles, 0);
+        await first.close();
+        await next.close();
+      },
+    );
+  }
   for (final entry in <String?, String>{
     'ariff sofi': 'ariff sofi',
     'Nur Aisyah Ahmad': 'Nur Aisyah Ahmad',
@@ -222,6 +305,7 @@ void main() {
       expect(destination.workspaceSession, same(dashboardSession));
       expect(destination.repository, same(repository));
       expect(destination.aiService, isNull);
+      expect(destination.savedRecipesRepository, isNull);
       expect(repository.collectionPath, 'cafes/dashboard-cafe/inventory');
       expect(source.paths, [
         'cafes/dashboard-cafe/inventory',

@@ -4,6 +4,7 @@ import '../../widgets/dashboard/dashboard_style.dart';
 import '../../services/workspace_session.dart';
 import '../../repositories/workspace_activity_repository.dart';
 import '../../repositories/workspace_inventory_repository.dart';
+import '../../repositories/workspace_saved_recipe_repository.dart';
 
 import '../dashboard/dashboard_page.dart';
 import '../inventory/inventory_page.dart';
@@ -14,8 +15,13 @@ import '../activity/activity_page.dart';
 
 class HomePage extends StatefulWidget {
   final WorkspaceSession workspaceSession;
+  final WorkspaceSavedRecipeRepository? savedRecipesRepository;
 
-  const HomePage({super.key, required this.workspaceSession});
+  const HomePage({
+    super.key,
+    required this.workspaceSession,
+    this.savedRecipesRepository,
+  });
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -26,10 +32,12 @@ class _HomePageState extends State<HomePage> {
 
   late List<Widget> _pages;
   late WorkspaceInventoryRepository _inventoryRepository;
+  late WorkspaceActivityRepository _activityRepository;
 
   @override
   void initState() {
     super.initState();
+    _configureRepositories();
     _configurePages();
   }
 
@@ -37,21 +45,32 @@ class _HomePageState extends State<HomePage> {
   void didUpdateWidget(covariant HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.workspaceSession, widget.workspaceSession)) {
+      _configureRepositories();
+      _configurePages();
+    } else if (!identical(
+      oldWidget.savedRecipesRepository,
+      widget.savedRecipesRepository,
+    )) {
       _configurePages();
     }
   }
 
-  void _configurePages() {
+  void _configureRepositories() {
     _inventoryRepository = WorkspaceInventoryRepository(
       session: widget.workspaceSession,
     );
+    _activityRepository = WorkspaceActivityRepository(
+      session: widget.workspaceSession,
+    );
+  }
+
+  void _configurePages() {
     _pages = [
       DashboardPage(
         workspaceSession: widget.workspaceSession,
         inventoryRepository: _inventoryRepository,
-        activityRepository: WorkspaceActivityRepository(
-          session: widget.workspaceSession,
-        ),
+        activityRepository: _activityRepository,
+        savedRecipesRepository: widget.savedRecipesRepository,
         onAddTap: _openAddItem,
         onInventoryTap: () => setState(() => _selectedIndex = 1),
         onAlertTap: _openAlerts,
@@ -65,6 +84,7 @@ class _HomePageState extends State<HomePage> {
       SuggestionsPage(
         workspaceSession: widget.workspaceSession,
         repository: _inventoryRepository,
+        savedRecipesRepository: widget.savedRecipesRepository,
       ),
       SettingsPage(workspaceSession: widget.workspaceSession),
     ];

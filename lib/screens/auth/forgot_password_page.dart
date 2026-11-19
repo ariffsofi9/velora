@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
 import '../../services/auth_service.dart';
+import '../../services/android_pilot_policy.dart';
 import 'login_page.dart';
+import 'workspace_gate.dart';
 
 const _ivory = AppColors.background;
 const _sage = AppColors.primary;
@@ -28,6 +30,14 @@ class ForgotPasswordPage extends StatefulWidget {
 }
 
 class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
+  static const _unavailable =
+      'Password reset is unavailable in the restricted Android pilot.';
+  AndroidPilotAuthDependencies? get _pilot =>
+      AndroidPilotAuthScope.read(context);
+  bool get _allowed =>
+      _pilot?.allows(AndroidPilotCapability.passwordResetEmail) ?? true;
+  AndroidPilotAuthDependencies? _boundPilot;
+  int _revision = 0;
   final _form = GlobalKey<FormState>();
   late final TextEditingController _email;
   bool _loading = false;
@@ -40,6 +50,32 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   void initState() {
     super.initState();
     _email = TextEditingController(text: widget.initialEmail.trim());
+  }
+
+  void _invalidateRequest() {
+    _revision++;
+    _loading = false;
+    _feedback = null;
+    _cooldown = 0;
+    _timer?.cancel();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPilot, _pilot)) {
+      _boundPilot = _pilot;
+      _invalidateRequest();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant ForgotPasswordPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.authService, widget.authService)) {
+      _invalidateRequest();
+    }
   }
 
   @override
@@ -58,17 +94,45 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   }
 
   Future<void> _send() async {
+    if (!mounted) return;
+    // Check the inherited policy before selecting even an injected service.
+    if (!_allowed) {
+      _showFeedback(_unavailable);
+      return;
+    }
     if (_loading || _cooldown > 0 || !_form.currentState!.validate()) return;
+    final revision = ++_revision;
+    final pilot = _pilot;
+    final injected = widget.authService;
+    final auth = pilot?.auth;
+    final uid = auth?.currentUser?.uid;
+    var sawIdentity = false;
+    var sessionChanged = false;
+    final subscription = auth?.authStateChanges().listen(
+      (user) {
+        if (sawIdentity || user?.uid != uid) sessionChanged = true;
+        sawIdentity = true;
+      },
+      onError: (Object _) => sessionChanged = true,
+      onDone: () => sessionChanged = true,
+    );
+    bool current() =>
+        mounted &&
+        revision == _revision &&
+        identical(pilot, _pilot) &&
+        identical(injected, widget.authService) &&
+        _allowed &&
+        !sessionChanged &&
+        auth?.currentUser?.uid == uid;
     final address = _email.text.trim();
     setState(() {
       _loading = true;
       _feedback = null;
     });
     try {
-      await (widget.authService ?? AuthService()).sendPasswordResetEmail(
-        email: address,
-      );
-      if (!mounted) return;
+      await (pilot?.authService ?? injected ?? AuthService())
+          .sendPasswordResetEmail(email: address);
+      if (!current()) return;
       setState(() => _cooldown = 60);
       _timer?.cancel();
       _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -81,6 +145,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       });
       _showFeedback(ForgotPasswordPage.confirmationMessage);
     } on FirebaseAuthException catch (error) {
+      if (!current()) return;
       _showFeedback(switch (error.code) {
         'invalid-email' => 'Please enter a valid email address.',
         'network-request-failed' =>
@@ -91,12 +156,16 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
           'Unable to request a reset link right now. Please try again later.',
       }, error: true);
     } catch (_) {
+      if (!current()) return;
       _showFeedback(
         'Unable to request a reset link right now. Please try again later.',
         error: true,
       );
     } finally {
-      if (mounted) setState(() => _loading = false);
+      unawaited(subscription?.cancel());
+      if (mounted && revision == _revision) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -174,7 +243,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                         const SizedBox(height: 32),
                         TextFormField(
                           controller: _email,
-                          enabled: !_loading,
+                          enabled: !_loading && _allowed,
                           keyboardType: TextInputType.emailAddress,
                           textInputAction: TextInputAction.done,
                           autofillHints: const [AutofillHints.email],
@@ -225,7 +294,9 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                               borderRadius: BorderRadius.circular(16),
                             ),
                           ),
-                          onPressed: _loading || _cooldown > 0 ? null : _send,
+                          onPressed: !_allowed || _loading || _cooldown > 0
+                              ? null
+                              : _send,
                           child: Wrap(
                             alignment: WrapAlignment.center,
                             crossAxisAlignment: WrapCrossAlignment.center,
@@ -251,12 +322,12 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
                             ],
                           ),
                         ),
-                        if (_feedback != null) ...[
+                        if (!_allowed || _feedback != null) ...[
                           const SizedBox(height: 16),
                           Semantics(
                             liveRegion: true,
                             child: Text(
-                              _feedback!,
+                              !_allowed ? _unavailable : _feedback!,
                               textAlign: TextAlign.center,
                               style: text.bodyMedium?.copyWith(
                                 color: _feedbackError

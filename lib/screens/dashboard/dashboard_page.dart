@@ -7,6 +7,7 @@ import '../../repositories/workspace_activity_repository.dart';
 import '../../logic/low_stock_policy.dart';
 import '../../logic/inventory_expiry_policy.dart';
 import '../../repositories/workspace_inventory_repository.dart';
+import '../../repositories/workspace_saved_recipe_repository.dart';
 import '../../services/workspace_session.dart';
 import '../../widgets/dashboard/dashboard_content.dart';
 import '../../widgets/dashboard/dashboard_style.dart';
@@ -17,6 +18,7 @@ import '../suggestions/suggestions_page.dart';
 
 class DashboardPage extends StatefulWidget {
   final WorkspaceSession workspaceSession;
+  final WorkspaceSavedRecipeRepository? savedRecipesRepository;
   final WorkspaceInventoryRepository? inventoryRepository;
   final FirebaseFirestore? firestore;
   final WorkspaceActivityRepository? activityRepository;
@@ -29,6 +31,7 @@ class DashboardPage extends StatefulWidget {
   const DashboardPage({
     super.key,
     required this.workspaceSession,
+    this.savedRecipesRepository,
     this.inventoryRepository,
     this.firestore,
     this.activityRepository,
@@ -48,6 +51,7 @@ class _DashboardPageState extends State<DashboardPage> {
   late Stream<List<InventoryItem>> _inventoryStream;
 
   late WorkspaceActivityRepository _activityRepository;
+  MaterialPageRoute<void>? _discoverRoute;
 
   @override
   void initState() {
@@ -58,6 +62,19 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void didUpdateWidget(covariant DashboardPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(
+          oldWidget.savedRecipesRepository,
+          widget.savedRecipesRepository,
+        )) {
+      final route = _discoverRoute;
+      _discoverRoute = null;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (route != null && route.isActive) {
+          route.navigator?.removeRoute(route);
+        }
+      });
+    }
     if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
         oldWidget.inventoryRepository != widget.inventoryRepository ||
         oldWidget.activityRepository != widget.activityRepository ||
@@ -89,6 +106,7 @@ class _DashboardPageState extends State<DashboardPage> {
       items.where(LowStockPolicy.isLowStock).length;
 
   void _openSuggestions(BuildContext context) {
+    if (_discoverRoute?.isActive == true) return;
     final session = widget.workspaceSession;
     if (!session.isActive ||
         !identical(_inventoryRepository.session, session)) {
@@ -99,15 +117,35 @@ class _DashboardPageState extends State<DashboardPage> {
       );
       return;
     }
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => SuggestionsPage(
-          workspaceSession: session,
-          repository: _inventoryRepository,
+    final navigator = Navigator.of(context);
+    final inventory = _inventoryRepository;
+    final savedRecipes = widget.savedRecipesRepository;
+    final libraryNavigator = GlobalKey<NavigatorState>();
+    final route = MaterialPageRoute<void>(
+      builder: (_) => NavigatorPopHandler<void>(
+        onPopWithResult: (_) => libraryNavigator.currentState!.pop(),
+        child: Navigator(
+          key: libraryNavigator,
+          onGenerateRoute: (_) => _DiscoverRootRoute(
+            builder: (_) => PopScope<void>(
+              canPop: false,
+              onPopInvokedWithResult: (didPop, _) {
+                if (!didPop && navigator.mounted) navigator.pop();
+              },
+              child: SuggestionsPage(
+                workspaceSession: session,
+                repository: inventory,
+                savedRecipesRepository: savedRecipes,
+              ),
+            ),
+          ),
         ),
       ),
     );
+    _discoverRoute = route;
+    navigator.push<void>(route).whenComplete(() {
+      if (identical(_discoverRoute, route)) _discoverRoute = null;
+    });
   }
 
   void _showMutationsUnavailable(BuildContext context) {
@@ -181,4 +219,11 @@ class _DashboardPageState extends State<DashboardPage> {
       ),
     );
   }
+}
+
+// The nested root still offers Back to the enclosing Dashboard route.
+class _DiscoverRootRoute extends MaterialPageRoute<void> {
+  _DiscoverRootRoute({required super.builder});
+  @override
+  bool get impliesAppBarDismissal => true;
 }

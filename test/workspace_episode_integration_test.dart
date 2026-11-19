@@ -1,3 +1,5 @@
+// ignore_for_file: subtype_of_sealed_class
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -65,7 +67,7 @@ class AuthorityDocument extends Fake
   Map<String, dynamic>? data() => value;
 }
 
-/// SDK-shaped snapshots enter the production aggregator, never Stream<bool>.
+/// SDK-shaped snapshots enter the production aggregator, never `Stream<bool>`.
 class AuthorityHarness {
   final CafeWorkspace scope;
   late final session = WorkspaceSession.fromVerified(scope);
@@ -197,6 +199,12 @@ class AuthorityHarness {
     await closed;
   }
 }
+
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
 
 void main() {
   for (final owner in [false, true]) {
@@ -401,6 +409,7 @@ void main() {
       final session = WorkspaceSession.fromVerified(workspace());
       final transport = Transport();
       final adapter = FirebaseWorkspaceInventoryStockAdjuster(
+        pilotPolicy: _normalPolicy,
         session: session,
         callable: transport,
       );
@@ -417,6 +426,7 @@ void main() {
       expect(newSession.mutationData['expectedMembershipGeneration'], 4);
       await expectLater(
         FirebaseWorkspaceInventoryStockAdjuster(
+          pilotPolicy: _normalPolicy,
           session: newSession,
           callable: transport,
         ).adjustStock(request),
@@ -434,6 +444,7 @@ void main() {
     final session = WorkspaceSession.fromVerified(workspace());
     final transport = Transport()..pending = Completer();
     final adapter = FirebaseWorkspaceInventoryStockAdjuster(
+      pilotPolicy: _normalPolicy,
       session: session,
       callable: transport,
     );
@@ -451,6 +462,7 @@ void main() {
     final transport = Transport();
     await expectLater(
       FirebaseWorkspaceInventoryStockAdjuster(
+        pilotPolicy: _normalPolicy,
         callable: transport,
       ).adjustStock(request),
       throwsA(isA<WorkspaceInventoryStockException>()),
@@ -462,6 +474,7 @@ void main() {
       final session = WorkspaceSession.fromVerified(workspace());
       Map<String, Object>? payload;
       final adapter = FirebaseWorkspaceInventoryLifecycleManager(
+        pilotPolicy: _normalPolicy,
         session: session,
         invoke: (data) async {
           payload = data;

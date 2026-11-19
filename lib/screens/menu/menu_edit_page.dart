@@ -1,3 +1,7 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
+import '../../services/android_pilot_policy.dart';
+import '../auth/workspace_gate.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -14,17 +18,31 @@ class MenuEditPage extends StatefulWidget {
 }
 
 class _MenuEditPageState extends State<MenuEditPage> {
+  late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
+    isWeb: kIsWeb,
+    platform: defaultTargetPlatform,
+    androidFlavor: appFlavor,
+  );
+  AndroidPilotPolicy get _policy =>
+      AndroidPilotAuthScope.read(context)?.policy ?? _buildPolicy;
+  bool get _allowed =>
+      _policy.state == AndroidPilotState.normal ||
+      _policy.permits(AndroidPilotCapability.menuCallables);
+
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController(),
       _category = TextEditingController(),
       _price = TextEditingController();
   StreamSubscription<void>? _session;
+  AndroidPilotPolicy? _boundPolicy;
   MenuItem? _item;
   bool _available = true, _busy = false, _blocked = false, _needsReload = false;
   String? _message, _key, _fingerprint;
   @override
   void initState() {
     super.initState();
+    _boundPolicy = _policy;
+    if (!_allowed) return;
     _item = widget.item;
     _fill();
     _session = widget.repository.sessionChanges.listen(
@@ -53,6 +71,16 @@ class _MenuEditPageState extends State<MenuEditPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPolicy, _policy)) {
+      _blocked = true;
+      _boundPolicy = _policy;
+    }
+  }
+
+  @override
   void dispose() {
     _session?.cancel();
     _name.dispose();
@@ -62,9 +90,9 @@ class _MenuEditPageState extends State<MenuEditPage> {
   }
 
   Future<void> _reload() async {
-    if (_item == null || _blocked) return;
+    if (!mounted || !_allowed || _item == null || _blocked) return;
     final latest = await widget.repository.get(_item!.id);
-    if (!mounted || _blocked) return;
+    if (!mounted || !_allowed || _blocked) return;
     setState(() {
       _item = latest;
       _fill();
@@ -78,7 +106,9 @@ class _MenuEditPageState extends State<MenuEditPage> {
   }
 
   Future<void> _save() async {
-    if (_busy ||
+    if (!mounted ||
+        !_allowed ||
+        _busy ||
         _blocked ||
         _needsReload ||
         _item?.isArchived == true ||
@@ -106,9 +136,9 @@ class _MenuEditPageState extends State<MenuEditPage> {
     });
     try {
       await widget.repository.save(item: _item, draft: draft, key: _key!);
-      if (mounted && !_blocked) Navigator.pop(context, true);
+      if (mounted && _allowed && !_blocked) Navigator.pop(context, true);
     } catch (error) {
-      if (!mounted || _blocked) return;
+      if (!mounted || !_allowed || _blocked) return;
       setState(
         () => _message = error is MenuException
             ? error.message
@@ -141,122 +171,143 @@ class _MenuEditPageState extends State<MenuEditPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: AppColors.background,
-    appBar: AppBar(
-      title: Text(widget.item == null ? 'Add Menu Item' : 'Edit Menu Item'),
-      backgroundColor: AppColors.background,
-    ),
-    body: _blocked
-        ? Center(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Text(
-                _message ?? const MenuException(MenuFailure.session).message,
-              ),
+  Widget build(BuildContext context) => !_allowed
+      ? const PilotAccessBlockedPage()
+      : Scaffold(
+          backgroundColor: AppColors.background,
+          appBar: AppBar(
+            title: Text(
+              widget.item == null ? 'Add Menu Item' : 'Edit Menu Item',
             ),
-          )
-        : Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
-              child: Form(
-                key: _form,
-                child: ListView(
-                  padding: const EdgeInsets.all(20),
-                  children: [
-                    TextFormField(
-                      controller: _name,
-                      enabled: !_busy && !_blocked,
-                      maxLength: 100,
-                      decoration: const InputDecoration(labelText: 'Name'),
-                      validator: (value) =>
-                          value != null && MenuItem.validText(value.trim(), 100)
-                          ? null
-                          : 'Enter a valid name.',
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _category,
-                      enabled: !_busy && !_blocked,
-                      maxLength: 60,
-                      decoration: const InputDecoration(labelText: 'Category'),
-                      validator: (value) =>
-                          value != null && MenuItem.validText(value.trim(), 60)
-                          ? null
-                          : 'Enter a valid category.',
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _price,
-                      enabled: !_busy && !_blocked,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Price (RM)',
-                      ),
-                      validator: (value) {
-                        try {
-                          MenuDraft.parsePrice(value ?? '');
-                          return null;
-                        } on FormatException catch (error) {
-                          return error.message;
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Available'),
-                      value: _available,
-                      onChanged: _busy || _blocked
-                          ? null
-                          : (value) => setState(() => _available = value),
-                    ),
-                    const SizedBox(height: 16),
-                    FilledButton(
-                      onPressed:
-                          _busy ||
-                              _blocked ||
-                              _needsReload ||
-                              _item?.isArchived == true
-                          ? null
-                          : _save,
-                      child: Text(
-                        _busy
-                            ? 'Saving…'
-                            : widget.item == null
-                            ? 'Create Menu Item'
-                            : 'Save Changes',
-                      ),
-                    ),
-                    if (_item != null)
-                      TextButton(
-                        onPressed: _busy || _blocked
-                            ? null
-                            : () async {
-                                setState(() => _busy = true);
-                                try {
-                                  await _reload();
-                                } catch (_) {
-                                  if (mounted) {
-                                    setState(
-                                      () => _message =
-                                          'Unable to reload this item. Try again.',
-                                    );
-                                  }
-                                } finally {
-                                  if (mounted) setState(() => _busy = false);
-                                }
-                              },
-                        child: const Text('Reload Latest'),
-                      ),
-                    if (_message != null)
-                      Semantics(liveRegion: true, child: Text(_message!)),
-                  ],
-                ),
-              ),
-            ),
+            backgroundColor: AppColors.background,
           ),
-  );
+          body: _blocked
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Text(
+                      _message ??
+                          const MenuException(MenuFailure.session).message,
+                    ),
+                  ),
+                )
+              : Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 680),
+                    child: Form(
+                      key: _form,
+                      child: ListView(
+                        padding: const EdgeInsets.all(20),
+                        children: [
+                          TextFormField(
+                            controller: _name,
+                            enabled: !_busy && !_blocked,
+                            maxLength: 100,
+                            decoration: const InputDecoration(
+                              labelText: 'Name',
+                            ),
+                            validator: (value) =>
+                                value != null &&
+                                    MenuItem.validText(value.trim(), 100)
+                                ? null
+                                : 'Enter a valid name.',
+                          ),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: _category,
+                            enabled: !_busy && !_blocked,
+                            maxLength: 60,
+                            decoration: const InputDecoration(
+                              labelText: 'Category',
+                            ),
+                            validator: (value) =>
+                                value != null &&
+                                    MenuItem.validText(value.trim(), 60)
+                                ? null
+                                : 'Enter a valid category.',
+                          ),
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: _price,
+                            enabled: !_busy && !_blocked,
+                            keyboardType: const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'Price (RM)',
+                            ),
+                            validator: (value) {
+                              try {
+                                MenuDraft.parsePrice(value ?? '');
+                                return null;
+                              } on FormatException catch (error) {
+                                return error.message;
+                              }
+                            },
+                          ),
+                          const SizedBox(height: 12),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Available'),
+                            value: _available,
+                            onChanged: _busy || _blocked
+                                ? null
+                                : (value) {
+                                    if (!mounted || !_allowed || _blocked) {
+                                      return;
+                                    }
+                                    setState(() => _available = value);
+                                  },
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed:
+                                _busy ||
+                                    _blocked ||
+                                    _needsReload ||
+                                    _item?.isArchived == true
+                                ? null
+                                : _save,
+                            child: Text(
+                              _busy
+                                  ? 'Saving…'
+                                  : widget.item == null
+                                  ? 'Create Menu Item'
+                                  : 'Save Changes',
+                            ),
+                          ),
+                          if (_item != null)
+                            TextButton(
+                              onPressed: _busy || _blocked
+                                  ? null
+                                  : () async {
+                                      if (!mounted || !_allowed || _blocked) {
+                                        return;
+                                      }
+                                      setState(() => _busy = true);
+                                      try {
+                                        await _reload();
+                                      } catch (_) {
+                                        if (mounted) {
+                                          setState(
+                                            () => _message =
+                                                'Unable to reload this item. Try again.',
+                                          );
+                                        }
+                                      } finally {
+                                        if (mounted) {
+                                          setState(() => _busy = false);
+                                        }
+                                      }
+                                    },
+                              child: const Text('Reload Latest'),
+                            ),
+                          if (_message != null)
+                            Semantics(liveRegion: true, child: Text(_message!)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+        );
 }

@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -81,6 +82,10 @@ final _scopes = Expando<_Scope>('secure AI transport evidence');
 /// Configure the containing service's timeout above completionBudget so this
 /// adapter can classify uncertainty and finish bounded cleanup first.
 class SecureAiHttpsTransport implements SecureAiTransport {
+  final AndroidPilotPolicy pilotPolicy;
+  bool get _policyAllowed =>
+      pilotPolicy.state == AndroidPilotState.normal ||
+      pilotPolicy.permits(AndroidPilotCapability.liveAi);
   final Uri endpoint;
   final String projectId;
   final http.Client client;
@@ -93,10 +98,11 @@ class SecureAiHttpsTransport implements SecureAiTransport {
   final Duration timeout, cleanupTimeout;
   Duration get completionBudget => timeout + cleanupTimeout;
   @override
-  bool get available => enabled;
+  bool get available => _policyAllowed && enabled;
   @override
   bool get isDemo => false;
   SecureAiHttpsTransport({
+    required this.pilotPolicy,
     required this.endpoint,
     required this.projectId,
     required String endpointProjectId,
@@ -165,6 +171,7 @@ class SecureAiHttpsTransport implements SecureAiTransport {
 
   @override
   Future<Object?> call(Map<String, Object> input) async {
+    if (!_policyAllowed) throw _error('pilot-policy-denied');
     if (!enabled) throw const SecureAiException(SecureAiFailure.unavailable);
     final state = _scopes[sessionScope] ??= _Scope();
     var owned = false, dispatched = false, validating = false;

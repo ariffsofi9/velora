@@ -1,17 +1,24 @@
 import '../../../core/theme/app_tokens.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import '../../auth/workspace_gate.dart';
+import '../../../services/android_pilot_policy.dart';
 
 class EditProfileDialog extends StatefulWidget {
+  final AndroidPilotAuthDependencies? pilot;
   final User user;
 
-  const EditProfileDialog({super.key, required this.user});
+  const EditProfileDialog({super.key, required this.user, this.pilot});
 
   @override
   State<EditProfileDialog> createState() => _EditProfileDialogState();
 }
 
 class _EditProfileDialogState extends State<EditProfileDialog> {
+  AndroidPilotAuthDependencies? get _pilot =>
+      widget.pilot ?? AndroidPilotAuthScope.read(context);
+  bool get _editable =>
+      _pilot?.allows(AndroidPilotCapability.profileWrites) ?? true;
   late final TextEditingController nameController;
   late final TextEditingController photoController;
 
@@ -34,6 +41,14 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
   }
 
   Future<void> _saveProfile() async {
+    if (!mounted || isSaving || !_editable) return;
+    final pilot = _pilot;
+    bool current() =>
+        mounted &&
+        _editable &&
+        identical(pilot, _pilot) &&
+        (pilot == null || pilot.auth.currentUser?.uid == widget.user.uid);
+    if (!current()) return;
     final name = nameController.text.trim();
     final photoUrl = photoController.text.trim();
 
@@ -41,7 +56,9 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
 
     try {
       await widget.user.updateDisplayName(name.isEmpty ? null : name);
+      if (!current()) return;
       await widget.user.updatePhotoURL(photoUrl.isEmpty ? null : photoUrl);
+      if (!current()) return;
       await widget.user.reload();
 
       if (!mounted) return;
@@ -61,6 +78,17 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_editable) {
+      return AlertDialog(
+        title: const Text('Profile editing unavailable'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+        ],
+      );
+    }
     return AlertDialog(
       backgroundColor: Colors.white,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),

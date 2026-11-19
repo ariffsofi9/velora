@@ -13,6 +13,7 @@ import 'login_page.dart';
 /// Remains mounted under pushed routes, and removes the whole old route stack
 /// on revocation. Workspace content waits for server-backed authority snapshots.
 class WorkspaceSessionBoundary extends StatefulWidget {
+  final AndroidPilotAuthDependencies? pilot;
   final WorkspaceSession session;
   final Widget child;
   final Stream<String?>? identities;
@@ -24,6 +25,7 @@ class WorkspaceSessionBoundary extends StatefulWidget {
   final Future<CafeWorkspace> Function()? resolve;
   const WorkspaceSessionBoundary({
     super.key,
+    this.pilot,
     required this.session,
     required this.child,
     this.identities,
@@ -41,14 +43,20 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
   bool _ready = false;
   Timer? _verificationTimeout;
   String? _identity;
+  late final AndroidPilotAuthDependencies? _pilot;
+  late final WorkspaceSession _boundSession;
   @override
   void initState() {
     super.initState();
+    _pilot = widget.pilot ?? AndroidPilotAuthScope.read(context);
+    _boundSession = widget.session;
     _identity = widget.session.uid;
     WidgetsBinding.instance.addObserver(this);
     _monitor = WorkspaceSessionMonitor(
       session: widget.session,
-      resolve: widget.resolve ?? WorkspaceResolver().resolve,
+      resolve: _pilot == null
+          ? widget.resolve ?? WorkspaceResolver().resolve
+          : () => _pilot.resolveEligibleWorkspace(resolve: widget.resolve),
       onState: (ready) {
         if (!mounted) return;
         _verificationTimeout?.cancel();
@@ -56,12 +64,18 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
         if (!ready) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
+            Widget fallback(BuildContext context) => _identity == null
+                ? LoginPage(pilot: _pilot)
+                : WorkspaceGate(pilot: _pilot, initiallyBlocked: true);
             Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
-              MaterialPageRoute<void>(
-                builder: (_) => _identity == null
-                    ? const LoginPage()
-                    : const WorkspaceGate(initiallyBlocked: true),
-              ),
+              _pilot?.policy.isRestricted == true
+                  ? PageRouteBuilder<void>(
+                      transitionDuration: Duration.zero,
+                      reverseTransitionDuration: Duration.zero,
+                      pageBuilder: (context, animation, secondaryAnimation) =>
+                          fallback(context),
+                    )
+                  : MaterialPageRoute<void>(builder: fallback),
               (_) => false,
             );
           });
@@ -72,11 +86,18 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
       const Duration(seconds: 15),
       _monitor.invalidate,
     );
+    var sawIdentity = false;
     _monitor.start(
       (widget.identities ??
-              FirebaseAuth.instance.authStateChanges().map((user) => user?.uid))
+              (_pilot?.auth ?? FirebaseAuth.instance).authStateChanges().map(
+                (user) => user?.uid,
+              ))
           .map((uid) {
             _identity = uid;
+            if (sawIdentity && _pilot?.policy.isRestricted == true) {
+              _monitor.invalidate();
+            }
+            sawIdentity = true;
             return uid;
           }),
       widget.authority ?? _authority(),
@@ -101,7 +122,7 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
         for (final path in paths) {
           subscriptions.add(
             (widget.authoritySnapshots?.call(path) ??
-                    FirebaseFirestore.instance
+                    (_pilot?.firestore ?? FirebaseFirestore.instance)
                         .doc(path)
                         .snapshots(includeMetadataChanges: true))
                 .listen(
@@ -158,10 +179,19 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
   }
 
   @override
+  void didUpdateWidget(covariant WorkspaceSessionBoundary oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.session, widget.session) ||
+        !identical(oldWidget.pilot, widget.pilot)) {
+      _monitor.invalidate();
+    }
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _verificationTimeout?.cancel();
-    widget.session.invalidate();
+    _boundSession.invalidate();
     _monitor.dispose();
     super.dispose();
   }

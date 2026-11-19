@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -131,6 +133,7 @@ class _Fixture {
   final changes = StreamController<MenuHttpsSession?>.broadcast(sync: true);
   final WorkspaceSession w;
   final Object scope = Object();
+  int sessionReads = 0;
   late MenuHttpsSession? current;
   late final MenuHttpsTransport transport;
   Future<String?> Function(MenuHttpsSession) token = (_) async =>
@@ -145,16 +148,21 @@ class _Fixture {
     addTearDown(changes.close);
   }
   MenuHttpsTransport build({
+    AndroidPilotPolicy? policy,
     Duration timeout = const Duration(seconds: 1),
     int maxBytes = 262144,
     Stream<MenuHttpsSession?>? stream,
     String Function(String)? sha,
   }) => MenuHttpsTransport(
+    pilotPolicy: policy ?? _normalPolicy,
     endpoint: Uri.parse('https://backend.invalid'),
     projectId: 'velora-spark-test',
     endpointProjectId: 'velora-spark-test',
     client: client,
-    currentSession: () => current,
+    currentSession: () {
+      sessionReads++;
+      return current;
+    },
     sessionChanges: stream ?? changes.stream,
     idToken: (s) => token(s),
     sha256: sha ?? hash,
@@ -171,7 +179,68 @@ Matcher failure({bool unknown = false, String? code}) =>
         .having((e) => code == null || e.code == code, 'code', true)
         .having((e) => e.toString().contains('PRIVATE'), 'safe error', false);
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final action in [...operations.keys, 'restore', 'metadata']) {
+      test(
+        'Menu HTTPS invalid=$invalid $action rejects before token/hash/session/HTTP',
+        () async {
+          final f = _Fixture();
+          var tokens = 0, hashes = 0;
+          f.token = (_) async {
+            tokens++;
+            return 'synthetic.token';
+          };
+          final policy = _pilotPolicy(invalid);
+          final transport = f.build(
+            policy: policy,
+            sha: (_) {
+              hashes++;
+              return digest;
+            },
+          );
+          final name = action == 'restore'
+              ? 'setMenuItemLifecycle'
+              : action == 'metadata'
+              ? 'updateMenuItem'
+              : action;
+          final request = {
+            ...data(name),
+            if (action == 'restore') 'action': 'restore',
+            if (action == 'metadata') 'name': 'Coffee',
+          };
+          expect(transport.pilotPolicy, same(policy));
+          await expectLater(
+            transport.call(name, request),
+            throwsA(failure(code: 'pilot-policy-denied')),
+          );
+          expect(tokens, 0);
+          expect(hashes, 0);
+          expect(f.sessionReads, 0);
+          expect(f.client.calls, isEmpty);
+        },
+      );
+    }
+  }
+
   test('inert configuration requires TEST project and safe HTTPS origin', () {
     final f = _Fixture();
     expect(f.client.calls, isEmpty);
@@ -186,6 +255,7 @@ void main() {
     ]) {
       expect(
         () => MenuHttpsTransport(
+          pilotPolicy: _normalPolicy,
           endpoint: Uri.parse(url),
           projectId: 'velora-spark-test',
           endpointProjectId: 'velora-spark-test',
@@ -201,6 +271,7 @@ void main() {
     }
     expect(
       () => MenuHttpsTransport(
+        pilotPolicy: _normalPolicy,
         endpoint: Uri.parse('https://backend.invalid'),
         projectId: 'velora-73222',
         endpointProjectId: 'velora-73222',

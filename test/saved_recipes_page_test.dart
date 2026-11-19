@@ -1,3 +1,4 @@
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -140,6 +141,7 @@ class Fixture {
   Fixture({String uid = 'owner'}) {
     current = session(uid: uid);
     repository = WorkspaceSavedRecipeRepository(
+      pilotPolicy: _normalPolicy,
       readPort: ports,
       observationPort: ports,
       currentSession: () => current,
@@ -177,6 +179,12 @@ Future<void> open(WidgetTester tester) async {
   await tester.tap(button);
   await tester.pumpAndSettle();
 }
+
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
 
 void main() {
   testWidgets(

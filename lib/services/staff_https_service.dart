@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -102,6 +103,7 @@ Never _invalid() => throw const FormatException('Invalid Staff response');
 /// a real SHA-256 hex provider. Endpoint project metadata is not attestation.
 /// In-memory request bindings do not supply durable process-death recovery.
 class StaffHttpsService implements TeamMembers {
+  final AndroidPilotPolicy pilotPolicy;
   final Uri endpoint;
   final String projectId;
   final http.Client client;
@@ -112,6 +114,7 @@ class StaffHttpsService implements TeamMembers {
   final Duration timeout, cleanupTimeout;
   final int maxResponseBytes;
   StaffHttpsService({
+    required this.pilotPolicy,
     required this.endpoint,
     required this.projectId,
     required String endpointProjectId,
@@ -150,6 +153,19 @@ class StaffHttpsService implements TeamMembers {
       );
     }
   }
+
+  bool get _policyAllowed =>
+      pilotPolicy.state == AndroidPilotState.normal ||
+      pilotPolicy.permits(AndroidPilotCapability.teamCallables);
+  void _requirePolicy() {
+    if (!_policyAllowed) {
+      throw const StaffHttpsException(
+        'pilot-policy-denied',
+        outcomeUnknown: false,
+      );
+    }
+  }
+
   StaffHttpsSession _capture() {
     final s = currentSession();
     if (s == null ||
@@ -170,6 +186,7 @@ class StaffHttpsService implements TeamMembers {
 
   @override
   Future<TeamRoster> load(CafeWorkspace workspace) async {
+    _requirePolicy();
     try {
       final s = _capture(), w = s.workspace;
       if (workspace.uid != w.uid ||
@@ -226,6 +243,7 @@ class StaffHttpsService implements TeamMembers {
   }
 
   Future<StaffRemovalResult> remove(StaffRemovalRequest request) async {
+    _requirePolicy();
     var binding = _removals[request];
     var owned = false, sent = false;
     try {

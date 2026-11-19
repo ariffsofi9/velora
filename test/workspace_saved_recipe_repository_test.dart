@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:collection';
 import 'package:flutter_test/flutter_test.dart';
@@ -188,6 +190,7 @@ class Fixture {
   late final WorkspaceSavedRecipeRepository repository;
   Fixture({Duration timeout = const Duration(seconds: 1)}) {
     repository = WorkspaceSavedRecipeRepository(
+      pilotPolicy: _normalPolicy,
       readPort: ports,
       observationPort: ports,
       currentSession: () => current,
@@ -201,7 +204,78 @@ class Fixture {
   }
 }
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final action in ['list', 'get', 'reconcile', 'save', 'lifecycle']) {
+      test(
+        'Saved Recipes invalid=$invalid $action is inert and never dispatches ports',
+        () async {
+          var providers = 0, subscriptions = 0;
+          final ports = FakePorts(), policy = _pilotPolicy(invalid);
+          final repository = WorkspaceSavedRecipeRepository(
+            pilotPolicy: policy,
+            readPort: ports,
+            observationPort: ports,
+            currentSession: () {
+              providers++;
+              return session();
+            },
+            sessionChanges: Stream<SavedRecipeSession?>.multi((controller) {
+              subscriptions++;
+              controller.add(session());
+              controller.close();
+            }),
+          );
+          expect(repository.pilotPolicy, same(policy));
+          final operation = switch (action) {
+            'list' => repository.list(mode: 'active', limit: 20),
+            'get' => repository.get(rid()),
+            'reconcile' => repository.reconcile(intent()),
+            'save' => repository.save(intent()),
+            _ => repository.lifecycle(lifecycle()),
+          };
+          await expectLater(
+            operation,
+            throwsA(
+              action == 'save' || action == 'lifecycle'
+                  ? failure(SavedRecipeFailure.unavailable)
+                  : isA<SavedRecipePilotPolicyException>().having(
+                      (e) => e.outcomeUnknown,
+                      'observation cannot settle original mutation',
+                      action == 'reconcile',
+                    ),
+            ),
+          );
+          expect(providers, 0);
+          expect(subscriptions, 0);
+          expect(ports.calls, isEmpty);
+          await repository.dispose();
+          expect(providers, 0);
+          expect(subscriptions, 0);
+          expect(ports.calls, isEmpty);
+        },
+      );
+    }
+  }
+
   test(
     'session change during response parsing suppresses the result',
     () async {
@@ -224,6 +298,7 @@ void main() {
           changes = StreamController<SavedRecipeSession?>.broadcast();
       final s = session(uid: 'staff', role: CafeRole.staff);
       final repository = WorkspaceSavedRecipeRepository(
+        pilotPolicy: _normalPolicy,
         readPort: ports,
         observationPort: ports,
         currentSession: () => s,
@@ -721,6 +796,7 @@ void main() {
         final port = FakePorts();
         expect(
           () => WorkspaceSavedRecipeRepository(
+            pilotPolicy: _normalPolicy,
             readPort: port,
             observationPort: port,
             currentSession: () => invalid,

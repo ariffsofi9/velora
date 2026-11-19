@@ -1,3 +1,4 @@
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,7 +23,124 @@ class _Inventory extends Fake implements WorkspaceInventoryRepository {
   Stream<List<InventoryItem>> watchItems() => Stream.value(const []);
 }
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    testWidgets(
+      'AI widget invalid=$invalid does not consult session or unrestricted transport',
+      (tester) async {
+        var providers = 0, calls = 0;
+        final current = fixtures.session();
+        final service = SecureAiService(
+          pilotPolicy: _pilotPolicy(invalid),
+          currentSession: () {
+            providers++;
+            return current;
+          },
+          transport: MockSecureAiTransport((_) async {
+            calls++;
+            return fixtures.issued();
+          }),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SecureAiSuggestions(
+                workspaceSession: current,
+                service: service,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'Generate Recipes'),
+              )
+              .onPressed,
+          isNull,
+        );
+        expect(providers, 0);
+        expect(calls, 0);
+        expect(find.text('Mock dish'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+    testWidgets(
+      'captured AI callback cannot bypass a replacement invalid=$invalid service',
+      (tester) async {
+        var calls = 0, providers = 0;
+        final current = fixtures.session();
+        final transport = MockSecureAiTransport((_) async {
+          calls++;
+          return fixtures.issued();
+        });
+        var service = SecureAiService(
+          pilotPolicy: _normalPolicy,
+          currentSession: () => current,
+          transport: transport,
+        );
+        late StateSetter update;
+        await tester.pumpWidget(
+          StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return MaterialApp(
+                home: Scaffold(
+                  body: SecureAiSuggestions(
+                    workspaceSession: current,
+                    service: service,
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+        final captured = tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Generate Recipes'),
+            )
+            .onPressed!;
+        update(
+          () => service = SecureAiService(
+            pilotPolicy: _pilotPolicy(invalid),
+            currentSession: () {
+              providers++;
+              return current;
+            },
+            transport: transport,
+          ),
+        );
+        await tester.pump();
+        captured();
+        captured();
+        await tester.pump();
+        expect(providers, 0);
+        expect(calls, 0);
+        expect(find.text('Mock dish'), findsNothing);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
   for (final entry in {
     'sign-in-required': 'Sign in again to use AI suggestions.',
     'email-unverified': 'Verify your email before requesting AI suggestions.',
@@ -41,6 +159,7 @@ void main() {
     ) async {
       final session = fixtures.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: MockSecureAiTransport(
           (_) async => throw SecureAiTransportException(
@@ -71,6 +190,7 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final session = fixtures.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: MockSecureAiTransport(
           (data) async => data['operation'] == 'issue'
@@ -107,6 +227,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final session = fixtures.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: MockSecureAiTransport(
           (data) async => data['operation'] == 'issue'
@@ -145,6 +266,7 @@ void main() {
     final pending = Completer<Object?>();
     var calls = 0;
     final service = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => session,
       transport: MockSecureAiTransport((data) async {
         calls++;
@@ -186,6 +308,7 @@ void main() {
     testWidgets('${entry.key} safe UI', (tester) async {
       final session = fixtures.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: MockSecureAiTransport(
           (_) async => throw SecureAiTransportException(entry.key),
@@ -210,7 +333,10 @@ void main() {
   testWidgets('default unavailable is disabled without workspace/network', (
     tester,
   ) async {
-    final service = SecureAiService(currentSession: () => null);
+    final service = SecureAiService(
+      pilotPolicy: _normalPolicy,
+      currentSession: () => null,
+    );
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -231,6 +357,7 @@ void main() {
     var session = fixtures.session();
     final pending = Completer<Object?>();
     final service = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => session,
       transport: MockSecureAiTransport(
         (data) async =>
@@ -259,6 +386,7 @@ void main() {
       final session = fixtures.session();
       final transport = _DetailTransport();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: transport,
       );
@@ -302,6 +430,7 @@ void main() {
     ) async {
       var session = fixtures.session();
       var service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: _DetailTransport(),
       );
@@ -322,6 +451,7 @@ void main() {
           session.invalidate();
         } else if (replacement == 'service') {
           service = SecureAiService(
+            pilotPolicy: _normalPolicy,
             currentSession: () => session,
             transport: _DetailTransport(),
           );
@@ -362,6 +492,7 @@ void main() {
   ) async {
     var session = fixtures.session();
     final service = SecureAiService(
+      pilotPolicy: _normalPolicy,
       currentSession: () => session,
       transport: _DetailTransport(),
     );
@@ -385,6 +516,7 @@ void main() {
       final authority = StreamController<bool>.broadcast();
       final session = fixtures.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: _DetailTransport(),
       );
@@ -429,6 +561,7 @@ void main() {
       final pending = Completer<Object?>();
       final session = fixtures.session();
       final service = SecureAiService(
+        pilotPolicy: _normalPolicy,
         currentSession: () => session,
         transport: MockSecureAiTransport((data) async {
           if (data['operation'] == 'issue') return fixtures.issued();

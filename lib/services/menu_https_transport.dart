@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -82,6 +83,7 @@ int _compareId(String a, String b) {
 /// real SHA-256 hex provider. Retain sessionScope across reconstruction. Bindings
 /// are bounded in-memory evidence, not qualified crash recovery or activation.
 class MenuHttpsTransport implements MenuCallable {
+  final AndroidPilotPolicy pilotPolicy;
   final Uri endpoint;
   final String projectId;
   final http.Client client;
@@ -100,6 +102,7 @@ class MenuHttpsTransport implements MenuCallable {
     'setMenuItemLifecycle': 'lifecycle',
   };
   MenuHttpsTransport({
+    required this.pilotPolicy,
     required this.endpoint,
     required this.projectId,
     required String endpointProjectId,
@@ -136,6 +139,14 @@ class MenuHttpsTransport implements MenuCallable {
       throw _error('invalid-configuration', false);
     }
   }
+
+  bool get _policyAllowed =>
+      pilotPolicy.state == AndroidPilotState.normal ||
+      pilotPolicy.permits(AndroidPilotCapability.menuCallables);
+  void _requirePolicy() {
+    if (!_policyAllowed) throw _error('pilot-policy-denied', false);
+  }
+
   MenuHttpsSession _capture() {
     final s = currentSession();
     if (s == null ||
@@ -265,6 +276,7 @@ class MenuHttpsTransport implements MenuCallable {
     String name,
     Map<String, Object> input,
   ) async {
+    _requirePolicy();
     final operation = _routes[name],
         mutation = !['get', 'list'].contains(_routes[name]);
     _Binding? binding;

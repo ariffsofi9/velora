@@ -1,3 +1,4 @@
+import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -30,6 +31,7 @@ class InvitationHttpsSession {
 /// or access Firebase here. Retain sessionScope across service reconstruction.
 /// endpointProjectId is trusted composition metadata, not remote attestation.
 class HttpsStaffInvitations implements StaffInvitations {
+  final AndroidPilotPolicy pilotPolicy;
   final Uri endpoint;
   final String projectId;
   final http.Client client;
@@ -50,6 +52,7 @@ class HttpsStaffInvitations implements StaffInvitations {
   Duration get reconciliationCompletionBudget => timeout + completionBudget;
 
   HttpsStaffInvitations({
+    required this.pilotPolicy,
     required this.endpoint,
     required this.projectId,
     required String endpointProjectId,
@@ -96,7 +99,20 @@ class HttpsStaffInvitations implements StaffInvitations {
     }
   }
 
+  bool get _policyAllowed =>
+      pilotPolicy.state == AndroidPilotState.normal ||
+      pilotPolicy.permits(AndroidPilotCapability.teamCallables);
+  void _requirePolicy({bool observation = false}) {
+    if (!_policyAllowed) {
+      throw StaffInvitationTransportException(
+        'pilot-policy-denied',
+        outcomeUnknown: observation,
+      );
+    }
+  }
+
   bool get creationBlocked {
+    if (!_policyAllowed) return true;
     final session = currentSession();
     return session != null &&
         StaffInvitationCreation.forSession(sessionScope, session.uid).blocked;
@@ -340,6 +356,7 @@ class HttpsStaffInvitations implements StaffInvitations {
     String email, {
     required CafeWorkspace workspace,
   }) async {
+    _requirePolicy();
     try {
       final session = _session();
       final expected = captureInvitationOwnerContext(workspace, session.uid);
@@ -418,6 +435,8 @@ class HttpsStaffInvitations implements StaffInvitations {
 
   /// Reads the retained operation identity; never repairs/rebinds or clears it.
   Future<InvitationReceiptObservation> reconcile() async {
+    // Denying this observation cannot establish the original write's outcome.
+    _requirePolicy(observation: true);
     var stage = StaffRedeemStage.callableConfig;
     try {
       final session = _session();
@@ -450,6 +469,7 @@ class HttpsStaffInvitations implements StaffInvitations {
 
   @override
   Future<void> revoke(String id, {required CafeWorkspace workspace}) async {
+    _requirePolicy();
     try {
       final session = _session();
       final expected = captureInvitationOwnerContext(workspace, session.uid);
@@ -470,6 +490,7 @@ class HttpsStaffInvitations implements StaffInvitations {
 
   @override
   Future<void> redeem(String code) async {
+    _requirePolicy();
     try {
       final session = _session();
       await StaffInvitationAcknowledgement.confirm(

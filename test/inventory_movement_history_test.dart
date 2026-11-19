@@ -1,3 +1,7 @@
+import 'package:velora/screens/inventory/stock/stock_adjustment_page.dart';
+import 'package:velora/services/workspace_inventory_stock_service.dart';
+import 'package:velora/services/android_pilot_policy.dart';
+import 'package:velora/screens/auth/workspace_gate.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -114,7 +118,182 @@ Future<WorkspaceMovementCursor> cursor() async {
 
 Widget app(Widget child) => MaterialApp(theme: AppTheme.light, home: child);
 
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+class _PolicyAdjuster implements WorkspaceInventoryStockAdjuster {
+  final requests = <WorkspaceInventoryStockRequest>[];
+  Completer<WorkspaceInventoryStockResult>? pending;
+  @override
+  Future<WorkspaceInventoryStockResult> adjustStock(
+    WorkspaceInventoryStockRequest request,
+  ) async {
+    requests.add(request);
+    return pending == null
+        ? WorkspaceInventoryStockResult(
+            itemId: request.itemId,
+            direction: request.direction,
+            quantity: request.quantity,
+            resultingQuantity: 4,
+            version: 2,
+            adjusted: true,
+          )
+        : await pending!.future;
+  }
+}
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final out in [false, true]) {
+      testWidgets(
+        'direct Stock out=$out invalid=$invalid rejects injected adjuster',
+        (tester) async {
+          final adjuster = _PolicyAdjuster(),
+              workspace = session('cafe-a'),
+              record = item('item-a');
+          var keys = 0;
+          final page = StockAdjustmentPage(
+            item: record,
+            type: out
+                ? StockAdjustmentType.stockOut
+                : StockAdjustmentType.stockIn,
+            workspaceSession: workspace,
+            adjuster: adjuster,
+            idempotencyKeyFactory: () {
+              keys++;
+              return 'stock-request-01';
+            },
+          );
+          await tester.pumpWidget(
+            AndroidPilotAuthScope(
+              dependencies: AndroidPilotAuthDependencies(
+                policy: _pilotPolicy(invalid),
+              ),
+              child: app(page),
+            ),
+          );
+          expect(find.byType(PilotAccessBlockedPage), findsOneWidget);
+          expect(adjuster.requests, isEmpty);
+          expect(keys, 0);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+      testWidgets(
+        'captured Stock out=$out invalid=$invalid performs zero allocation',
+        (tester) async {
+          final adjuster = _PolicyAdjuster(),
+              workspace = session('cafe-a'),
+              record = item('item-a');
+          var keys = 0, policy = _normalPolicy;
+          late StateSetter update;
+          await tester.pumpWidget(
+            StatefulBuilder(
+              builder: (context, setState) {
+                update = setState;
+                return AndroidPilotAuthScope(
+                  dependencies: AndroidPilotAuthDependencies(policy: policy),
+                  child: app(
+                    StockAdjustmentPage(
+                      item: record,
+                      type: out
+                          ? StockAdjustmentType.stockOut
+                          : StockAdjustmentType.stockIn,
+                      workspaceSession: workspace,
+                      adjuster: adjuster,
+                      idempotencyKeyFactory: () {
+                        keys++;
+                        return 'stock-request-01';
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+          await tester.enterText(find.byType(TextField).first, '1');
+          final submit = tester
+              .widget<ElevatedButton>(
+                find.byKey(const ValueKey('stock-confirm-button')),
+              )
+              .onPressed!;
+          update(() => policy = _pilotPolicy(invalid));
+          await tester.pump();
+          submit();
+          submit();
+          await tester.pump();
+          expect(adjuster.requests, isEmpty);
+          expect(keys, 0);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+  }
+  testWidgets('pending Stock completion is fenced by session replacement', (
+    tester,
+  ) async {
+    final adjuster = _PolicyAdjuster()
+          ..pending = Completer<WorkspaceInventoryStockResult>(),
+        record = item('item-a');
+    var workspace = session('cafe-a');
+    late StateSetter update;
+    await tester.pumpWidget(
+      StatefulBuilder(
+        builder: (context, setState) {
+          update = setState;
+          return AndroidPilotAuthScope(
+            dependencies: AndroidPilotAuthDependencies(policy: _normalPolicy),
+            child: app(
+              StockAdjustmentPage(
+                item: record,
+                type: StockAdjustmentType.stockOut,
+                workspaceSession: workspace,
+                adjuster: adjuster,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    await tester.enterText(find.byType(TextField).first, '1');
+    tester
+        .widget<ElevatedButton>(
+          find.byKey(const ValueKey('stock-confirm-button')),
+        )
+        .onPressed!();
+    await tester.pump();
+    expect(adjuster.requests, hasLength(1));
+    update(() => workspace = session('cafe-b'));
+    await tester.pump();
+    adjuster.pending!.complete(
+      const WorkspaceInventoryStockResult(
+        itemId: 'item-a',
+        direction: StockDirection.stockOut,
+        quantity: 1,
+        resultingQuantity: 4,
+        version: 2,
+        adjusted: true,
+      ),
+    );
+    await tester.pump();
+    expect(find.textContaining('completed successfully'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('Stock History navigation uses selected verified item', (
     tester,
   ) async {

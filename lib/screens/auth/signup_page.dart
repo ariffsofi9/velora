@@ -6,16 +6,23 @@ import '../../widgets/auth/auth_layout.dart';
 
 import 'login_page.dart';
 import '../../services/auth_service.dart';
+import 'workspace_gate.dart';
+import '../../services/android_pilot_policy.dart';
 
 class SignUpPage extends StatefulWidget {
+  final AndroidPilotAuthDependencies? pilot;
   final AuthService? authService;
-  const SignUpPage({super.key, this.authService});
+  const SignUpPage({super.key, this.authService, this.pilot});
 
   @override
   State<SignUpPage> createState() => _SignUpPageState();
 }
 
 class _SignUpPageState extends State<SignUpPage> {
+  AndroidPilotAuthDependencies? get _pilot =>
+      widget.pilot ?? AndroidPilotAuthScope.read(context);
+  bool get _canRegister =>
+      _pilot?.allows(AndroidPilotCapability.registration) ?? true;
   final nameController = TextEditingController();
   final emailController = TextEditingController();
   final passwordController = TextEditingController();
@@ -36,7 +43,7 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 
   Future<void> createAccount() async {
-    if (isLoading) return;
+    if (isLoading || !_canRegister) return;
     final name = nameController.text.trim();
     final email = emailController.text.trim();
     final password = passwordController.text.trim();
@@ -77,17 +84,16 @@ class _SignUpPageState extends State<SignUpPage> {
 
     setState(() => isLoading = true);
 
+    final pilot = _pilot;
     try {
-      await (widget.authService ?? AuthService()).register(
-        name: name,
-        email: email,
-        password: password,
-      );
-      if (!mounted) return;
+      await (pilot?.authService ?? widget.authService ?? AuthService())
+          .register(name: name, email: email, password: password);
+      if (!mounted || !identical(pilot, _pilot)) return;
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(
           builder: (_) => LoginPage(
+            pilot: pilot,
             authService: widget.authService,
             message: 'Account created successfully! Please log in.',
           ),
@@ -138,91 +144,105 @@ class _SignUpPageState extends State<SignUpPage> {
       );
 
   @override
-  Widget build(BuildContext context) => AuthLayout(
-    title: 'Create an Account',
-    subtitle: "Let's get started with Velora.",
-    onBack: isLoading
-        ? null
-        : () {
-            Navigator.pushReplacement(
-              context,
-              MaterialPageRoute(builder: (_) => const LoginPage()),
-            );
-          },
-    children: [
-      AuthField(
-        label: 'Full name',
-        controller: nameController,
-        enabled: !isLoading,
-      ),
-      AuthField(
-        label: 'Email address',
-        controller: emailController,
-        enabled: !isLoading,
-        keyboardType: TextInputType.emailAddress,
-      ),
-      AuthField(
-        label: 'Password',
-        controller: passwordController,
-        enabled: !isLoading,
-        obscure: hidePassword,
-        suffix: _visibility(hidePassword, () {
-          setState(() {
-            hidePassword = !hidePassword;
-          });
-        }, 'password'),
-      ),
-      AuthField(
-        label: 'Confirm password',
-        controller: confirmPasswordController,
-        enabled: !isLoading,
-        obscure: hideConfirmPassword,
-        suffix: _visibility(hideConfirmPassword, () {
-          setState(() {
-            hideConfirmPassword = !hideConfirmPassword;
-          });
-        }, 'confirm password'),
-      ),
-      CheckboxListTile(
-        contentPadding: EdgeInsets.zero,
-        controlAffinity: ListTileControlAffinity.leading,
-        value: agreeTerms,
-        onChanged: isLoading
-            ? null
-            : (value) {
+  Widget build(BuildContext context) => !_canRegister
+      ? const PilotAccessBlockedPage()
+      : AuthLayout(
+          title: 'Create an Account',
+          subtitle: "Let's get started with Velora.",
+          onBack: isLoading
+              ? null
+              : () {
+                  final pilot = _pilot;
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => LoginPage(
+                        pilot: pilot,
+                        authService: widget.authService,
+                      ),
+                    ),
+                  );
+                },
+          children: [
+            AuthField(
+              label: 'Full name',
+              controller: nameController,
+              enabled: !isLoading,
+            ),
+            AuthField(
+              label: 'Email address',
+              controller: emailController,
+              enabled: !isLoading,
+              keyboardType: TextInputType.emailAddress,
+            ),
+            AuthField(
+              label: 'Password',
+              controller: passwordController,
+              enabled: !isLoading,
+              obscure: hidePassword,
+              suffix: _visibility(hidePassword, () {
                 setState(() {
-                  agreeTerms = value ?? false;
+                  hidePassword = !hidePassword;
                 });
-              },
-        title: const Text(
-          'I agree to the Terms & Conditions.',
-          style: TextStyle(fontWeight: FontWeight.w600),
-        ),
-      ),
-      const SizedBox(height: 16),
-      AuthSubmit(
-        label: 'Create Account',
-        busy: isLoading,
-        onPressed: createAccount,
-      ),
-      const SizedBox(height: 24),
-      AuthAccountLink(
-        prompt: 'Already have an account?',
-        label: 'Log in',
-        onPressed: isLoading
-            ? null
-            : () {
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(builder: (_) => const LoginPage()),
-                );
-              },
-      ),
-      const Text(
-        'Google sign-in is currently unavailable.',
-        textAlign: TextAlign.center,
-        style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-      ),
-    ],
-  );
+              }, 'password'),
+            ),
+            AuthField(
+              label: 'Confirm password',
+              controller: confirmPasswordController,
+              enabled: !isLoading,
+              obscure: hideConfirmPassword,
+              suffix: _visibility(hideConfirmPassword, () {
+                setState(() {
+                  hideConfirmPassword = !hideConfirmPassword;
+                });
+              }, 'confirm password'),
+            ),
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              value: agreeTerms,
+              onChanged: isLoading
+                  ? null
+                  : (value) {
+                      setState(() {
+                        agreeTerms = value ?? false;
+                      });
+                    },
+              title: const Text(
+                'I agree to the Terms & Conditions.',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            const SizedBox(height: 16),
+            AuthSubmit(
+              label: 'Create Account',
+              busy: isLoading,
+              onPressed: createAccount,
+            ),
+            const SizedBox(height: 24),
+            AuthAccountLink(
+              prompt: 'Already have an account?',
+              label: 'Log in',
+              onPressed: isLoading
+                  ? null
+                  : () {
+                      final pilot = _pilot;
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => LoginPage(
+                            pilot: pilot,
+                            authService: widget.authService,
+                          ),
+                        ),
+                      );
+                    },
+            ),
+            const Text(
+              'Google sign-in is currently unavailable.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
+          ],
+        );
 }

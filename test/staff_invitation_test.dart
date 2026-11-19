@@ -1,3 +1,5 @@
+import 'package:velora/screens/auth/workspace_gate.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 // Offline Firebase interface doubles only.
 // ignore_for_file: subtype_of_sealed_class
 import 'package:firebase_auth/firebase_auth.dart';
@@ -241,7 +243,86 @@ class _User extends Fake implements User {
   }
 }
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    final policy = AndroidPilotPolicy.parse(
+      invalid
+          ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+          : {
+              'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+              'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+              'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+            },
+      isWeb: false,
+      platform: TargetPlatform.android,
+    );
+    for (final inherited in [false, true]) {
+      testWidgets(
+        'direct invitation invalid=$invalid inherited=$inherited blocks injected service',
+        (tester) async {
+          final invites = _Invites();
+          final restricted = AndroidPilotAuthDependencies(policy: policy);
+          final normal = AndroidPilotAuthDependencies(policy: _normalPolicy);
+          final page = StaffInvitationPage(
+            pilot: inherited ? normal : restricted,
+            invitations: invites,
+          );
+          await tester.pumpWidget(
+            inherited
+                ? AndroidPilotAuthScope(
+                    dependencies: restricted,
+                    child: MaterialApp(home: page),
+                  )
+                : MaterialApp(home: page),
+          );
+          await tester.pump();
+          expect(find.byType(PilotAccessBlockedPage), findsOneWidget);
+          expect(invites.creates, 0);
+          expect(invites.revokes, 0);
+          expect(invites.redeems, 0);
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
+    for (final action in ['create', 'revoke', 'redeem']) {
+      test(
+        'invitation policy invalid=$invalid rejects $action before SDK lookup',
+        () async {
+          final service = FirebaseStaffInvitations(pilotPolicy: policy);
+          expect(service.pilotPolicy, same(policy));
+          expect(service.creationBlocked, true);
+          await expectLater(
+            switch (action) {
+              'create' => service.create(
+                'synthetic@example.test',
+                workspace: _ownerScope(),
+              ),
+              'revoke' => service.revoke(
+                'synthetic-id',
+                workspace: _ownerScope(),
+              ),
+              _ => service.redeem('synthetic-code'),
+            },
+            throwsA(
+              isA<StaffInvitationFailure>()
+                  .having((e) => e.code, 'policy reason', 'pilot-policy-denied')
+                  .having(
+                    (e) => e.outcomeUnknown,
+                    'definite predispatch',
+                    false,
+                  ),
+            ),
+          );
+        },
+      );
+    }
+  }
   test('typed HTTPS rejection preserves definite failure classification', () {
     final failure = StaffInvitationFailure.fromError(
       StaffRedeemStage.callableInvocation,
@@ -317,6 +398,7 @@ void main() {
       test('$action default profile fails before transport', () async {
         final functions = transport();
         final service = FirebaseStaffInvitations(
+          pilotPolicy: _normalPolicy,
           auth: identity(),
           functions: functions,
         );
@@ -342,6 +424,7 @@ void main() {
           final unused = transport();
           final auth = identity();
           final service = FirebaseStaffInvitations(
+            pilotPolicy: _normalPolicy,
             auth: auth,
             functions: functions,
           );
@@ -435,6 +518,7 @@ void main() {
                 }
               });
             final service = FirebaseStaffInvitations(
+              pilotPolicy: _normalPolicy,
               auth: identity(),
               functions: functions,
             );
@@ -491,7 +575,11 @@ void main() {
         final functions = transport()..respond = (() => pending.future);
         var completed = false;
         final operation = invoke(
-          FirebaseStaffInvitations(auth: identity(), functions: functions),
+          FirebaseStaffInvitations(
+            pilotPolicy: _normalPolicy,
+            auth: identity(),
+            functions: functions,
+          ),
           action,
         ).then((_) => completed = true);
         await Future<void>.delayed(Duration.zero);
@@ -512,6 +600,7 @@ void main() {
         installInvitationFirebase();
         await expectLater(
           FirebaseStaffInvitations(
+            pilotPolicy: _normalPolicy,
             auth: identity(),
             functions: wrong,
           ).create('private@example.test', workspace: _ownerScope()),
@@ -536,6 +625,7 @@ void main() {
         installInvitationFirebase().projectId = 'synthetic-wrong-project';
         await expectLater(
           FirebaseStaffInvitations(
+            pilotPolicy: _normalPolicy,
             auth: identity(),
             functions: functions,
           ).revoke('synthetic-id', workspace: _ownerScope()),
@@ -707,12 +797,13 @@ void main() {
           await tester.tap(find.text('Create invitation'));
           await tester.pump();
           if (completion == 'success') {
-            if (operation == 'create')
+            if (operation == 'create') {
               create.complete(
                 const StaffInvitation('id-stale', 'PRIVATE-OLD-CODE', '2030'),
               );
-            else
+            } else {
               revoke.complete();
+            }
           } else {
             final error = completion == 'unknown'
                 ? StaffInvitationFailure.fromError(
@@ -726,10 +817,11 @@ void main() {
                       message: 'PRIVATE-ERROR',
                     ),
                   );
-            if (operation == 'create')
+            if (operation == 'create') {
               create.completeError(error);
-            else
+            } else {
               revoke.completeError(error);
+            }
           }
           await tester.pump();
           await tester.pump();
@@ -803,22 +895,24 @@ void main() {
         }
         await tester.pump();
         await tester.pumpWidget(const MaterialApp(home: Text('New screen')));
-        if (operation == 'create')
+        if (operation == 'create') {
           create.complete(
             const StaffInvitation('id-old', 'PRIVATE-CODE', '2030'),
           );
-        else
+        } else {
           action.complete();
+        }
         await tester.pumpAndSettle();
         expect(find.text('New screen'), findsOneWidget);
         expect(find.textContaining('PRIVATE'), findsNothing);
         expect(navigated, 0);
         expect(tester.takeException(), isNull);
-        if (operation == 'create')
+        if (operation == 'create') {
           expect(
             StaffInvitationCreation.forSession(auth, 'owner-a').blocked,
             true,
           );
+        }
         await auth.changes.close();
       },
     );
@@ -832,8 +926,9 @@ void main() {
         final service = _LifecycleInvites('first');
         await _mountLifecycle(tester, auth, service, _ownerScope('owner-a'));
         await _createDisplayed(tester, 'first');
-        if (!matching)
+        if (!matching) {
           await tester.enterText(find.byType(TextField).last, 'unrelated-id');
+        }
         await tester.tap(find.text('Revoke invitation'));
         await tester.pumpAndSettle();
         expect(service.revokedId, matching ? 'id-first' : 'unrelated-id');
@@ -1183,13 +1278,15 @@ void main() {
         final pending = Completer<void>();
         invites.creationPending = pending.future;
         invites.response = outcome == 'malformed' ? {} : _creationResponse('b');
-        if (outcome == 'permission')
+        if (outcome == 'permission') {
           invites.creationError = FirebaseFunctionsException(
             code: 'permission-denied',
             message: 'PRIVATE',
           );
-        if (outcome == 'timeout')
+        }
+        if (outcome == 'timeout') {
           invites.creationError = TimeoutException('PRIVATE');
+        }
         final callback = tester
             .widget<FilledButton>(find.byType(FilledButton))
             .onPressed!;
@@ -1550,7 +1647,10 @@ void main() {
             expectedCode = 'network-request-failed';
         }
         await expectLater(
-          FirebaseStaffInvitations(auth: auth).redeem('PRIVATE-INVITE'),
+          FirebaseStaffInvitations(
+            pilotPolicy: _normalPolicy,
+            auth: auth,
+          ).redeem('PRIVATE-INVITE'),
           throwsA(
             isA<StaffInvitationFailure>()
                 .having((e) => e.stage, 'stage', expectedStage)

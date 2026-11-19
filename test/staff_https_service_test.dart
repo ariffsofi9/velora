@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -112,10 +114,13 @@ class _Fixture {
   final changes = StreamController<StaffHttpsSession?>.broadcast(sync: true);
   final WorkspaceSession w;
   late StaffHttpsSession? current;
+  int sessionReads = 0;
   late final StaffHttpsService service;
   Future<String?> Function(StaffHttpsSession) token = (_) async =>
       'synthetic.token.value';
   _Fixture({
+    AndroidPilotPolicy? policy,
+    String Function(String)? sha,
     CafeRole role = CafeRole.owner,
     Duration timeout = const Duration(seconds: 1),
     int maxBytes = 262144,
@@ -123,14 +128,18 @@ class _Fixture {
   }) : w = workspace(role: role) {
     current = session(w);
     service = StaffHttpsService(
+      pilotPolicy: policy ?? _normalPolicy,
       endpoint: Uri.parse('https://backend.invalid'),
       projectId: 'velora-spark-test',
       endpointProjectId: 'velora-spark-test',
       client: client,
-      currentSession: () => current,
+      currentSession: () {
+        sessionReads++;
+        return current;
+      },
       sessionChanges: stream ?? changes.stream,
       idToken: (s) => token(s),
-      sha256: hash,
+      sha256: sha ?? hash,
       timeout: timeout,
       cleanupTimeout: const Duration(milliseconds: 10),
       maxResponseBytes: maxBytes,
@@ -148,7 +157,57 @@ Matcher failure({bool unknown = false, String? code}) =>
         .having((e) => code == null || e.code == code, 'code', true)
         .having((e) => e.toString().contains('PRIVATE'), 'safe error', false);
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final mutation in [false, true]) {
+      test(
+        'Staff HTTPS invalid=$invalid mutation=$mutation rejects before token/hash/session/HTTP',
+        () async {
+          var tokens = 0, hashes = 0;
+          final policy = _pilotPolicy(invalid);
+          final f = _Fixture(
+            policy: policy,
+            sha: (_) {
+              hashes++;
+              return digest;
+            },
+          );
+          f.token = (_) async {
+            tokens++;
+            return 'synthetic.token';
+          };
+          expect(f.service.pilotPolicy, same(policy));
+          await expectLater(
+            f.call(mutation),
+            throwsA(failure(code: 'pilot-policy-denied')),
+          );
+          expect(tokens, 0);
+          expect(hashes, 0);
+          expect(f.sessionReads, 0);
+          expect(f.client.calls, isEmpty);
+        },
+      );
+    }
+  }
+
   test(
     'full 100-member Unicode roster fits the bounded response budget',
     () async {
@@ -187,6 +246,7 @@ void main() {
       ]) {
         expect(
           () => StaffHttpsService(
+            pilotPolicy: _normalPolicy,
             endpoint: Uri.parse(uri),
             projectId: 'velora-spark-test',
             endpointProjectId: 'velora-spark-test',
@@ -201,6 +261,7 @@ void main() {
       }
       expect(
         () => StaffHttpsService(
+          pilotPolicy: _normalPolicy,
           endpoint: Uri.parse('https://backend.invalid'),
           projectId: 'velora-73222',
           endpointProjectId: 'velora-73222',
@@ -563,6 +624,7 @@ void main() {
         for (final stall in [false, true]) {
           final f = _Fixture();
           final service = StaffHttpsService(
+            pilotPolicy: _normalPolicy,
             endpoint: Uri.parse('https://backend.invalid'),
             projectId: 'velora-spark-test',
             endpointProjectId: 'velora-spark-test',

@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:velora/services/android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,9 +13,10 @@ class _JournalStore implements InvitationJournalPersistence {
   Object? value;
   bool fail = false;
   bool failWrite = false;
-  int writes = 0;
+  int writes = 0, reads = 0;
   @override
   Future<Object?> read(String projectId, String uid) async {
+    reads++;
     if (fail) throw StateError('synthetic persistence failure');
     return value == null ? null : jsonDecode(jsonEncode(value));
   }
@@ -131,7 +134,7 @@ class _Harness {
   );
   final scope = Object();
   final journalStore = _JournalStore();
-  int calls = 0, ids = 0;
+  int calls = 0, ids = 0, sessionReads = 0;
   String nextRequestId = 'request_123456789';
   final requests = <http.Request>[];
   Future<String?> Function(InvitationHttpsSession) token = (_) async =>
@@ -144,16 +147,21 @@ class _Harness {
     return response == null ? _response(_creation) : response!(request);
   });
   HttpsStaffInvitations service({
+    AndroidPilotPolicy? policy,
     Duration timeout = const Duration(seconds: 1),
     Duration cleanupTimeout = const Duration(milliseconds: 100),
     int limit = 65536,
     Object? scopeOverride,
   }) => HttpsStaffInvitations(
+    pilotPolicy: policy ?? _normalPolicy,
     endpoint: Uri.parse('https://test-api.example.invalid'),
     projectId: 'velora-spark-test',
     endpointProjectId: 'velora-spark-test',
     client: client,
-    currentSession: () => session,
+    currentSession: () {
+      sessionReads++;
+      return session;
+    },
     sessionChanges: eventStream ?? events.stream,
     idToken: (s) => token(s),
     sessionScope: scopeOverride ?? scope,
@@ -173,7 +181,86 @@ class _Harness {
   }
 }
 
+final _normalPolicy = AndroidPilotPolicy.parse(
+  const {},
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
+AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
+  invalid
+      ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
+      : {
+          'VELORA_ANDROID_READ_ONLY_PILOT': 'true',
+          'VELORA_FIREBASE_PROJECT': AndroidPilotPolicy.approvedProject,
+          'VELORA_ANDROID_PILOT_BINDINGS': '[["owner","cafe"]]',
+        },
+  isWeb: false,
+  platform: TargetPlatform.android,
+);
+
 void main() {
+  for (final invalid in [false, true]) {
+    for (final action in ['create', 'revoke', 'redeem', 'reconcile']) {
+      test(
+        'invitation HTTPS invalid=$invalid $action has zero token/id/recovery/HTTP activity',
+        () async {
+          final h = _Harness();
+          addTearDown(h.close);
+          var tokens = 0;
+          h.token = (_) async {
+            tokens++;
+            return 'synthetic.token';
+          };
+          final retained = PendingInvitationOperation(
+            projectId: 'velora-spark-test',
+            uid: 'owner',
+            requestId: 'request_123456789',
+            expectedCafeId: 'cafe',
+            expectedMembershipGeneration: 7,
+          );
+          h.journalStore.value = retained.toJson();
+          final before = jsonEncode(h.journalStore.value);
+          final policy = _pilotPolicy(invalid);
+          final service = h.service(policy: policy);
+          expect(service.pilotPolicy, same(policy));
+          expect(service.creationBlocked, true);
+          await expectLater(
+            switch (action) {
+              'create' => service.create(
+                'synthetic@example.test',
+                workspace: _workspace,
+              ),
+              'revoke' => service.revoke(
+                'synthetic-invitation',
+                workspace: _workspace,
+              ),
+              'redeem' => service.redeem('synthetic-code'),
+              _ => service.reconcile(),
+            },
+            throwsA(
+              isA<StaffInvitationTransportException>()
+                  .having((e) => e.code, 'policy', 'pilot-policy-denied')
+                  .having(
+                    (e) => e.outcomeUnknown,
+                    'observation cannot settle the retained mutation',
+                    action == 'reconcile',
+                  ),
+            ),
+          );
+          expect(tokens, 0);
+          expect(h.ids, 0);
+          expect(h.sessionReads, 0);
+          expect(h.calls, 0);
+          expect(h.requests, isEmpty);
+          expect(h.journalStore.reads, 0);
+          expect(h.journalStore.writes, 0);
+          expect(jsonEncode(h.journalStore.value), before);
+        },
+      );
+    }
+  }
+
   const pending = PendingInvitationOperation(
     projectId: 'velora-spark-test',
     uid: 'owner',
@@ -655,6 +742,7 @@ void main() {
       addTearDown(h.close);
       expect(
         () => HttpsStaffInvitations(
+          pilotPolicy: _normalPolicy,
           journal: InvitationRecoveryJournal(h.journalStore),
           endpoint: Uri.parse(url),
           projectId: 'velora-spark-test',
@@ -676,6 +764,7 @@ void main() {
     addTearDown(h.close);
     expect(
       () => HttpsStaffInvitations(
+        pilotPolicy: _normalPolicy,
         journal: InvitationRecoveryJournal(h.journalStore),
         endpoint: Uri.parse('https://api.example.invalid'),
         projectId: 'velora-spark-test',

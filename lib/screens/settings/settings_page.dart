@@ -7,6 +7,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../services/user_profile_service.dart';
 import '../../services/workspace_session.dart';
+import '../../services/android_pilot_policy.dart';
+import '../../models/user_profile.dart';
+import '../auth/workspace_gate.dart';
 import '../auth/login_page.dart';
 import '../team/team_management_page.dart';
 import '../menu/menu_page.dart';
@@ -20,12 +23,14 @@ import 'widgets_settings/profile_header_card.dart';
 import 'widgets_settings/settings_section_card.dart';
 
 class SettingsPage extends StatefulWidget {
+  final AndroidPilotAuthDependencies? pilot;
   final WorkspaceSession? workspaceSession;
   final FirebaseAuth? auth;
   final UserProfileService? profileService;
   final Future<SharedPreferences> Function()? preferences;
   const SettingsPage({
     super.key,
+    this.pilot,
     this.workspaceSession,
     this.auth,
     this.profileService,
@@ -37,16 +42,35 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  FirebaseAuth get _auth => widget.auth ?? FirebaseAuth.instance;
+  AndroidPilotAuthDependencies? get _pilot =>
+      widget.pilot ?? AndroidPilotAuthScope.read(context);
+  bool get _contained =>
+      _pilot != null && _pilot!.policy.state != AndroidPilotState.normal;
+  bool _allows(AndroidPilotCapability capability) =>
+      _pilot?.allows(capability) ?? true;
+  FirebaseAuth get _auth =>
+      _pilot?.auth ?? widget.auth ?? FirebaseAuth.instance;
+  UserProfile? _pilotProfile;
+  AndroidPilotAuthDependencies? _boundPilot;
+  bool _profileLoading = false;
+  String? _profileError;
   StreamSubscription<User?>? _authChanges;
   int _generation = 0;
   bool _loggingOut = false, _saving = false, _preferencesReady = false;
   String? _preferencesError;
-  bool get _authorized =>
+  bool get _baseAuthorized =>
+      (_pilot?.policy.isValid ?? true) &&
       !_loggingOut &&
       widget.workspaceSession?.isActive == true &&
       _auth.currentUser?.uid == widget.workspaceSession?.uid &&
-      _auth.currentUser?.emailVerified == true;
+      _auth.currentUser?.emailVerified == true &&
+      (!_contained ||
+          _pilot!.policy.matchesBinding(
+            uid: widget.workspaceSession!.uid,
+            cafeId: widget.workspaceSession!.cafeId,
+          ));
+  bool get _authorized =>
+      _baseAuthorized && (!_contained || _pilotProfile != null);
   bool _current(int generation) =>
       mounted && generation == _generation && _authorized;
   Future<SharedPreferences> _preferences() =>
@@ -67,26 +91,58 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    _authChanges = _auth.idTokenChanges().listen(
-      (user) {
-        if (user?.uid != widget.workspaceSession?.uid ||
-            user?.emailVerified != true) {
-          _generation++;
-          widget.workspaceSession?.invalidate();
-        }
-        if (mounted) setState(() {});
-      },
-      onError: (Object _) {
-        _generation++;
-        widget.workspaceSession?.invalidate();
-        if (mounted) setState(() {});
-      },
-    );
+    _bind();
+  }
+
+  void _bind() {
+    _boundPilot = _pilot;
+    _authChanges?.cancel();
+    _pilotProfile = null;
+    _profileLoading = false;
+    _profileError = null;
+    if (_pilot?.policy.isValid == false) {
+      _profileError = 'Profile could not be verified.';
+      return;
+    }
+    final auth = _auth;
+    final session = widget.workspaceSession;
+    var sawIdentity = false;
+    _authChanges =
+        (_contained ? auth.authStateChanges() : auth.idTokenChanges()).listen(
+          (user) {
+            if (!mounted ||
+                !identical(auth, _auth) ||
+                !identical(session, widget.workspaceSession)) {
+              return;
+            }
+            if (user?.uid != widget.workspaceSession?.uid ||
+                user?.emailVerified != true ||
+                (_contained && sawIdentity)) {
+              _generation++;
+              widget.workspaceSession?.invalidate();
+              _pilotProfile = null;
+              _profileLoading = false;
+            }
+            sawIdentity = true;
+            if (mounted) setState(() {});
+          },
+          onError: (Object _) {
+            _generation++;
+            widget.workspaceSession?.invalidate();
+            _pilotProfile = null;
+            _profileLoading = false;
+            if (mounted) setState(() {});
+          },
+        );
     _loadSettings();
     _createUserProfile();
   }
 
   Future<void> _createUserProfile() async {
+    if (_contained) {
+      await _loadPilotProfile();
+      return;
+    }
     if (!_authorized) return;
     final generation = _generation;
     try {
@@ -99,8 +155,56 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _loadPilotProfile() async {
+    if (!mounted) return;
+    final pilot = _pilot;
+    if (pilot == null || !_baseAuthorized) {
+      if (mounted) {
+        setState(() => _profileError = 'Profile could not be verified.');
+      }
+      return;
+    }
+    final generation = ++_generation;
+    final session = widget.workspaceSession;
+    bool current() =>
+        mounted &&
+        generation == _generation &&
+        identical(pilot, _pilot) &&
+        identical(session, widget.workspaceSession) &&
+        _baseAuthorized;
+    setState(() {
+      _pilotProfile = null;
+      _profileLoading = true;
+      _profileError = null;
+    });
+    try {
+      await pilot.authService.requirePilotProfileEligibility(
+        cafeId: session!.cafeId,
+      );
+      if (!current()) return;
+      final profile =
+          await UserProfileService(
+                firestore: pilot.firestore,
+                pilotPolicy: pilot.policy,
+              )
+              .readExistingServerProfile(pilot.auth.currentUser!)
+              .timeout(const Duration(seconds: 15));
+      if (!current()) return;
+      setState(() => _pilotProfile = profile);
+    } catch (_) {
+      if (current()) {
+        setState(() => _profileError = 'Profile could not be verified.');
+      }
+    } finally {
+      if (current()) setState(() => _profileLoading = false);
+    }
+  }
+
   Future<void> _loadSettings() async {
-    if (!_authorized) return;
+    if (!mounted) return;
+    if (!_allows(AndroidPilotCapability.preferenceWrites) || !_authorized) {
+      return;
+    }
     final generation = _generation;
     try {
       final prefs = await _preferences();
@@ -143,7 +247,13 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _saveBool(String key, bool value) async {
-    if (!_authorized || !_preferencesReady || _saving) return;
+    if (!mounted) return;
+    if (!_allows(AndroidPilotCapability.preferenceWrites) ||
+        !_authorized ||
+        !_preferencesReady ||
+        _saving) {
+      return;
+    }
     final generation = _generation, previous = _value(key);
     setState(() {
       _saving = true;
@@ -151,7 +261,10 @@ class _SettingsPageState extends State<SettingsPage> {
     });
     try {
       final prefs = await _preferences();
-      if (!_current(generation)) return;
+      if (!_current(generation) ||
+          !_allows(AndroidPilotCapability.preferenceWrites)) {
+        return;
+      }
       if (!await prefs.setBool(key, value)) {
         throw StateError('Preference not saved');
       }
@@ -166,11 +279,17 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _openEditProfile(User user) async {
-    if (!_authorized || _auth.currentUser?.uid != user.uid) return;
+    if (!mounted) return;
+    if (!_allows(AndroidPilotCapability.profileWrites) ||
+        !_authorized ||
+        _auth.currentUser?.uid != user.uid) {
+      return;
+    }
     final generation = _generation;
+    final pilot = _pilot;
     final updated = await showDialog<bool>(
       context: context,
-      builder: (_) => EditProfileDialog(user: user),
+      builder: (_) => EditProfileDialog(user: user, pilot: pilot),
     );
 
     if (updated == true && _current(generation)) {
@@ -185,6 +304,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _handleLogout() async {
     if (_loggingOut) return;
+    final pilot = _pilot;
     _generation++;
     widget.workspaceSession?.invalidate();
     setState(() => _loggingOut = true);
@@ -207,21 +327,44 @@ class _SettingsPageState extends State<SettingsPage> {
 
     Navigator.pushAndRemoveUntil(
       context,
-      MaterialPageRoute(builder: (_) => const LoginPage()),
+      _contained
+          ? PageRouteBuilder<void>(
+              transitionDuration: Duration.zero,
+              reverseTransitionDuration: Duration.zero,
+              pageBuilder: (context, animation, secondaryAnimation) =>
+                  LoginPage(pilot: pilot),
+            )
+          : MaterialPageRoute(builder: (_) => LoginPage(pilot: pilot)),
       (route) => false,
     );
   }
 
   void _openTeamManagement() {
-    if (!_authorized) return;
+    if (!mounted) return;
+    if (!_allows(AndroidPilotCapability.teamCallables) || !_authorized) return;
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const TeamManagementPage()),
     );
   }
 
+  void _openMenu() {
+    if (!mounted) return;
+    if (!_allows(AndroidPilotCapability.menuCallables) || !_authorized) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MenuPage()),
+    );
+  }
+
   void _openAppearance() {
-    if (!_authorized || !_preferencesReady || _saving) return;
+    if (!mounted) return;
+    if (!_allows(AndroidPilotCapability.preferenceWrites) ||
+        !_authorized ||
+        !_preferencesReady ||
+        _saving) {
+      return;
+    }
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -236,14 +379,27 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    context.dependOnInheritedWidgetOfExactType<AndroidPilotAuthScope>();
+    if (!identical(_boundPilot, _pilot)) {
+      _generation++;
+      _preferencesReady = false;
+      _saving = false;
+      _bind();
+    }
+  }
+
+  @override
   void didUpdateWidget(covariant SettingsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.workspaceSession, widget.workspaceSession)) {
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.pilot, widget.pilot) ||
+        !identical(oldWidget.auth, widget.auth)) {
       _generation++;
       _saving = false;
       _preferencesReady = false;
-      _loadSettings();
-      _createUserProfile();
+      _bind();
     }
   }
 
@@ -286,10 +442,34 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 const SizedBox(height: 18),
 
-                ProfileHeaderCard(
-                  user: user,
-                  onEdit: user == null ? null : () => _openEditProfile(user),
-                ),
+                if (_contained)
+                  SettingsSectionCard(
+                    title: 'Read-only profile',
+                    children: [
+                      if (_profileLoading) const Text('Verifying profile…'),
+                      if (_authorized) ...[
+                        Text(_pilotProfile!.username),
+                        Text(_pilotProfile!.email),
+                      ],
+                      if (_profileError != null) Text(_profileError!),
+                      if (!_authorized &&
+                          !_profileLoading &&
+                          _profileError == null)
+                        const Text('Profile could not be verified.'),
+                      if (!_profileLoading &&
+                          _baseAuthorized &&
+                          _pilotProfile == null)
+                        TextButton(
+                          onPressed: _loadPilotProfile,
+                          child: const Text('Retry profile'),
+                        ),
+                    ],
+                  )
+                else
+                  ProfileHeaderCard(
+                    user: user,
+                    onEdit: user == null ? null : () => _openEditProfile(user),
+                  ),
 
                 const SizedBox(height: 18),
 
@@ -312,23 +492,21 @@ class _SettingsPageState extends State<SettingsPage> {
                       icon: Icons.groups_2_outlined,
                       title: 'Team Management',
                       subtitle: 'View verified café membership',
-                      onTap: authorized ? _openTeamManagement : null,
+                      onTap:
+                          authorized &&
+                              _allows(AndroidPilotCapability.teamCallables)
+                          ? _openTeamManagement
+                          : null,
                     ),
                     _AccountTile(
                       icon: Icons.restaurant_menu_rounded,
                       title: 'Menu Management',
                       subtitle: 'View menu items and availability',
-                      onTap: !authorized
-                          ? null
-                          : () {
-                              if (!_authorized) return;
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const MenuPage(),
-                                ),
-                              );
-                            },
+                      onTap:
+                          authorized &&
+                              _allows(AndroidPilotCapability.menuCallables)
+                          ? _openMenu
+                          : null,
                     ),
                   ],
                 ),
@@ -346,7 +524,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                 ],
                 IgnorePointer(
-                  ignoring: !authorized || !_preferencesReady || _saving,
+                  ignoring:
+                      !_allows(AndroidPilotCapability.preferenceWrites) ||
+                      !authorized ||
+                      !_preferencesReady ||
+                      _saving,
                   child: NotificationSettingsCard(
                     nearExpiryAlerts: nearExpiryAlerts,
                     lowStockAlerts: lowStockAlerts,

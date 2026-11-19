@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show appFlavor;
 import '../firebase_options.dart';
 import '../firebase_spark_test_options.dart';
+import 'android_pilot_policy.dart';
 
 class FirebaseConfigurationException extends StateError {
   FirebaseConfigurationException(super.message);
@@ -57,6 +58,7 @@ class FirebaseStartupConfig {
   );
   Never _fail(String message) => throw FirebaseConfigurationException(message);
   FirebaseOptions resolve({
+    AndroidPilotPolicy? pilotPolicy,
     required bool isWeb,
     required TargetPlatform platform,
     FirebaseOptions? webOptions = DefaultFirebaseOptions.web,
@@ -65,6 +67,18 @@ class FirebaseStartupConfig {
     FirebaseOptions cloudOptions = DefaultFirebaseOptions.android,
     FirebaseOptions? sparkTestWebOptions = SparkTestFirebaseOptions.web,
   }) {
+    if (pilotPolicy != null) {
+      if (!pilotPolicy.isValid ||
+          (pilotPolicy.isRestricted &&
+              (isWeb ||
+                  platform != TargetPlatform.android ||
+                  androidFlavor != null ||
+                  cloudProject != pilotPolicy.projectId))) {
+        _fail(
+          'Android pilot configuration or project/platform binding is invalid.',
+        );
+      }
+    }
     if (cloudProject == SparkTestFirebaseOptions.projectId) {
       // Separate Web-only acceptance target. Native Android remains blocked
       // until its project registration/Google Services identity is reviewed.
