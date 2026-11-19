@@ -1,0 +1,513 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Offline design only. No endpoint, credentials, dispatch or production evaluation target.",
+  "baseline": {
+    "projectId": "velora-73222",
+    "commit": "6e679c9c67efa7050732cc635b722cb86cad545d",
+    "rulesPath": "docs/firebase/workspace.firestore.rules",
+    "hashEncoding": "UTF-8 with LF line endings",
+    "rulesSha256": "73844e2174c028696bf5b36f22fbc2a6e2a3f6849ad9848913135e393d173611"
+  },
+  "isolationNotes": "Project ID is source provenance only. Full source would be supplied inline only after separate approval. Missing lookups must never fall back to live data.",
+  "resultAcceptance": "Require no compiler or request errors, a result for every submitted case in order, and diagnostics sufficient to rule out fixture and adapter errors. An intended missing-claim denial may use Rules missing-field semantics if distinguishable from those errors.",
+  "claimVariants": {
+    "booleanTrue": {
+      "email_verified": true
+    },
+    "stringTrue": {
+      "email_verified": "true"
+    },
+    "explicitNull": {
+      "email_verified": null
+    },
+    "omitted": {}
+  },
+  "unresolved": {
+    "typed-claims": "Qualify the Firestore adapter for boolean, string and null claim values and an absent key. Preserve types without coercion.",
+    "omitted-claim": "Qualify how the evaluator represents a missing token key and distinguishes missing-field rule behavior from request or fixture errors.",
+    "member-get-mocks": "Qualify exact-path get mocks, Firestore document data typing and repeated lookup of the same owner path. Require trace evidence of the intended predicate.",
+    "update-context": "Qualify Firestore update method, target resource and complete proposed request.resource encoding. Confirm the denial reaches the inventory write rule.",
+    "isolation": "The API has no documented no-production-data switch. Require separate authorization and verified isolated Spark evaluation before dispatch."
+  },
+  "cases": [
+    {
+      "matrixId": "owner-verified-get",
+      "classification": "Conditional on API semantics",
+      "rules": {
+        "source": "docs/firebase/workspace.firestore.rules:151",
+        "predicate": "isMember(cafeId)"
+      },
+      "existingDocuments": [
+        "cafes/synthetic-cafe-a/inventory/synthetic-item",
+        "user_cafe_memberships/synthetic-owner-a",
+        "cafes/synthetic-cafe-a/members/synthetic-owner-a",
+        "cafes/synthetic-cafe-a"
+      ],
+      "missingDocuments": [],
+      "unresolved": [
+        "typed-claims",
+        "member-get-mocks",
+        "isolation"
+      ],
+      "candidateTestCase": {
+        "expectation": "ALLOW",
+        "request": {
+          "auth": {
+            "uid": "synthetic-owner-a",
+            "token": {
+              "email_verified": true
+            }
+          },
+          "path": "/databases/(default)/documents/cafes/synthetic-cafe-a/inventory/synthetic-item",
+          "method": "get"
+        },
+        "resource": {
+          "data": {
+            "name": "Synthetic item A"
+          }
+        },
+        "functionMocks": [
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/user_cafe_memberships/synthetic-owner-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-owner-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a/members/synthetic-owner-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-owner-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2,
+                  "role": "owner"
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "ownerUid": "synthetic-owner-a",
+                  "status": "active",
+                  "schemaVersion": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "matrixId": "staff-verified-get",
+      "classification": "Conditional on API semantics",
+      "rules": {
+        "source": "docs/firebase/workspace.firestore.rules:151",
+        "predicate": "isMember(cafeId)"
+      },
+      "existingDocuments": [
+        "cafes/synthetic-cafe-a/inventory/synthetic-item",
+        "user_cafe_memberships/synthetic-staff-a",
+        "cafes/synthetic-cafe-a/members/synthetic-staff-a",
+        "cafes/synthetic-cafe-a",
+        "cafes/synthetic-cafe-a/members/synthetic-owner-a",
+        "user_cafe_memberships/synthetic-owner-a"
+      ],
+      "missingDocuments": [],
+      "unresolved": [
+        "typed-claims",
+        "member-get-mocks",
+        "isolation"
+      ],
+      "candidateTestCase": {
+        "expectation": "ALLOW",
+        "request": {
+          "auth": {
+            "uid": "synthetic-staff-a",
+            "token": {
+              "email_verified": true
+            }
+          },
+          "path": "/databases/(default)/documents/cafes/synthetic-cafe-a/inventory/synthetic-item",
+          "method": "get"
+        },
+        "resource": {
+          "data": {
+            "name": "Synthetic item A"
+          }
+        },
+        "functionMocks": [
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/user_cafe_memberships/synthetic-staff-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-staff-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a/members/synthetic-staff-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-staff-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2,
+                  "role": "staff"
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "ownerUid": "synthetic-owner-a",
+                  "status": "active",
+                  "schemaVersion": 1
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a/members/synthetic-owner-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-owner-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2,
+                  "role": "owner"
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/user_cafe_memberships/synthetic-owner-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-owner-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "matrixId": "owner-missing-claim",
+      "classification": "Conditional on API semantics",
+      "rules": {
+        "source": "docs/firebase/workspace.firestore.rules:44",
+        "predicate": "isMember(cafeId)"
+      },
+      "existingDocuments": [
+        "cafes/synthetic-cafe-a/inventory/synthetic-item"
+      ],
+      "missingDocuments": [],
+      "unresolved": [
+        "omitted-claim",
+        "isolation"
+      ],
+      "candidateTestCase": {
+        "expectation": "DENY",
+        "request": {
+          "auth": {
+            "uid": "synthetic-owner-a",
+            "token": {}
+          },
+          "path": "/databases/(default)/documents/cafes/synthetic-cafe-a/inventory/synthetic-item",
+          "method": "get"
+        },
+        "resource": {
+          "data": {
+            "name": "Synthetic item A"
+          }
+        },
+        "functionMocks": []
+      }
+    },
+    {
+      "matrixId": "owner-malformed-claim",
+      "classification": "Conditional on API semantics",
+      "rules": {
+        "source": "docs/firebase/workspace.firestore.rules:44",
+        "predicate": "isMember(cafeId)"
+      },
+      "existingDocuments": [
+        "cafes/synthetic-cafe-a/inventory/synthetic-item"
+      ],
+      "missingDocuments": [],
+      "unresolved": [
+        "typed-claims",
+        "isolation"
+      ],
+      "candidateTestCase": {
+        "expectation": "DENY",
+        "request": {
+          "auth": {
+            "uid": "synthetic-owner-a",
+            "token": {
+              "email_verified": "true"
+            }
+          },
+          "path": "/databases/(default)/documents/cafes/synthetic-cafe-a/inventory/synthetic-item",
+          "method": "get"
+        },
+        "resource": {
+          "data": {
+            "name": "Synthetic item A"
+          }
+        },
+        "functionMocks": []
+      }
+    },
+    {
+      "matrixId": "staff-revoked-mapping",
+      "classification": "Conditional on API semantics",
+      "rules": {
+        "source": "docs/firebase/workspace.firestore.rules:26",
+        "predicate": "member(cafeId)"
+      },
+      "existingDocuments": [
+        "cafes/synthetic-cafe-a/inventory/synthetic-item",
+        "user_cafe_memberships/synthetic-staff-a",
+        "cafes/synthetic-cafe-a/members/synthetic-staff-a",
+        "cafes/synthetic-cafe-a",
+        "cafes/synthetic-cafe-a/members/synthetic-owner-a",
+        "user_cafe_memberships/synthetic-owner-a"
+      ],
+      "missingDocuments": [],
+      "unresolved": [
+        "typed-claims",
+        "member-get-mocks",
+        "isolation"
+      ],
+      "candidateTestCase": {
+        "expectation": "DENY",
+        "request": {
+          "auth": {
+            "uid": "synthetic-staff-a",
+            "token": {
+              "email_verified": true
+            }
+          },
+          "path": "/databases/(default)/documents/cafes/synthetic-cafe-a/inventory/synthetic-item",
+          "method": "get"
+        },
+        "resource": {
+          "data": {
+            "name": "Synthetic item A"
+          }
+        },
+        "functionMocks": [
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/user_cafe_memberships/synthetic-staff-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-staff-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "revoked",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a/members/synthetic-staff-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-staff-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2,
+                  "role": "staff"
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "ownerUid": "synthetic-owner-a",
+                  "status": "active",
+                  "schemaVersion": 1
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/cafes/synthetic-cafe-a/members/synthetic-owner-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-owner-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2,
+                  "role": "owner"
+                }
+              }
+            }
+          },
+          {
+            "function": "get",
+            "args": [
+              {
+                "exactValue": "/databases/(default)/documents/user_cafe_memberships/synthetic-owner-a"
+              }
+            ],
+            "result": {
+              "value": {
+                "data": {
+                  "uid": "synthetic-owner-a",
+                  "cafeId": "synthetic-cafe-a",
+                  "status": "active",
+                  "schemaVersion": 1,
+                  "membershipGeneration": 2
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "matrixId": "owner-inventory-update",
+      "classification": "Conditional on API semantics",
+      "rules": {
+        "source": "docs/firebase/workspace.firestore.rules:152",
+        "predicate": "allow create, update, delete: if false"
+      },
+      "existingDocuments": [
+        "cafes/synthetic-cafe-a/inventory/synthetic-item"
+      ],
+      "missingDocuments": [],
+      "unresolved": [
+        "typed-claims",
+        "update-context",
+        "isolation"
+      ],
+      "candidateTestCase": {
+        "expectation": "DENY",
+        "request": {
+          "auth": {
+            "uid": "synthetic-owner-a",
+            "token": {
+              "email_verified": true
+            }
+          },
+          "path": "/databases/(default)/documents/cafes/synthetic-cafe-a/inventory/synthetic-item",
+          "method": "update",
+          "resource": {
+            "data": {
+              "name": "Synthetic write"
+            }
+          }
+        },
+        "resource": {
+          "data": {
+            "name": "Synthetic item A"
+          }
+        },
+        "functionMocks": []
+      }
+    }
+  ]
+}

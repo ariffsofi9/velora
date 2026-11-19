@@ -1,0 +1,1134 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Synthetic Firestore Rules expectations for review only. Baseline project identifies the source evidence, never an execution target.",
+  "baseline": {
+    "projectId": "velora-73222",
+    "commit": "6e679c9c67efa7050732cc635b722cb86cad545d",
+    "rulesPath": "docs/firebase/workspace.firestore.rules",
+    "hashEncoding": "UTF-8 with LF line endings",
+    "rulesSha256": "73844e2174c028696bf5b36f22fbc2a6e2a3f6849ad9848913135e393d173611"
+  },
+  "fixtureSemantics": "Each case starts independently from its referenced fixture. replace supplies entire documents, omit removes paths, and absent requires those paths to be absent before the operation. Unlisted documents are absent. update writeData is a field patch; create writeData is the complete proposed document. batch_create writes execute atomically. REQUEST_TIME denotes the same request-time timestamp in each bootstrap timestamp field. All data is synthetic.",
+  "fixtures": {
+    "shared": {
+      "cafes/synthetic-cafe-a": {
+        "ownerUid": "synthetic-owner-a",
+        "status": "active",
+        "schemaVersion": 1
+      },
+      "cafes/synthetic-cafe-b": {
+        "ownerUid": "synthetic-owner-b",
+        "status": "active",
+        "schemaVersion": 1
+      },
+      "user_cafe_memberships/synthetic-owner-a": {
+        "uid": "synthetic-owner-a",
+        "cafeId": "synthetic-cafe-a",
+        "status": "active",
+        "schemaVersion": 1,
+        "membershipGeneration": 2
+      },
+      "cafes/synthetic-cafe-a/members/synthetic-owner-a": {
+        "uid": "synthetic-owner-a",
+        "cafeId": "synthetic-cafe-a",
+        "status": "active",
+        "schemaVersion": 1,
+        "membershipGeneration": 2,
+        "role": "owner"
+      },
+      "user_cafe_memberships/synthetic-staff-a": {
+        "uid": "synthetic-staff-a",
+        "cafeId": "synthetic-cafe-a",
+        "status": "active",
+        "schemaVersion": 1,
+        "membershipGeneration": 2
+      },
+      "cafes/synthetic-cafe-a/members/synthetic-staff-a": {
+        "uid": "synthetic-staff-a",
+        "cafeId": "synthetic-cafe-a",
+        "status": "active",
+        "schemaVersion": 1,
+        "membershipGeneration": 2,
+        "role": "staff"
+      },
+      "user_cafe_memberships/synthetic-owner-b": {
+        "uid": "synthetic-owner-b",
+        "cafeId": "synthetic-cafe-b",
+        "status": "active",
+        "schemaVersion": 1,
+        "membershipGeneration": 2
+      },
+      "cafes/synthetic-cafe-b/members/synthetic-owner-b": {
+        "uid": "synthetic-owner-b",
+        "cafeId": "synthetic-cafe-b",
+        "status": "active",
+        "schemaVersion": 1,
+        "membershipGeneration": 2,
+        "role": "owner"
+      },
+      "cafes/synthetic-cafe-a/inventory/synthetic-item": {
+        "name": "Synthetic item A"
+      },
+      "cafes/synthetic-cafe-b/inventory/synthetic-item": {
+        "name": "Synthetic item B"
+      },
+      "cafes/synthetic-cafe-a/saved_recipes/synthetic-recipe": {
+        "title": "Synthetic recipe A"
+      },
+      "cafes/synthetic-cafe-b/saved_recipes/synthetic-recipe": {
+        "title": "Synthetic recipe B"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "owner-verified-get",
+      "description": "Verified owner reads own-café inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "ALLOW",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:151",
+      "fixtureDependencyNotes": "Use the shared active café, actor and owner links."
+    },
+    {
+      "id": "owner-verified-list",
+      "description": "Verified owner lists own-café inventory",
+      "path": "cafes/synthetic-cafe-a/inventory",
+      "operation": "list",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "ALLOW",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:151",
+      "fixtureDependencyNotes": "Collection query within café A, with no filters."
+    },
+    {
+      "id": "owner-unverified",
+      "description": "Unverified owner reads own-café inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": false
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:151",
+      "fixtureDependencyNotes": "Only the actor token changes."
+    },
+    {
+      "id": "owner-missing-claim",
+      "description": "Missing verification claim for owner",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {}
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:44",
+      "fixtureDependencyNotes": "Omit the claim entirely."
+    },
+    {
+      "id": "owner-malformed-claim",
+      "description": "String verification claim for owner",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": "true"
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:44",
+      "fixtureDependencyNotes": "Preserve the string type in the evaluator."
+    },
+    {
+      "id": "owner-inventory-create",
+      "description": "owner client cannot create inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-new-item",
+      "operation": "create",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow create, update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:152",
+      "fixtureDependencyNotes": "Existing target for update/delete; absent target for create.",
+      "writeData": {
+        "name": "Synthetic write"
+      }
+    },
+    {
+      "id": "owner-inventory-update",
+      "description": "owner client cannot update inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "update",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow create, update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:152",
+      "fixtureDependencyNotes": "Existing target for update/delete; absent target for create.",
+      "writeData": {
+        "name": "Synthetic write"
+      }
+    },
+    {
+      "id": "owner-inventory-delete",
+      "description": "owner client cannot delete inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "delete",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow create, update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:152",
+      "fixtureDependencyNotes": "Existing target for update/delete; absent target for create."
+    },
+    {
+      "id": "staff-verified-get",
+      "description": "Verified staff reads own-café inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "ALLOW",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:151",
+      "fixtureDependencyNotes": "Use the shared active café, actor and owner links."
+    },
+    {
+      "id": "staff-verified-list",
+      "description": "Verified staff lists own-café inventory",
+      "path": "cafes/synthetic-cafe-a/inventory",
+      "operation": "list",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "ALLOW",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:151",
+      "fixtureDependencyNotes": "Collection query within café A, with no filters."
+    },
+    {
+      "id": "staff-unverified",
+      "description": "Unverified staff reads own-café inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": false
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:151",
+      "fixtureDependencyNotes": "Only the actor token changes."
+    },
+    {
+      "id": "staff-missing-claim",
+      "description": "Missing verification claim for staff",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {}
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:44",
+      "fixtureDependencyNotes": "Omit the claim entirely."
+    },
+    {
+      "id": "staff-malformed-claim",
+      "description": "String verification claim for staff",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": "true"
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:44",
+      "fixtureDependencyNotes": "Preserve the string type in the evaluator."
+    },
+    {
+      "id": "staff-inventory-create",
+      "description": "staff client cannot create inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-new-item",
+      "operation": "create",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow create, update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:152",
+      "fixtureDependencyNotes": "Existing target for update/delete; absent target for create.",
+      "writeData": {
+        "name": "Synthetic write"
+      }
+    },
+    {
+      "id": "staff-inventory-update",
+      "description": "staff client cannot update inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "update",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow create, update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:152",
+      "fixtureDependencyNotes": "Existing target for update/delete; absent target for create.",
+      "writeData": {
+        "name": "Synthetic write"
+      }
+    },
+    {
+      "id": "staff-inventory-delete",
+      "description": "staff client cannot delete inventory",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "delete",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow create, update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:152",
+      "fixtureDependencyNotes": "Existing target for update/delete; absent target for create."
+    },
+    {
+      "id": "anonymous-inventory",
+      "description": "Anonymous inventory read",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": null,
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isMember(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:151",
+      "fixtureDependencyNotes": "Use the shared active café, actor and owner links."
+    },
+    {
+      "id": "staff-cross-cafe",
+      "description": "Verified Staff A reads café B inventory",
+      "path": "cafes/synthetic-cafe-b/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "member(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:26",
+      "fixtureDependencyNotes": "Café B and its valid owner chain exist. Staff A has no café B member document."
+    },
+    {
+      "id": "staff-revoked-mapping",
+      "description": "Staff mapping revoked",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "user_cafe_memberships/synthetic-staff-a": {
+            "uid": "synthetic-staff-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "revoked",
+            "schemaVersion": 1,
+            "membershipGeneration": 2
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "member(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:26",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "staff-inactive-member",
+      "description": "Staff member inactive",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "cafes/synthetic-cafe-a/members/synthetic-staff-a": {
+            "uid": "synthetic-staff-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "inactive",
+            "schemaVersion": 1,
+            "membershipGeneration": 2,
+            "role": "staff"
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "member(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:26",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "cafe-inactive",
+      "description": "Café inactive",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "cafes/synthetic-cafe-a": {
+            "ownerUid": "synthetic-owner-a",
+            "status": "inactive",
+            "schemaVersion": 1
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "member(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:26",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "owner-chain-missing",
+      "description": "Owner mapping absent",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {},
+        "omit": [
+          "user_cafe_memberships/synthetic-owner-a"
+        ]
+      },
+      "expected": "DENY",
+      "predicate": "member(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:26",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "owner-chain-inactive",
+      "description": "Owner member inactive",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "cafes/synthetic-cafe-a/members/synthetic-owner-a": {
+            "uid": "synthetic-owner-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "inactive",
+            "schemaVersion": 1,
+            "membershipGeneration": 2,
+            "role": "owner"
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "member(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:26",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "generation-mismatch",
+      "description": "Staff generations differ",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "user_cafe_memberships/synthetic-staff-a": {
+            "uid": "synthetic-staff-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1,
+            "membershipGeneration": 3
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "matchingGeneration(mapping, membership)",
+      "source": "docs/firebase/workspace.firestore.rules:13",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "generation-mapping-absent",
+      "description": "Only one Staff generation is absent",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "user_cafe_memberships/synthetic-staff-a": {
+            "uid": "synthetic-staff-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "matchingGeneration(mapping, membership)",
+      "source": "docs/firebase/workspace.firestore.rules:13",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "generation-member-absent",
+      "description": "Only one Staff generation is absent",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "cafes/synthetic-cafe-a/members/synthetic-staff-a": {
+            "uid": "synthetic-staff-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1,
+            "role": "staff"
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "matchingGeneration(mapping, membership)",
+      "source": "docs/firebase/workspace.firestore.rules:13",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "owner-generation-mismatch",
+      "description": "Owner generation mismatch blocks Staff",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "user_cafe_memberships/synthetic-owner-a": {
+            "uid": "synthetic-owner-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1,
+            "membershipGeneration": 3
+          }
+        },
+        "omit": []
+      },
+      "expected": "DENY",
+      "predicate": "matchingGeneration(mapping, membership)",
+      "source": "docs/firebase/workspace.firestore.rules:13",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "legacy-zero",
+      "description": "Both actor and owner generation pairs omit both fields",
+      "path": "cafes/synthetic-cafe-a/inventory/synthetic-item",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "replace": {
+          "user_cafe_memberships/synthetic-owner-a": {
+            "uid": "synthetic-owner-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1
+          },
+          "cafes/synthetic-cafe-a/members/synthetic-owner-a": {
+            "uid": "synthetic-owner-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1,
+            "role": "owner"
+          },
+          "user_cafe_memberships/synthetic-staff-a": {
+            "uid": "synthetic-staff-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1
+          },
+          "cafes/synthetic-cafe-a/members/synthetic-staff-a": {
+            "uid": "synthetic-staff-a",
+            "cafeId": "synthetic-cafe-a",
+            "status": "active",
+            "schemaVersion": 1,
+            "role": "staff"
+          }
+        },
+        "omit": []
+      },
+      "expected": "ALLOW",
+      "predicate": "matchingGeneration(mapping, membership)",
+      "source": "docs/firebase/workspace.firestore.rules:13",
+      "fixtureDependencyNotes": "Apply only these fixture overrides to the shared scenario."
+    },
+    {
+      "id": "owner-list-members",
+      "description": "Verified Owner lists café members",
+      "path": "cafes/synthetic-cafe-a/members",
+      "operation": "list",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "ALLOW",
+      "predicate": "isOwner(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:146",
+      "fixtureDependencyNotes": "Use the shared active café, actor and owner links."
+    },
+    {
+      "id": "staff-list-members",
+      "description": "Verified Staff cannot list café members",
+      "path": "cafes/synthetic-cafe-a/members",
+      "operation": "list",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "isOwner(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:146",
+      "fixtureDependencyNotes": "Use the shared active café, actor and owner links."
+    },
+    {
+      "id": "staff-update-mapping",
+      "description": "Staff cannot change own mapping generation",
+      "path": "user_cafe_memberships/synthetic-staff-a",
+      "operation": "update",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow list, update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:136",
+      "fixtureDependencyNotes": "Use the shared active café, actor and owner links.",
+      "writeData": {
+        "membershipGeneration": 3
+      }
+    },
+    {
+      "id": "owner-delete-member",
+      "description": "Owner cannot delete a Staff member directly",
+      "path": "cafes/synthetic-cafe-a/members/synthetic-staff-a",
+      "operation": "delete",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "allow update, delete: if false",
+      "source": "docs/firebase/workspace.firestore.rules:148",
+      "fixtureDependencyNotes": "Use the shared active café, actor and owner links."
+    },
+    {
+      "id": "owner-create-member",
+      "description": "Owner cannot add a member to an existing café directly",
+      "path": "cafes/synthetic-cafe-a/members/synthetic-new-staff",
+      "operation": "create",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "ownerBootstrap(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:147",
+      "fixtureDependencyNotes": "Existing café. Target belongs to another UID.",
+      "writeData": {
+        "uid": "synthetic-new-staff",
+        "cafeId": "synthetic-cafe-a",
+        "status": "active",
+        "schemaVersion": 1,
+        "membershipGeneration": 2,
+        "role": "staff"
+      }
+    },
+    {
+      "id": "owner-same-cafe-recipe-get",
+      "description": "Direct same-café recipe get denied for owner",
+      "path": "cafes/synthetic-cafe-a/saved_recipes/synthetic-recipe",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "default deny",
+      "source": "docs/firebase/workspace.firestore.rules:173",
+      "fixtureDependencyNotes": "Synthetic recipe exists. Direct Firestore operation only."
+    },
+    {
+      "id": "owner-same-cafe-recipe-list",
+      "description": "Direct same-café recipe list denied for owner",
+      "path": "cafes/synthetic-cafe-a/saved_recipes",
+      "operation": "list",
+      "auth": {
+        "uid": "synthetic-owner-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "default deny",
+      "source": "docs/firebase/workspace.firestore.rules:173",
+      "fixtureDependencyNotes": "Synthetic recipe exists. Direct Firestore operation only."
+    },
+    {
+      "id": "staff-same-cafe-recipe-get",
+      "description": "Direct same-café recipe get denied for staff",
+      "path": "cafes/synthetic-cafe-a/saved_recipes/synthetic-recipe",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "default deny",
+      "source": "docs/firebase/workspace.firestore.rules:173",
+      "fixtureDependencyNotes": "Synthetic recipe exists. Direct Firestore operation only."
+    },
+    {
+      "id": "staff-same-cafe-recipe-list",
+      "description": "Direct same-café recipe list denied for staff",
+      "path": "cafes/synthetic-cafe-a/saved_recipes",
+      "operation": "list",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "default deny",
+      "source": "docs/firebase/workspace.firestore.rules:173",
+      "fixtureDependencyNotes": "Synthetic recipe exists. Direct Firestore operation only."
+    },
+    {
+      "id": "staff-cross-cafe-recipe",
+      "description": "Direct cross-café recipe read denied",
+      "path": "cafes/synthetic-cafe-b/saved_recipes/synthetic-recipe",
+      "operation": "get",
+      "auth": {
+        "uid": "synthetic-staff-a",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared"
+      },
+      "expected": "DENY",
+      "predicate": "default deny",
+      "source": "docs/firebase/workspace.firestore.rules:173",
+      "fixtureDependencyNotes": "Synthetic café B recipe exists. Direct Firestore operation only."
+    },
+    {
+      "id": "bootstrap-verified",
+      "description": "Verified caller creates all three companion documents",
+      "path": "cafes/synthetic-cafe-new",
+      "operation": "batch_create",
+      "auth": {
+        "uid": "synthetic-new-owner",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "absent": [
+          "cafes/synthetic-cafe-new",
+          "cafes/synthetic-cafe-new/members/synthetic-new-owner",
+          "user_cafe_memberships/synthetic-new-owner"
+        ]
+      },
+      "expected": "ALLOW",
+      "predicate": "ownerBootstrap(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:85",
+      "fixtureDependencyNotes": "Start with all three paths absent. Evaluate one atomic batch. Translate REQUEST_TIME in timestamp fields to the request-time value.",
+      "writes": [
+        {
+          "path": "cafes/synthetic-cafe-new",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "ownerUid": "synthetic-new-owner",
+            "name": "Synthetic Cafe",
+            "businessType": "Bakery",
+            "address": "",
+            "inventoryPreferences": {
+              "unit": "pcs",
+              "lowStockAlerts": true,
+              "expiryReminders": true,
+              "reminderDays": 3
+            }
+          }
+        },
+        {
+          "path": "cafes/synthetic-cafe-new/members/synthetic-new-owner",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "uid": "synthetic-new-owner",
+            "cafeId": "synthetic-cafe-new",
+            "role": "owner"
+          }
+        },
+        {
+          "path": "user_cafe_memberships/synthetic-new-owner",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "uid": "synthetic-new-owner",
+            "cafeId": "synthetic-cafe-new"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bootstrap-unverified",
+      "description": "Unverified caller submits complete bootstrap",
+      "path": "cafes/synthetic-cafe-new",
+      "operation": "batch_create",
+      "auth": {
+        "uid": "synthetic-new-owner",
+        "token": {
+          "email_verified": false
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "absent": [
+          "cafes/synthetic-cafe-new",
+          "cafes/synthetic-cafe-new/members/synthetic-new-owner",
+          "user_cafe_memberships/synthetic-new-owner"
+        ]
+      },
+      "expected": "DENY",
+      "predicate": "ownerBootstrap(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:85",
+      "fixtureDependencyNotes": "Start with all three paths absent. Evaluate one atomic batch. Translate REQUEST_TIME in timestamp fields to the request-time value.",
+      "writes": [
+        {
+          "path": "cafes/synthetic-cafe-new",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "ownerUid": "synthetic-new-owner",
+            "name": "Synthetic Cafe",
+            "businessType": "Bakery",
+            "address": "",
+            "inventoryPreferences": {
+              "unit": "pcs",
+              "lowStockAlerts": true,
+              "expiryReminders": true,
+              "reminderDays": 3
+            }
+          }
+        },
+        {
+          "path": "cafes/synthetic-cafe-new/members/synthetic-new-owner",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "uid": "synthetic-new-owner",
+            "cafeId": "synthetic-cafe-new",
+            "role": "owner"
+          }
+        },
+        {
+          "path": "user_cafe_memberships/synthetic-new-owner",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "uid": "synthetic-new-owner",
+            "cafeId": "synthetic-cafe-new"
+          }
+        }
+      ]
+    },
+    {
+      "id": "bootstrap-incomplete",
+      "description": "Verified caller omits mapping write",
+      "path": "cafes/synthetic-cafe-new",
+      "operation": "batch_create",
+      "auth": {
+        "uid": "synthetic-new-owner",
+        "token": {
+          "email_verified": true
+        }
+      },
+      "prerequisites": {
+        "fixture": "shared",
+        "absent": [
+          "cafes/synthetic-cafe-new",
+          "cafes/synthetic-cafe-new/members/synthetic-new-owner",
+          "user_cafe_memberships/synthetic-new-owner"
+        ]
+      },
+      "expected": "DENY",
+      "predicate": "ownerBootstrap(cafeId)",
+      "source": "docs/firebase/workspace.firestore.rules:85",
+      "fixtureDependencyNotes": "Start with all three paths absent. Evaluate one atomic batch. Translate REQUEST_TIME in timestamp fields to the request-time value.",
+      "writes": [
+        {
+          "path": "cafes/synthetic-cafe-new",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "ownerUid": "synthetic-new-owner",
+            "name": "Synthetic Cafe",
+            "businessType": "Bakery",
+            "address": "",
+            "inventoryPreferences": {
+              "unit": "pcs",
+              "lowStockAlerts": true,
+              "expiryReminders": true,
+              "reminderDays": 3
+            }
+          }
+        },
+        {
+          "path": "cafes/synthetic-cafe-new/members/synthetic-new-owner",
+          "operation": "create",
+          "data": {
+            "status": "active",
+            "schemaVersion": 1,
+            "createdAt": "REQUEST_TIME",
+            "updatedAt": "REQUEST_TIME",
+            "uid": "synthetic-new-owner",
+            "cafeId": "synthetic-cafe-new",
+            "role": "owner"
+          }
+        }
+      ]
+    }
+  ]
+}
