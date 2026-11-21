@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {generateKeyPairSync, sign, X509Certificate} from 'node:crypto';
 import {createApplication} from '../backend/application.mjs';
 import {CERTIFICATE_URL, OAUTH_URL} from '../backend/google-http.mjs';
+import {createWorkloadAccessToken} from '../backend/workload-access-token.mjs';
 import {createRestFake} from './helpers/shared-firestore-rest-fake.cjs';
 
 globalThis.fetch = () => { throw Error('Unexpected network'); };
@@ -350,6 +351,110 @@ test('factory is inert, TEST-bound and requires explicit credential/endpoint con
     {publicOrigin: 'http://backend.invalid'}, {allowedOrigins: ['*']}, {verificationTimeoutMs: 0}]) {
     assert.throws(() => createApplication({...f.config, ...patch}));
   }
+});
+
+test('credential source selection rejects missing, dual or malformed inputs before I/O', () => {
+  const f = fixture();
+  let acquisitions = 0;
+  const accessToken = Object.assign(async () => { acquisitions++; return 'synthetic-access'; }, {projectId});
+  for (const patch of [
+    {credential: undefined},
+    {credential: null},
+    {accessToken},
+    {accessToken: null},
+    {credential: null, accessToken},
+    {credential: undefined, accessToken: null},
+    {credential: undefined, accessToken: {projectId}},
+    {credential: undefined, accessToken: async () => 'synthetic-access'},
+    {credential: undefined, accessToken: Object.assign(async () => 'synthetic-access', {projectId: 'other'})},
+    {credential: undefined, accessToken, projectId: 'velora-73222'},
+  ]) {
+    assert.throws(() => createApplication({...f.config, ...patch}), {name: 'BackendError', kind: 'configuration',
+      code: 'invalid-configuration'});
+  }
+  assert.equal(acquisitions, 0);
+  assert.deepEqual(f.wireCalls, []);
+  assert.deepEqual(f.fake.calls, []);
+});
+
+test('explicit workload provider is inert until needed and serves account and Firestore consumers', async () => {
+  let acquisitions = 0;
+  const accessToken = createWorkloadAccessToken({projectId, now: () => initial, acquire: async () => {
+    acquisitions++;
+    return {token_type: 'Bearer', access_token: 'synthetic-access', expires_in: 3600};
+  }});
+  const f = fixture({credential: undefined, accessToken});
+  assert.equal(acquisitions, 0);
+  assert.deepEqual(f.wireCalls, []);
+  assert.equal((await f.call('/staff/create', {...f.context, ...invitationData}, {uid: 'staff'})).status, 403);
+  assert.equal(commits(f).length, 0);
+  const result = await f.call('/inventory/adjust-stock', {...f.context, ...stockData}, {uid: 'staff'});
+  assert.equal(result.status, 200);
+  assert.equal(result.body.cafeId, 'cafe');
+  assert.equal(commits(f).length, 1);
+  assert.equal(acquisitions, 1);
+  assert.ok(f.wireCalls.some(call => call.url.endsWith('accounts:lookup')));
+  assert.ok(f.wireCalls.every(call => call.url !== OAUTH_URL));
+});
+
+test('workload acquisition failure stays redacted and cannot dispatch account lookup or mutation', async t => {
+  const secret = 'synthetic-access private acquisition detail';
+  const logs = [];
+  for (const method of ['log', 'warn', 'error']) t.mock.method(console, method, (...args) => logs.push(args));
+  let acquisitions = 0;
+  const accessToken = createWorkloadAccessToken({projectId, now: () => initial, acquire: async () => {
+    acquisitions++;
+    throw new Error(secret);
+  }});
+  const f = fixture({credential: undefined, accessToken});
+  assert.deepEqual(await invite(f), {status: 401, body: {error: 'unauthenticated'}});
+  assert.equal(acquisitions, 1);
+  assert.deepEqual(f.wireCalls.map(call => call.url), [CERTIFICATE_URL]);
+  assert.deepEqual(f.fake.calls, []);
+  assert.deepEqual(logs, []);
+});
+
+test('selected token failure after identity checks stops before transaction dispatch', async () => {
+  let calls = 0;
+  const accessToken = Object.assign(async () => {
+    if (++calls > 2) throw new Error('synthetic-access private acquisition detail');
+    return 'synthetic-access';
+  }, {projectId});
+  const f = fixture({credential: undefined, accessToken});
+  const before = f.fake.snapshot();
+  assert.deepEqual(await invite(f), {status: 503, body: {error: 'unavailable', outcomeUnknown: true}});
+  assert.equal(calls, 3);
+  assert.equal(f.wireCalls.filter(call => call.url.endsWith('accounts:lookup')).length, 2);
+  assert.ok(f.wireCalls.every(call => call.url !== OAUTH_URL));
+  assert.deepEqual(f.fake.calls, []);
+  assert.deepEqual(f.fake.snapshot(), before);
+});
+
+test('workload credentials preserve unknown commit outcomes and read-only reconciliation', async () => {
+  const accessToken = Object.assign(async () => 'synthetic-access', {projectId});
+  const f = fixture({credential: undefined, accessToken});
+  const request = {...f.context, ...stockData};
+  f.fake.commitModes.push('applied-lost');
+  assert.deepEqual(await f.call('/inventory/adjust-stock', request),
+    {status: 503, body: {error: 'unavailable', outcomeUnknown: true}});
+  assert.equal(commits(f).length, 1);
+  const before = f.fake.snapshot();
+  const observation = await f.call('/inventory/reconcile', {operation: 'adjust-stock', request});
+  assert.equal(observation.status, 200);
+  assert.equal(observation.body.state, 'committed');
+  assert.deepEqual(f.fake.snapshot(), before);
+  assert.deepEqual(commits(f).at(-1).body.writes, []);
+  assert.ok(f.wireCalls.every(call => call.url !== OAUTH_URL));
+});
+
+test('workload credentials preserve definite contention retry with the same invitation writes', async () => {
+  const accessToken = Object.assign(async () => 'synthetic-access', {projectId});
+  const f = fixture({credential: undefined, accessToken});
+  f.fake.commitModes.push('abort');
+  assert.equal((await invite(f)).status, 200);
+  assert.equal(commits(f).length, 2);
+  assert.deepEqual(commits(f)[0].body.writes, commits(f)[1].body.writes);
+  assert.ok(f.wireCalls.every(call => call.url !== OAUTH_URL));
 });
 
 for (const generation of [0, 7]) for (const uid of ['owner', 'staff']) for (const [operation, payload] of operations) {

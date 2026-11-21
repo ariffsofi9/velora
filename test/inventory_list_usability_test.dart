@@ -1,6 +1,9 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/inventory_item.dart';
 import 'package:velora/screens/inventory/utils_inventory/inventory_sort_helper.dart';
+import 'package:velora/screens/inventory/widgets_inventory/inventory_list_controls.dart';
 
 InventoryItem _item({
   required String id,
@@ -97,4 +100,58 @@ void main() {
       ['milk', 'apple', 'cheese'],
     );
   });
+
+  testWidgets(
+    'category chips and sort selection retain the shared filter contract',
+    (tester) async {
+      var category = InventorySortHelper.allCategories;
+      var sort = InventorySortOption.expiry;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.light,
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                final filtered = InventorySortHelper.apply(
+                  items: items,
+                  query: '',
+                  category: category,
+                  statusFilter: 'All Items',
+                  sort: sort,
+                );
+                return Column(
+                  children: [
+                    InventoryListControls(
+                      categories: InventorySortHelper.categories(items),
+                      selectedCategory: category,
+                      selectedSort: sort,
+                      onCategoryChanged: (value) =>
+                          setState(() => category = value),
+                      onSortChanged: (value) => setState(() => sort = value),
+                      showCategoryChips: true,
+                    ),
+                    Text(filtered.map((item) => item.id).join(',')),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Dairy'));
+      await tester.pumpAndSettle();
+      expect(find.text('milk,cheese'), findsOneWidget);
+      expect(
+        tester
+            .widget<ChoiceChip>(find.widgetWithText(ChoiceChip, 'Dairy'))
+            .selected,
+        isTrue,
+      );
+      await tester.tap(find.byKey(const ValueKey('inventory-sort-order')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(InventorySortOption.quantity.label).last);
+      await tester.pumpAndSettle();
+      expect(find.text('cheese,milk'), findsOneWidget);
+    },
+  );
 }

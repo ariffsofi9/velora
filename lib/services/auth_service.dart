@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'user_profile_service.dart';
 import 'android_pilot_policy.dart';
+import 'owner_email_verification.dart';
 
 class AuthFlowException implements Exception {
   final String message;
@@ -29,6 +30,7 @@ class AuthService {
        _pilotPolicy = pilotPolicy;
 
   FirebaseAuth get _auth => _firebaseAuth ?? FirebaseAuth.instance;
+  FirebaseAuth get firebaseAuth => _auth;
   UserProfileService get _profiles =>
       _profileService ?? UserProfileService(pilotPolicy: _pilotPolicy);
 
@@ -79,8 +81,10 @@ class AuthService {
     }
     var created = false;
     var profileSaved = false;
+    EmailVerificationSession? session;
     try {
-      final credential = await _auth.createUserWithEmailAndPassword(
+      final auth = _auth;
+      final credential = await auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
@@ -91,14 +95,28 @@ class AuthService {
         );
       }
       created = true;
+      session = EmailVerificationSession(auth, user.uid);
+      await session.ready(FirebaseOwnerEmailVerification.defaultTimeout);
       await user.updateDisplayName(name);
+      session.requireCurrent();
       await _profiles.createUserProfileIfNeeded(
         user,
         initialUsername: name.trim(),
       );
       profileSaved = true;
-      await _auth.signOut();
-      if (_auth.currentUser != null) {
+      session.requireCurrent();
+      try {
+        await FirebaseOwnerEmailVerification(
+          pilotPolicy: _pilotPolicy,
+          session: session,
+        ).sendVerification();
+      } catch (_) {
+        // Firebase may have accepted the email request. Keep the account and
+        // let the user check their inbox or resend after manual sign-in.
+      }
+      session.requireCurrent();
+      await auth.signOut();
+      if (auth.currentUser != null) {
         throw const AuthFlowException(
           'Registration sign-out did not complete.',
         );
@@ -106,10 +124,12 @@ class AuthService {
       // Only explicit sign-in clears the guard; successful registration does not.
     } catch (_) {
       // Never delete the account or retry account creation behind the user's back.
-      try {
-        await _auth.signOut();
-      } catch (_) {
-        /* Startup still requires login. */
+      if (!created || session?.isCurrent == true) {
+        try {
+          await _auth.signOut();
+        } catch (_) {
+          /* Startup still requires login. */
+        }
       }
       if (!created) {
         // A rejected create (for example, an existing email) must not turn a
@@ -122,6 +142,8 @@ class AuthService {
             ? 'Your account and profile were created, but sign-out could not be completed. Please return to Login and sign in manually.'
             : 'Your account was created, but profile setup did not finish. Please return to Login and sign in to retry setup.',
       );
+    } finally {
+      await session?.close();
     }
   }
 
@@ -155,7 +177,8 @@ class AuthService {
           );
         }
       }
-      // No emailVerified gate. Firebase's normal session persistence is retained.
+      // Login establishes the session. WorkspaceGate checks verification before
+      // resolving any café membership.
     } catch (error) {
       if (signedIn) {
         try {

@@ -20,6 +20,9 @@ class DashboardContent extends StatelessWidget {
   final VoidCallback onInventoryTap;
   final VoidCallback onSuggestionTap;
   final VoidCallback onAlertTap;
+  final VoidCallback? onStockInTap;
+  final VoidCallback? onStockOutTap;
+  final bool showInventoryHealth;
   const DashboardContent({
     super.key,
     this.firstName,
@@ -34,6 +37,9 @@ class DashboardContent extends StatelessWidget {
     required this.onInventoryTap,
     required this.onSuggestionTap,
     required this.onAlertTap,
+    this.onStockInTap,
+    this.onStockOutTap,
+    this.showInventoryHealth = true,
   });
 
   Widget _action(String title, IconData icon, VoidCallback onTap) => Expanded(
@@ -70,12 +76,14 @@ class DashboardContent extends StatelessWidget {
                   expired: expired,
                   onTap: onInventoryTap,
                 ),
-                const SizedBox(height: 16),
-                InventoryHealthCard(
-                  total: totalItems,
-                  nearExpiry: nearExpiry,
-                  lowStock: lowStock,
-                ),
+                if (showInventoryHealth) ...[
+                  const SizedBox(height: 16),
+                  InventoryHealthCard(
+                    total: totalItems,
+                    nearExpiry: nearExpiry,
+                    lowStock: lowStock,
+                  ),
+                ],
                 const SizedBox(height: 24),
                 Text(
                   'Quick Actions',
@@ -93,20 +101,29 @@ class DashboardContent extends StatelessWidget {
                     final actions = [
                       _action('Add Item', Icons.add_rounded, onAddTap),
                       _action(
-                        'Inventory',
-                        Icons.inventory_2_outlined,
-                        onInventoryTap,
+                        onStockInTap == null ? 'Inventory' : 'Stock In',
+                        onStockInTap == null
+                            ? Icons.inventory_2_outlined
+                            : Icons.add_box_outlined,
+                        onStockInTap ?? onInventoryTap,
                       ),
+                      if (onStockOutTap != null)
+                        _action(
+                          'Stock Out',
+                          Icons.outbox_outlined,
+                          onStockOutTap!,
+                        ),
                       _action(
                         'AI Suggestions',
                         Icons.auto_awesome_outlined,
                         onSuggestionTap,
                       ),
-                      _action(
-                        'Alerts',
-                        Icons.notifications_outlined,
-                        onAlertTap,
-                      ),
+                      if (onStockOutTap == null)
+                        _action(
+                          'Alerts',
+                          Icons.notifications_outlined,
+                          onAlertTap,
+                        ),
                     ];
                     Widget row(List<Widget> items) => IntrinsicHeight(
                       child: Row(
@@ -119,15 +136,19 @@ class DashboardContent extends StatelessWidget {
                         ],
                       ),
                     );
-                    return four
-                        ? row(actions)
-                        : Column(
-                            children: [
-                              row(actions.sublist(0, 2)),
-                              const SizedBox(height: 10),
-                              row(actions.sublist(2)),
-                            ],
-                          );
+                    if (four) return row(actions);
+                    return Column(
+                      children: [
+                        for (
+                          var index = 0;
+                          index < actions.length;
+                          index += 2
+                        ) ...[
+                          if (index > 0) const SizedBox(height: 10),
+                          row(actions.skip(index).take(2).toList()),
+                        ],
+                      ],
+                    );
                   },
                 ),
                 const SizedBox(height: 24),

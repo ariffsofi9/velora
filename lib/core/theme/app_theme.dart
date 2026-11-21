@@ -13,8 +13,8 @@ abstract final class AppTheme {
           onPrimary: AppColors.surface,
           primaryContainer: AppColors.nude,
           onPrimaryContainer: AppColors.textPrimary,
-          secondary: AppColors.primaryDark,
-          onSecondary: AppColors.surface,
+          secondary: AppColors.secondary,
+          onSecondary: AppColors.textPrimary,
           secondaryContainer: AppColors.border,
           onSecondaryContainer: AppColors.textPrimary,
           tertiary: AppColors.lavender,
@@ -133,7 +133,12 @@ abstract final class AppTheme {
           foregroundColor: WidgetStateProperty.resolveWith(
             (states) => states.contains(WidgetState.disabled)
                 ? AppColors.textSecondary
-                : AppColors.primaryDark,
+                : AppColors.textPrimary,
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.disabled)
+                ? AppColors.surface
+                : AppColors.secondary,
           ),
           side: const WidgetStatePropertyAll(
             BorderSide(color: AppColors.border),
@@ -184,6 +189,14 @@ abstract final class AppTheme {
           borderRadius: BorderRadius.circular(AppRadius.card),
           side: const BorderSide(color: AppColors.border),
         ),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: AppColors.secondary,
+        selectedColor: AppColors.primary,
+        labelStyle: textTheme.labelLarge,
+        side: BorderSide.none,
+        shape: const StadiumBorder(),
+        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm),
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: AppColors.surface,

@@ -40,7 +40,7 @@ class _User extends Fake implements User {
 
   @override
   Future<IdTokenResult> getIdTokenResult([bool forceRefresh = false]) async {
-    expect(forceRefresh, true);
+    if (!forceRefresh) throw StateError('Token refresh must be forced');
     refreshes++;
     await tokenAction?.call();
     return _Token(tokenVerified);
@@ -57,8 +57,15 @@ class _User extends Fake implements User {
 
 class _Auth extends Fake implements FirebaseAuth {
   _User? user = _User();
+  final changes = StreamController<User?>.broadcast(sync: true);
   @override
   User? get currentUser => user;
+  @override
+  Stream<User?> authStateChanges() => Stream<User?>.multi((events) {
+    final subscription = changes.stream.listen(events.addSync);
+    events.onCancel = () async => unawaited(subscription.cancel());
+    events.addSync(user);
+  });
   @override
   Future<void> signOut() async {
     user = null;
@@ -196,6 +203,69 @@ void main() {
       );
     });
   }
+
+  test(
+    'same-UID replacement during token refresh invalidates verification',
+    () async {
+      final auth = _Auth();
+      final original = auth.user!..verified = true;
+      original.tokenAction = () async {
+        auth.user = _User()..verified = true;
+        auth.changes.add(auth.user);
+      };
+      await expectLater(
+        FirebaseOwnerEmailVerification(auth: auth).refreshVerified(),
+        throwsA(
+          isA<OwnerVerificationException>().having(
+            (error) => error.failure,
+            'failure',
+            OwnerVerificationFailure.changed,
+          ),
+        ),
+      );
+    },
+  );
+
+  testWidgets('foreground checks once and does not overlap a manual check', (
+    tester,
+  ) async {
+    final auth = _Auth();
+    final user = auth.user!;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: OwnerEmailVerificationPage(
+          verification: FirebaseOwnerEmailVerification(auth: auth),
+          verifiedBuilder: (_) => const Scaffold(body: Text('Continued')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(user.reloads, 1);
+    final pending = Completer<void>();
+    user.reloadAction = () => pending.future;
+    await tester.tap(find.byKey(const ValueKey('owner-check-verification')));
+    await tester.pump();
+    expect(user.reloads, 2);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(user.reloads, 2);
+    pending.complete();
+    await tester.pumpAndSettle();
+    final resumedReload = Completer<void>();
+    user.reloadAction = () => resumedReload.future;
+    user.verified = true;
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(user.reloads, 3);
+    resumedReload.complete();
+    await tester.pumpAndSettle();
+    expect(user.refreshes, 1);
+    expect(user.sends, 0);
+    expect(find.text('Continued'), findsOneWidget);
+  });
+
   test(
     'send success, cooldown and duplicate protection use no automatic send',
     () async {

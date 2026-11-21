@@ -145,7 +145,13 @@ abstract interface class WorkspaceBootstrapStore {
 
 class FirestoreWorkspaceBootstrapStore implements WorkspaceBootstrapStore {
   final FirebaseFirestore? firestore;
-  FirestoreWorkspaceBootstrapStore({this.firestore});
+  final Duration timeout;
+  final int maxAttempts;
+  FirestoreWorkspaceBootstrapStore({
+    this.firestore,
+    this.timeout = const Duration(seconds: 30),
+    this.maxAttempts = 5,
+  });
   FirebaseFirestore get _db => firestore ?? FirebaseFirestore.instance;
   @override
   String newCafeId() => _db.collection('cafes').doc().id;
@@ -154,7 +160,11 @@ class FirestoreWorkspaceBootstrapStore implements WorkspaceBootstrapStore {
   @override
   Future<T> runTransaction<T>(
     Future<T> Function(WorkspaceBootstrapTransaction) action,
-  ) => _db.runTransaction((tx) => action(_BootstrapTransaction(_db, tx)));
+  ) => _db.runTransaction(
+    (tx) => action(_BootstrapTransaction(_db, tx)),
+    timeout: timeout,
+    maxAttempts: maxAttempts,
+  );
 }
 
 class _BootstrapTransaction implements WorkspaceBootstrapTransaction {

@@ -9,6 +9,7 @@ class InventoryListControls extends StatelessWidget {
   final InventorySortOption selectedSort;
   final ValueChanged<String> onCategoryChanged;
   final ValueChanged<InventorySortOption> onSortChanged;
+  final bool showCategoryChips;
 
   const InventoryListControls({
     super.key,
@@ -17,6 +18,7 @@ class InventoryListControls extends StatelessWidget {
     required this.selectedSort,
     required this.onCategoryChanged,
     required this.onSortChanged,
+    this.showCategoryChips = false,
   });
 
   @override
@@ -25,19 +27,43 @@ class InventoryListControls extends StatelessWidget {
       builder: (context, constraints) {
         final category = _field(
           label: 'Category',
-          child: DropdownButtonFormField<String>(
-            key: const ValueKey('inventory-category-filter'),
-            initialValue: selectedCategory,
-            isExpanded: true,
-            items: categories
-                .map(
-                  (value) => DropdownMenuItem(value: value, child: Text(value)),
+          child: showCategoryChips
+              ? Wrap(
+                  spacing: AppSpacing.sm,
+                  runSpacing: AppSpacing.xs,
+                  children: [
+                    for (final value in categories)
+                      ChoiceChip(
+                        label: Text(
+                          value == InventorySortHelper.allCategories
+                              ? 'All'
+                              : value,
+                        ),
+                        selected: value == selectedCategory,
+                        showCheckmark: false,
+                        labelStyle: TextStyle(
+                          color: value == selectedCategory
+                              ? AppColors.surface
+                              : AppColors.textPrimary,
+                        ),
+                        onSelected: (_) => onCategoryChanged(value),
+                      ),
+                  ],
                 )
-                .toList(growable: false),
-            onChanged: (value) {
-              if (value != null) onCategoryChanged(value);
-            },
-          ),
+              : DropdownButtonFormField<String>(
+                  key: const ValueKey('inventory-category-filter'),
+                  initialValue: selectedCategory,
+                  isExpanded: true,
+                  items: categories
+                      .map(
+                        (value) =>
+                            DropdownMenuItem(value: value, child: Text(value)),
+                      )
+                      .toList(growable: false),
+                  onChanged: (value) {
+                    if (value != null) onCategoryChanged(value);
+                  },
+                ),
         );
         final sort = _field(
           label: 'Sort by',

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -9,6 +11,7 @@ import '../../services/android_pilot_policy.dart';
 
 import 'signup_page.dart';
 import 'forgot_password_page.dart';
+import 'welcome_page.dart';
 import 'workspace_gate.dart';
 
 class LoginPage extends StatefulWidget {
@@ -70,18 +73,20 @@ class _LoginPageState extends State<LoginPage> {
 
     try {
       final pilot = _pilot;
-      await (pilot?.authService ?? widget.authService ?? AuthService()).signIn(
-        email: email,
-        password: password,
-      );
+      final authService =
+          pilot?.authService ?? widget.authService ?? AuthService();
+      await authService.signIn(email: email, password: password);
 
       if (!mounted || !identical(pilot, _pilot)) return;
 
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) =>
-              WorkspaceGate(pilot: pilot, resolver: widget.workspaceResolver),
+          builder: (_) => WorkspaceGate(
+            pilot: pilot,
+            authService: authService,
+            resolver: widget.workspaceResolver,
+          ),
         ),
       );
     } on FirebaseAuthException catch (e) {
@@ -125,9 +130,22 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) => _pilot?.policy.isValid == false
       ? const PilotAccessBlockedPage()
-      : AuthLayout(
-          title: 'Welcome Back',
-          subtitle: 'Log in to continue to Velora',
+      : _LoginLayout(
+          onBack: isLoading
+              ? null
+              : () {
+                  final navigator = Navigator.of(context);
+                  if (navigator.canPop()) {
+                    navigator.maybePop();
+                  } else {
+                    final pilot = _pilot;
+                    navigator.pushReplacement(
+                      MaterialPageRoute(
+                        builder: (_) => WelcomePage(pilot: pilot),
+                      ),
+                    );
+                  }
+                },
           children: [
             AuthField(
               label: 'Email address',
@@ -152,37 +170,74 @@ class _LoginPageState extends State<LoginPage> {
                 },
               ),
             ),
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed:
-                    isLoading ||
-                        !_allows(AndroidPilotCapability.passwordResetEmail)
-                    ? null
-                    : () {
-                        if (!_allows(
-                          AndroidPilotCapability.passwordResetEmail,
-                        )) {
-                          return;
-                        }
-                        final pilot = _pilot;
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ForgotPasswordPage(
-                              initialEmail: emailController.text.trim(),
-                              authService:
-                                  pilot?.authService ?? widget.authService,
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Tooltip(
+                  message: 'Remember Me is currently unavailable.',
+                  child: MergeSemantics(
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Checkbox(value: false, onChanged: null),
+                        Flexible(child: Text('Remember Me')),
+                      ],
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed:
+                      isLoading ||
+                          !_allows(AndroidPilotCapability.passwordResetEmail)
+                      ? null
+                      : () {
+                          if (!_allows(
+                            AndroidPilotCapability.passwordResetEmail,
+                          )) {
+                            return;
+                          }
+                          final pilot = _pilot;
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => ForgotPasswordPage(
+                                initialEmail: emailController.text.trim(),
+                                authService:
+                                    pilot?.authService ?? widget.authService,
+                              ),
                             ),
-                          ),
-                        );
-                      },
-                child: const Text('Forgot Password?'),
-              ),
+                          );
+                        },
+                  child: const Text('Forgot Password?'),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
             AuthSubmit(label: 'Log In', busy: isLoading, onPressed: loginUser),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
+            const Row(
+              children: [
+                Expanded(child: Divider()),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Text('or'),
+                ),
+                Expanded(child: Divider()),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const OutlinedButton(
+              onPressed: null,
+              child: Text('Continue with Google', textAlign: TextAlign.center),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Google sign-in is currently unavailable.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
             AuthAccountLink(
               prompt: "Don't have an account?",
               label: 'Sign up',
@@ -203,11 +258,137 @@ class _LoginPageState extends State<LoginPage> {
                       );
                     },
             ),
-            const Text(
-              'Google sign-in is currently unavailable.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-            ),
           ],
         );
+}
+
+class _LoginLayout extends StatelessWidget {
+  const _LoginLayout({required this.onBack, required this.children});
+
+  final VoidCallback? onBack;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          const IgnorePointer(child: CustomPaint(painter: _LoginCurves())),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: math.max(0.0, constraints.maxHeight - 36),
+                  ),
+                  child: Align(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Align(
+                            alignment: AlignmentDirectional.centerStart,
+                            child: IconButton(
+                              tooltip: 'Back',
+                              icon: const BackButtonIcon(),
+                              onPressed: onBack,
+                            ),
+                          ),
+                          Center(
+                            child: Image.asset(
+                              'assets/images/auth/logo_mark.png',
+                              width: 48,
+                              height: 48,
+                              fit: BoxFit.contain,
+                              excludeFromSemantics: true,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'VELORA',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontFamily: 'Georgia',
+                              fontFamilyFallback: ['Noto Serif', 'serif'],
+                              fontSize: 22,
+                              letterSpacing: 4,
+                              color: Color(0xFF604936),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Text(
+                            'Welcome Back',
+                            textAlign: TextAlign.center,
+                            style: text.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Log in to continue to Velora',
+                            textAlign: TextAlign.center,
+                            style: text.bodyMedium?.copyWith(
+                              color: AppColors.textSecondary,
+                              fontWeight: FontWeight.w400,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          ...children,
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoginCurves extends CustomPainter {
+  const _LoginCurves();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final extent = math.min(size.shortestSide * .34, 180.0);
+    final paint = Paint()
+      ..color = AppColors.secondary
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+
+    void drawCorner() {
+      for (final sweep in [.42, .63]) {
+        final path = Path()
+          ..moveTo(0, extent * sweep)
+          ..cubicTo(
+            extent * .42,
+            extent * sweep,
+            extent * .69,
+            extent * .13,
+            extent * (1 + sweep),
+            0,
+          );
+        canvas.drawPath(path, paint);
+      }
+    }
+
+    drawCorner();
+    canvas.save();
+    canvas.translate(size.width, size.height);
+    canvas.rotate(math.pi);
+    drawCorner();
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _LoginCurves oldDelegate) => false;
 }

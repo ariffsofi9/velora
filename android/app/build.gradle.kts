@@ -88,6 +88,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.velora"
+        testInstrumentationRunner = "com.example.velora.AndroidSqliteJournalInstrumentation"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

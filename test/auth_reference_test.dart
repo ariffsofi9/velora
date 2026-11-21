@@ -93,7 +93,7 @@ void main() {
           scale: 2,
         ),
       );
-      expect(find.text('Velora'), findsOneWidget);
+      expect(find.text('VELORA'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       await tester.pump(const Duration(seconds: 3));
@@ -159,12 +159,13 @@ void main() {
   });
 
   testWidgets(
-    'Capture only Splash/Login/Register at 393px',
+    'Capture production Splash at three viewports and Login/Register at 393px',
     (tester) async {
       tester.view.physicalSize = const Size(393, 852);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPadding);
       await tester.runAsync(() async {
         final fonts = '${Platform.environment['WINDIR']}/Fonts';
         const sdk = String.fromEnvironment('FLUTTER_SDK');
@@ -184,13 +185,29 @@ void main() {
         }
       });
       for (final entry in <String, Widget Function()>{
-        'splash': () => TickerMode(
-          enabled: false,
-          child: SplashPage(authService: _PreviewSession()),
-        ),
+        for (final viewport in ['393x852', '800x1200', '852x393'])
+          'splash-$viewport': () => TickerMode(
+            enabled: false,
+            child: SplashPage(authService: _PreviewSession()),
+          ),
         'login': () => const LoginPage(),
         'register': () => const SignUpPage(),
       }.entries) {
+        final isSplash = entry.key.startsWith('splash-');
+        tester.view.physicalSize = switch (entry.key) {
+          'splash-800x1200' => const Size(800, 1200),
+          'splash-852x393' => const Size(852, 393),
+          _ => const Size(393, 852),
+        };
+        tester.view.padding = switch (entry.key) {
+          'splash-852x393' => const FakeViewPadding(
+            left: 24,
+            right: 24,
+            bottom: 16,
+          ),
+          _ when isSplash => const FakeViewPadding(top: 24, bottom: 16),
+          _ => const FakeViewPadding(),
+        };
         final key = GlobalKey();
         await tester.pumpWidget(
           RepaintBoundary(
@@ -215,6 +232,32 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(tester.takeException(), isNull);
+        if (isSplash) {
+          final safeBounds = Rect.fromLTRB(
+            tester.view.padding.left,
+            tester.view.padding.top,
+            tester.view.physicalSize.width - tester.view.padding.right,
+            tester.view.physicalSize.height - tester.view.padding.bottom,
+          );
+          for (final child in [
+            find.text('VELORA'),
+            find.text('AI SMART INVENTORY\nFOR F&B BUSINESSES'),
+            find.byType(LinearProgressIndicator),
+          ]) {
+            final bounds = tester.getRect(child);
+            expect(bounds.left, greaterThanOrEqualTo(safeBounds.left));
+            expect(bounds.top, greaterThanOrEqualTo(safeBounds.top));
+            expect(bounds.right, lessThanOrEqualTo(safeBounds.right));
+            expect(bounds.bottom, lessThanOrEqualTo(safeBounds.bottom));
+          }
+          expect(
+            tester
+                .state<ScrollableState>(find.byType(Scrollable))
+                .position
+                .maxScrollExtent,
+            0,
+          );
+        }
         final render =
             key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
         await tester.runAsync(() async {

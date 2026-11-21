@@ -6,13 +6,19 @@ import 'package:flutter/material.dart';
 
 import '../../../models/inventory_item.dart';
 import '../../../logic/low_stock_policy.dart';
-import '../utils_inventory/expiry_helper.dart';
+import '../../../logic/inventory_expiry_policy.dart';
 
 class InventoryCard extends StatelessWidget {
   final InventoryItem item;
   final VoidCallback onTap;
+  final DateTime? now;
 
-  const InventoryCard({super.key, required this.item, required this.onTap});
+  const InventoryCard({
+    super.key,
+    required this.item,
+    required this.onTap,
+    this.now,
+  });
 
   bool get hasImage => item.imageUrl.trim().isNotEmpty;
 
@@ -28,30 +34,6 @@ class InventoryCard extends StatelessWidget {
     return Icons.inventory_2_rounded;
   }
 
-  Color _iconBg(String category) {
-    final value = category.toLowerCase();
-
-    if (value.contains('dairy')) return AppColors.nude;
-    if (value.contains('meat')) return AppColors.nude;
-    if (value.contains('vegetable')) return AppColors.nude;
-    if (value.contains('fruit')) return AppColors.nude;
-    if (value.contains('grain')) return AppColors.nude;
-
-    return AppColors.nude;
-  }
-
-  Color _iconColor(String category) {
-    final value = category.toLowerCase();
-
-    if (value.contains('dairy')) return AppColors.primary;
-    if (value.contains('meat')) return AppColors.primary;
-    if (value.contains('vegetable')) return AppColors.primary;
-    if (value.contains('fruit')) return AppColors.primary;
-    if (value.contains('grain')) return AppColors.primary;
-
-    return AppColors.primary;
-  }
-
   Widget _imageOrIcon(bool isSmall) {
     final size = isSmall ? 58.0 : 66.0;
 
@@ -59,7 +41,7 @@ class InventoryCard extends StatelessWidget {
       height: size,
       width: size,
       decoration: BoxDecoration(
-        color: _iconBg(item.category),
+        color: AppColors.secondary,
         borderRadius: BorderRadius.circular(18),
       ),
       child: ClipRRect(
@@ -68,7 +50,7 @@ class InventoryCard extends StatelessWidget {
             ? kIsWeb
                   ? Icon(
                       _icon(item.category),
-                      color: _iconColor(item.category),
+                      color: AppColors.textPrimary,
                       size: isSmall ? 28 : 31,
                     )
                   : Image.file(
@@ -76,13 +58,13 @@ class InventoryCard extends StatelessWidget {
                       fit: BoxFit.cover,
                       errorBuilder: (context, error, stack) => Icon(
                         _icon(item.category),
-                        color: _iconColor(item.category),
+                        color: AppColors.textPrimary,
                         size: isSmall ? 28 : 31,
                       ),
                     )
             : Icon(
                 _icon(item.category),
-                color: _iconColor(item.category),
+                color: AppColors.textPrimary,
                 size: isSmall ? 28 : 31,
               ),
       ),
@@ -91,8 +73,16 @@ class InventoryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final expiryText = ExpiryHelper.daysLeftText(item.expiryDate);
-    final expiryColor = ExpiryHelper.statusColor(item.expiryDate);
+    final expiryText = InventoryExpiryPolicy.label(item.expiryDate, now: now);
+    final days = InventoryExpiryPolicy.daysUntil(item.expiryDate, now: now);
+    final (expiryColor, expirySurface) = switch (days) {
+      < 0 => (AppColors.danger, AppColors.dangerSurface),
+      <= InventoryExpiryPolicy.nearExpiryDays => (
+        AppColors.warning,
+        AppColors.warningSurface,
+      ),
+      _ => (AppColors.success, AppColors.successSurface),
+    };
     final isLowStock = LowStockPolicy.isLowStock(item);
     return Material(
       color: Colors.white,
@@ -130,16 +120,12 @@ class InventoryCard extends StatelessWidget {
                       spacing: 6,
                       runSpacing: 6,
                       children: [
-                        _tag(
-                          expiryText,
-                          expiryColor,
-                          ExpiryHelper.statusBgColor(item.expiryDate),
-                        ),
+                        _tag(expiryText, expiryColor, expirySurface),
                         if (isLowStock)
                           _tag(
                             'Low Stock',
                             AppColors.danger,
-                            const Color(0xFFFFE4E6),
+                            AppColors.dangerSurface,
                           ),
                       ],
                     ),

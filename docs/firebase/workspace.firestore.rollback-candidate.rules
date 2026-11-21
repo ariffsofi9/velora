@@ -1,0 +1,123 @@
+// INACTIVE ROLLBACK CANDIDATE. Separate review and publication approval required.
+// Admin SDK bypasses these rules: trusted provisioning must validate every write.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function link(data, uid, cafeId) {
+      return data.uid == uid && data.cafeId == cafeId &&
+        data.status == 'active' && data.schemaVersion == 1;
+    }
+    // Active-link and role checks remain mandatory in member(); this helper
+    // checks generation consistency only, never authorizes inactive history.
+    function matchingGeneration(mapping, membership) {
+      return (!('membershipGeneration' in mapping) &&
+              !('membershipGeneration' in membership)) ||
+        (('membershipGeneration' in mapping) &&
+         ('membershipGeneration' in membership) &&
+         mapping.membershipGeneration is int &&
+         membership.membershipGeneration is int &&
+         mapping.membershipGeneration >= 0 &&
+         mapping.membershipGeneration <= 9007199254740991 &&
+         membership.membershipGeneration >= 0 &&
+         membership.membershipGeneration <= 9007199254740991 &&
+         mapping.membershipGeneration == membership.membershipGeneration);
+    }
+    function member(cafeId) {
+      let uid = request.auth.uid;
+      let mapping = get(/databases/$(database)/documents/user_cafe_memberships/$(uid)).data;
+      let membership = get(/databases/$(database)/documents/cafes/$(cafeId)/members/$(uid)).data;
+      let cafe = get(/databases/$(database)/documents/cafes/$(cafeId)).data;
+      let owner = cafe.ownerUid;
+      let ownerMember = get(/databases/$(database)/documents/cafes/$(cafeId)/members/$(owner)).data;
+      let ownerMapping = get(/databases/$(database)/documents/user_cafe_memberships/$(owner)).data;
+      return link(mapping, uid, cafeId) && link(membership, uid, cafeId) &&
+        matchingGeneration(mapping, membership) &&
+        cafe.status == 'active' && cafe.schemaVersion == 1 && owner is string &&
+        membership.role in ['owner', 'staff'] &&
+        ((membership.role == 'owner' && uid == owner) ||
+         (membership.role == 'staff' && uid != owner)) &&
+        link(ownerMember, owner, cafeId) && ownerMember.role == 'owner' &&
+        link(ownerMapping, owner, cafeId) &&
+        matchingGeneration(ownerMapping, ownerMember);
+    }
+    function isMember(cafeId) {
+      return signedIn() && request.auth.token.email_verified == true && member(cafeId);
+    }
+    function isOwner(cafeId) {
+      return isMember(cafeId) &&
+        get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == request.auth.uid;
+    }
+    function validProfileCreate(uid) {
+      let data = request.resource.data;
+      return signedIn() && request.auth.uid == uid &&
+        data.keys().hasOnly([
+          'username', 'email', 'photoUrl', 'role', 'createdAt', 'updatedAt'
+        ]) &&
+        data.username is string && data.username.size() > 0 &&
+        data.username.size() <= 80 &&
+        data.email is string && data.email == request.auth.token.email &&
+        data.photoUrl is string && data.photoUrl.size() <= 2048 &&
+        data.role == 'owner' &&
+        data.createdAt == request.time && data.updatedAt == request.time;
+    }
+    function validProfileUpdate(uid) {
+      let data = request.resource.data;
+      return signedIn() && request.auth.uid == uid &&
+        data.diff(resource.data).affectedKeys().hasOnly([
+          'username', 'photoUrl', 'updatedAt'
+        ]) &&
+        data.username is string && data.username.size() > 0 &&
+        data.username.size() <= 80 &&
+        data.photoUrl is string && data.photoUrl.size() <= 2048 &&
+        data.updatedAt == request.time;
+    }
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create: if validProfileCreate(uid);
+      allow update: if validProfileUpdate(uid);
+      allow list, delete: if false;
+    }
+    match /user_cafe_memberships/{uid} {
+      // Same-cafe staff can read the owner's mapping for resolver consistency.
+      allow get: if signedIn() && (request.auth.uid == uid ||
+        (isMember(resource.data.cafeId) &&
+         get(/databases/$(database)/documents/cafes/$(resource.data.cafeId)).data.ownerUid == uid));
+      allow list, create, update, delete: if false;
+    }
+    match /cafes/{cafeId} {
+      allow get: if isMember(cafeId);
+      allow list, create, update, delete: if false;
+      match /members/{uid} {
+        allow get: if isMember(cafeId) && (request.auth.uid == uid ||
+          isOwner(cafeId) ||
+          get(/databases/$(database)/documents/cafes/$(cafeId)).data.ownerUid == uid);
+        allow list: if isOwner(cafeId);
+        allow create, update, delete: if false;
+      }
+      match /inventory/{itemId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
+      match /inventory_movements/{movementId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
+      match /activities/{activityId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
+      // Future AI paths intentionally have no grants yet.
+      match /menu_items/{itemId} {
+        allow get, list: if isMember(cafeId);
+        allow create, update, delete: if false;
+      }
+      match /menu_requests/{requestId} { allow read, write: if false; }
+    }
+    // Invitation secrets, receipts and admission limits are trusted-backend only.
+    match /workspace_invitations/{id} { allow read, write: if false; }
+    match /workspace_invite_requests/{id} { allow read, write: if false; }
+    match /workspace_invite_limits/{id} { allow read, write: if false; }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

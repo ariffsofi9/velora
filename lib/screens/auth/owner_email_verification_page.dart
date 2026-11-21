@@ -1,42 +1,61 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../services/android_pilot_policy.dart';
 import '../../services/owner_email_verification.dart';
 import 'login_page.dart';
+import 'workspace_gate.dart';
 
 class OwnerEmailVerificationPage extends StatefulWidget {
   final OwnerEmailVerification verification;
   final WidgetBuilder? verifiedBuilder;
   final WidgetBuilder? loginBuilder;
+  final Future<bool> Function()? checkAndContinue;
   const OwnerEmailVerificationPage({
     super.key,
     required this.verification,
     this.verifiedBuilder,
     this.loginBuilder,
+    this.checkAndContinue,
   });
   @override
   State<OwnerEmailVerificationPage> createState() =>
       _OwnerEmailVerificationPageState();
 }
 
-class _OwnerEmailVerificationPageState
-    extends State<OwnerEmailVerificationPage> {
+class _OwnerEmailVerificationPageState extends State<OwnerEmailVerificationPage>
+    with WidgetsBindingObserver {
   bool _busy = false;
   bool _routed = false;
-  String _message = 'Verify your email before creating a workspace.';
+  bool get _canSend =>
+      AndroidPilotAuthScope.read(
+        context,
+      )?.allows(AndroidPilotCapability.verificationEmail) ??
+      true;
+  String _message = 'Verify your email to continue.';
   Timer? _timer;
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
-    _check(); // Refresh only: never sends an email or creates a workspace automatically.
+    if (widget.checkAndContinue == null) _check();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        ModalRoute.of(context)?.isCurrent != false) {
+      _check();
+    }
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -44,10 +63,14 @@ class _OwnerEmailVerificationPageState
     if (_busy || _routed) return;
     setState(() => _busy = true);
     try {
-      final verified = await widget.verification.refreshVerified();
+      final checkAndContinue = widget.checkAndContinue;
+      final verified =
+          await (checkAndContinue?.call() ??
+              widget.verification.refreshVerified());
       if (!mounted || _routed) return;
       if (verified) {
         _routed = true;
+        if (checkAndContinue != null) return;
         if (widget.verifiedBuilder == null) {
           Navigator.of(context).pop(true);
         } else {
@@ -74,7 +97,7 @@ class _OwnerEmailVerificationPageState
   }
 
   Future<void> _send() async {
-    if (_busy || _routed) return;
+    if (_busy || _routed || !_canSend) return;
     setState(() => _busy = true);
     try {
       await widget.verification.sendVerification();
@@ -160,11 +183,11 @@ class _OwnerEmailVerificationPageState
                   FilledButton(
                     key: const ValueKey('owner-check-verification'),
                     onPressed: _busy ? null : _check,
-                    child: const Text('I have verified my email'),
+                    child: const Text('Check again'),
                   ),
                   OutlinedButton(
                     key: const ValueKey('owner-send-verification'),
-                    onPressed: _busy || wait > 0 ? null : _send,
+                    onPressed: _busy || wait > 0 || !_canSend ? null : _send,
                     child: Text(
                       wait > 0
                           ? 'Resend available in ${wait}s'

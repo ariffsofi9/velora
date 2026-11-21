@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/theme/app_tokens.dart';
 import 'dashboard_style.dart';
 
 class InventoryTotalCard extends StatelessWidget {
@@ -90,35 +91,52 @@ class InventoryStatusCards extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => IntrinsicHeight(
-    child: Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: _StatusCard(
-            title: 'Near Expiry',
-            count: nearExpiry,
-            countKey: const ValueKey('near-expiry-count'),
-            icon: Icons.schedule_outlined,
-            color: DashboardStyle.warning,
-            detail: 'items expiring soon',
-            onTap: onTap,
-          ),
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final cards = [
+        _StatusCard(
+          title: 'Near Expiry',
+          count: nearExpiry,
+          countKey: const ValueKey('near-expiry-count'),
+          icon: Icons.schedule_outlined,
+          color: DashboardStyle.warning,
+          detail: 'items expiring soon',
+          onTap: onTap,
         ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _StatusCard(
-            title: 'Low Stock',
-            count: lowStock,
-            countKey: const ValueKey('low-stock-count'),
-            icon: Icons.warning_amber_rounded,
-            color: DashboardStyle.danger,
-            detail: 'items running low',
-            onTap: onTap,
-          ),
+        _StatusCard(
+          title: 'Low Stock',
+          count: lowStock,
+          countKey: const ValueKey('low-stock-count'),
+          icon: Icons.warning_amber_rounded,
+          color: DashboardStyle.danger,
+          detail: 'items running low',
+          onTap: onTap,
         ),
-      ],
-    ),
+      ];
+      const gap = 12.0;
+      final stack =
+          constraints.maxWidth <
+          (MediaQuery.textScalerOf(context).scale(14) > 20 ? 680 : 420);
+      return stack
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                cards.first,
+                const SizedBox(height: gap),
+                cards.last,
+              ],
+            )
+          : IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: cards.first),
+                  const SizedBox(width: gap),
+                  Expanded(child: cards.last),
+                ],
+              ),
+            );
+    },
   );
 }
 
@@ -190,7 +208,7 @@ class _StatusCard extends StatelessWidget {
       ],
     );
     return Material(
-      color: DashboardStyle.forest,
+      color: AppColors.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
         side: const BorderSide(color: DashboardStyle.border),

@@ -3,6 +3,7 @@ import 'package:velora/services/android_pilot_policy.dart';
 // ignore_for_file: depend_on_referenced_packages
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -19,9 +20,12 @@ import 'package:velora/screens/dashboard/dashboard_page.dart';
 import 'package:velora/screens/inventory/add_item/add_item_page.dart';
 import 'package:velora/screens/inventory/inventory_page.dart';
 import 'package:velora/screens/suggestions/suggestions_page.dart';
+import 'package:velora/services/mutation_recovery_service.dart';
 import 'package:velora/services/workspace_inventory_create_service.dart';
 import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_session.dart';
+import 'mutation_recovery_service_test.dart'
+    show FakeMutationPersistence, syntheticSha256;
 
 WorkspaceSession e8Session({CafeRole role = CafeRole.owner}) =>
     WorkspaceSession.fromVerified(
@@ -175,6 +179,27 @@ final _normalPolicy = AndroidPilotPolicy.parse(
   platform: TargetPlatform.android,
 );
 
+final _tokenTime = DateTime.utc(2026, 11, 20);
+
+String _testBearer(
+  InventoryHttpsSession session, {
+  Map<String, Object> overrides = const {},
+}) {
+  final claims = <String, Object>{
+    'sub': session.uid,
+    'aud': session.projectId,
+    'iss': 'https://securetoken.google.com/${session.projectId}',
+    'email_verified': true,
+    'exp':
+        _tokenTime.add(const Duration(hours: 1)).millisecondsSinceEpoch ~/ 1000,
+    ...overrides,
+  };
+  final encoded = base64Url
+      .encode(utf8.encode(jsonEncode(claims)))
+      .replaceAll('=', '');
+  return 'e30.$encoded.synthetic';
+}
+
 InventoryHttpsSession _inventorySession(
   WorkspaceSession workspace, {
   String projectId = OfflineInventoryRest.projectId,
@@ -243,6 +268,11 @@ void main() {
                 ? null
                 : OfflineInventoryRest(
                     session: session,
+                    refreshSyntheticBearer: (_) async {
+                      fail(
+                        'Mismatched configuration must not refresh a token.',
+                      );
+                    },
                     respond: (_) async {
                       dispatches++;
                       return _createResponse(workspace.cafeId);
@@ -275,12 +305,23 @@ void main() {
   ) async {
     final workspace = e8Session(role: CafeRole.staff);
     final requests = <http.Request>[];
+    final tokens = <String>[];
     await tester.pumpWidget(
       MaterialApp(
         home: HomePage(
           workspaceSession: workspace,
           offlineInventoryRest: OfflineInventoryRest(
             session: _inventorySession(workspace),
+            now: () => _tokenTime,
+            refreshSyntheticBearer: (captured) async {
+              expect(captured.workspace, same(workspace));
+              final token = _testBearer(
+                captured,
+                overrides: {'fixture': tokens.length},
+              );
+              tokens.add(token);
+              return token;
+            },
             respond: (request) async {
               requests.add(request);
               return _createResponse(workspace.cafeId);
@@ -309,13 +350,18 @@ void main() {
     await tester.runAsync(() async {
       final result = await add.creator!.createItem(request);
       expect(result.created, isTrue);
+      expect((await add.creator!.createItem(request)).created, isTrue);
     });
-    final sent = requests.single;
+    expect(
+      requests.map((request) => request.headers['authorization']),
+      tokens.map((token) => 'Bearer $token'),
+    );
+    expect(tokens.toSet(), hasLength(2));
+    final sent = requests.first;
     expect(
       sent.url.toString(),
       'https://inventory.offline.invalid/inventory/create',
     );
-    expect(sent.headers['authorization'], 'Bearer synthetic-inventory-token');
     final body = jsonDecode(sent.body) as Map<String, dynamic>;
     expect(body['expectedCafeId'], workspace.cafeId);
     expect(
@@ -336,6 +382,8 @@ void main() {
     late Completer<http.Response> reply;
     final offline = OfflineInventoryRest(
       session: _inventorySession(original),
+      now: () => _tokenTime,
+      refreshSyntheticBearer: (captured) async => _testBearer(captured),
       respond: (_) {
         dispatches++;
         if (!started.isCompleted) started.complete();
@@ -396,6 +444,333 @@ void main() {
     });
     expect(dispatches, 1);
   });
+
+  testWidgets(
+    'Failed or mismatched refresh cannot prepare or dispatch a mutation',
+    (tester) async {
+      final workspace = e8Session();
+      final storage = FakeMutationPersistence();
+      var dispatches = 0;
+      var refreshes = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(
+            workspaceSession: workspace,
+            offlineInventoryRest: OfflineInventoryRest(
+              session: _inventorySession(workspace),
+              now: () => _tokenTime,
+              journal: MutationRecoveryJournal(
+                storage,
+                sha256: syntheticSha256,
+              ),
+              refreshSyntheticBearer: (captured) async => switch (refreshes++) {
+                0 => throw StateError('Fixture refresh failed'),
+                1 => null,
+                2 => 'synthetic-inventory-token',
+                3 => _testBearer(
+                  captured,
+                  overrides: {'sub': 'different-user'},
+                ),
+                4 => _testBearer(captured, overrides: {'aud': 'velora-73222'}),
+                5 => _testBearer(
+                  captured,
+                  overrides: {'email_verified': 'true'},
+                ),
+                _ => _testBearer(
+                  captured,
+                  overrides: {'exp': _tokenTime.millisecondsSinceEpoch ~/ 1000},
+                ),
+              },
+              respond: (_) async {
+                dispatches++;
+                return _createResponse(workspace.cafeId);
+              },
+            ),
+          ),
+        ),
+      );
+      tester.widget<VeloraBottomBar>(find.byType(VeloraBottomBar)).onTap(1);
+      await tester.pump();
+      final creator = tester
+          .widget<InventoryPage>(find.byType(InventoryPage))
+          .inventoryCreator!;
+      await tester.runAsync(() async {
+        for (var i = 0; i < 7; i++) {
+          await expectLater(
+            creator.createItem(_createRequest()),
+            throwsA(
+              isA<InventoryHttpsCreateException>()
+                  .having((e) => e.transport.code, 'code', 'unauthenticated')
+                  .having((e) => e.transport.outcomeUnknown, 'unknown', false),
+            ),
+          );
+        }
+      });
+      expect(refreshes, 7);
+      expect(dispatches, 0);
+      expect(storage.values, isEmpty);
+    },
+  );
+
+  testWidgets('A late token cannot dispatch after workspace replacement', (
+    tester,
+  ) async {
+    final original = e8Session();
+    var workspace = original;
+    late StateSetter replace;
+    late Completer<void> started;
+    late Completer<String?> token;
+    var dispatches = 0;
+    final session = _inventorySession(original);
+    final config = OfflineInventoryRest(
+      session: session,
+      now: () => _tokenTime,
+      refreshSyntheticBearer: (_) {
+        started.complete();
+        return token.future;
+      },
+      respond: (_) async {
+        dispatches++;
+        return _createResponse(original.cafeId);
+      },
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (_, setState) {
+            replace = setState;
+            return HomePage(
+              workspaceSession: workspace,
+              offlineInventoryRest: config,
+            );
+          },
+        ),
+      ),
+    );
+    tester.widget<VeloraBottomBar>(find.byType(VeloraBottomBar)).onTap(1);
+    await tester.pump();
+    final creator = tester
+        .widget<InventoryPage>(find.byType(InventoryPage))
+        .inventoryCreator!;
+    late Future<void> pending;
+    await tester.runAsync(() async {
+      started = Completer<void>();
+      token = Completer<String?>();
+      pending = expectLater(
+        creator.createItem(_createRequest()),
+        throwsA(
+          isA<InventoryHttpsCreateException>()
+              .having((e) => e.transport.code, 'code', 'session-changed')
+              .having((e) => e.transport.outcomeUnknown, 'unknown', false),
+        ),
+      );
+      await started.future.timeout(const Duration(seconds: 5));
+    });
+    replace(() => workspace = e8Session());
+    await tester.pump();
+    await tester.runAsync(() async {
+      token.complete(_testBearer(session));
+      await pending.timeout(const Duration(seconds: 5));
+    });
+    expect(dispatches, 0);
+  });
+
+  testWidgets(
+    'Recreated Home and journal reconcile through the canonical TEST entry',
+    (tester) async {
+      Process? child;
+      late StreamIterator<String> lines;
+      late CafeWorkspace fixtureWorkspace;
+      late String fixtureBearer;
+      final storage = FakeMutationPersistence();
+      final requests = <String>[];
+      final replies = <Map<String, dynamic>>[];
+      final request = _createRequest();
+
+      Future<Map<String, dynamic>> readReply() async {
+        expect(
+          await lines.moveNext().timeout(const Duration(seconds: 5)),
+          isTrue,
+        );
+        final reply = jsonDecode(lines.current) as Map<String, dynamic>;
+        expect(reply.containsKey('bridgeError'), isFalse);
+        return reply;
+      }
+
+      Future<http.Response> dispatch(http.Request request) async {
+        requests.add(request.url.path);
+        child!.stdin.writeln(
+          jsonEncode({
+            'url': request.url.toString(),
+            'method': request.method,
+            'headers': request.headers,
+            'body': request.body,
+            'loseCommitResponse': request.url.path == '/inventory/create',
+          }),
+        );
+        await child!.stdin.flush();
+        final reply = await readReply();
+        replies.add(reply);
+        return http.Response(
+          reply['body'] as String,
+          reply['status'] as int,
+          headers: Map<String, String>.from(reply['headers'] as Map),
+        );
+      }
+
+      Future<HttpsWorkspaceInventory> mount(
+        WorkspaceSession workspace,
+        MutationRecoveryJournal journal,
+      ) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: HomePage(
+              workspaceSession: workspace,
+              offlineInventoryRest: OfflineInventoryRest(
+                session: _inventorySession(workspace),
+                now: () => _tokenTime,
+                refreshSyntheticBearer: (_) async => fixtureBearer,
+                respond: dispatch,
+                journal: journal,
+              ),
+            ),
+          ),
+        );
+        tester.widget<VeloraBottomBar>(find.byType(VeloraBottomBar)).onTap(1);
+        await tester.pump();
+        return tester
+                .widget<InventoryPage>(find.byType(InventoryPage))
+                .inventoryCreator!
+            as HttpsWorkspaceInventory;
+      }
+
+      try {
+        await tester.runAsync(() async {
+          final process = await Process.start('node', [
+            'functions/feasibility/shared-backend/runtime/inventory-flutter-bridge.mjs',
+          ]);
+          child = process;
+          unawaited(process.stderr.drain<void>());
+          lines = StreamIterator(
+            process.stdout
+                .transform(utf8.decoder)
+                .transform(const LineSplitter()),
+          );
+          final fixture = await readReply();
+          expect(fixture['projectId'], OfflineInventoryRest.projectId);
+          fixtureWorkspace = CafeWorkspace(
+            cafeId: fixture['cafeId'] as String,
+            uid: fixture['uid'] as String,
+            ownerUid: fixture['ownerUid'] as String,
+            role: CafeRole.staff,
+            membershipGeneration: fixture['generation'] as int,
+          );
+          fixtureBearer = fixture['bearer'] as String;
+        });
+        final originalWorkspace = WorkspaceSession.fromVerified(
+          fixtureWorkspace,
+        );
+        final adapter = await mount(
+          originalWorkspace,
+          MutationRecoveryJournal(storage, sha256: syntheticSha256),
+        );
+        await tester.runAsync(() async {
+          final rejected = await dispatch(
+            http.Request(
+              'POST',
+              Uri.https('inventory.offline.invalid', '/staff/list'),
+            ),
+          );
+          expect(rejected.statusCode, 404);
+          expect(replies.last['writeCommits'], 0);
+
+          await expectLater(
+            adapter.createItem(request),
+            throwsA(
+              isA<InventoryHttpsCreateException>().having(
+                (error) => error.transport.outcomeUnknown,
+                'outcomeUnknown',
+                true,
+              ),
+            ),
+          );
+          expect(replies.last['status'], 503);
+          expect(replies.last['writeCommits'], 1);
+          expect(replies.last['lastWriteCount'], 3);
+          expect(jsonEncode(storage.values).contains(fixtureBearer), isFalse);
+        });
+
+        originalWorkspace.invalidate();
+        await tester.pumpWidget(const SizedBox.shrink());
+        final reconstructedStorage = FakeMutationPersistence();
+        reconstructedStorage.values.addAll(
+          jsonDecode(jsonEncode(storage.values)) as Map<String, dynamic>,
+        );
+        final restoredJournal = MutationRecoveryJournal(
+          reconstructedStorage,
+          sha256: syntheticSha256,
+        );
+        final resumedWorkspace = WorkspaceSession.fromVerified(
+          fixtureWorkspace,
+        );
+        final resumed = await mount(resumedWorkspace, restoredJournal);
+        await tester.runAsync(() async {
+          expect(requests, ['/staff/list', '/inventory/create']);
+          expect(
+            await restoredJournal.load(
+              OfflineInventoryRest.projectId,
+              'different-user',
+              'create',
+              request.idempotencyKey,
+            ),
+            isNull,
+          );
+          final pending = (await restoredJournal.load(
+            OfflineInventoryRest.projectId,
+            resumedWorkspace.uid,
+            'create',
+            request.idempotencyKey,
+          ))!;
+          expect(pending.unresolved, isTrue);
+          expect((await resumed.reconcile(pending)).committed, isTrue);
+          expect(replies.last['writeCommits'], 1);
+          expect(replies.last['lastWriteCount'], 0);
+          final terminal = await restoredJournal.load(
+            OfflineInventoryRest.projectId,
+            resumedWorkspace.uid,
+            'create',
+            request.idempotencyKey,
+          );
+          expect(terminal?.unresolved, isFalse);
+          expect(
+            jsonEncode(reconstructedStorage.values).contains(fixtureBearer),
+            isFalse,
+          );
+          resumedWorkspace.invalidate();
+          await expectLater(
+            resumed.createItem(_createRequest()),
+            throwsA(isA<InventoryHttpsCreateException>()),
+          );
+          expect(requests, [
+            '/staff/list',
+            '/inventory/create',
+            '/inventory/reconcile',
+          ]);
+        });
+      } finally {
+        if (child case final process?) {
+          await tester.runAsync(() async {
+            await process.stdin.close();
+            expect(
+              await process.exitCode.timeout(const Duration(seconds: 5)),
+              0,
+            );
+            await lines.cancel();
+          });
+        }
+      }
+    },
+  );
 
   for (final role in [CafeRole.owner, CafeRole.staff]) {
     testWidgets('Home forwards the same borrowed repository for ${role.name}', (

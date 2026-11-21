@@ -95,7 +95,9 @@ class _SignUpPageState extends State<SignUpPage> {
           builder: (_) => LoginPage(
             pilot: pilot,
             authService: widget.authService,
-            message: 'Account created successfully! Please log in.',
+            message:
+                'Account created. Check your inbox for a verification '
+                'email, then log in to check or resend it.',
           ),
         ),
         (route) => false,

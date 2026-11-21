@@ -29,28 +29,27 @@ class InventoryOverview extends StatelessWidget {
       color: Colors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: AppColors.border),
+        side: BorderSide(color: color.withValues(alpha: .22)),
       ),
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              Wrap(
+                alignment: WrapAlignment.center,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 6,
                 children: [
                   Icon(icon, color: color, size: 20),
-                  const SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      '$value',
-                      key: ValueKey(key),
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  Text(
+                    '$value',
+                    key: ValueKey(key),
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
@@ -76,7 +75,7 @@ class InventoryOverview extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       Material(
-        color: Colors.white,
+        color: AppColors.surface,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: const BorderSide(color: AppColors.border),
@@ -107,7 +106,7 @@ class InventoryOverview extends StatelessWidget {
                       ),
                     ),
                     const Icon(
-                      Icons.inventory_2_outlined,
+                      Icons.bar_chart_rounded,
                       color: DashboardStyle.primary,
                       size: 28,
                     ),

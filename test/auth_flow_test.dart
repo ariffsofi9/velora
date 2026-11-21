@@ -14,8 +14,9 @@ import 'package:velora/services/user_profile_service.dart';
 
 class _User extends Fake implements User {
   final List<String> events;
+  final Future<void> Function()? onSend;
   String? name;
-  _User(this.events);
+  _User(this.events, [this.onSend]);
   @override
   String get uid => 'registered-user';
   @override
@@ -31,8 +32,11 @@ class _User extends Fake implements User {
   }
 
   @override
-  Future<void> sendEmailVerification([ActionCodeSettings? settings]) async =>
-      fail('Registration must not send a verification email');
+  Future<void> sendEmailVerification([ActionCodeSettings? settings]) async {
+    expect(settings, isNull);
+    events.add('sendVerification');
+    await onSend?.call();
+  }
 }
 
 class _Credential extends Fake implements UserCredential {
@@ -50,9 +54,16 @@ class _Auth extends Fake implements FirebaseAuth {
   bool failSignOut = false;
   int creates = 0;
   Future<void> Function()? onSignOut;
+  Future<void> Function()? onSend;
   _Auth(this.events);
   @override
   User? get currentUser => user;
+  @override
+  Stream<User?> authStateChanges() => Stream<User?>.multi((events) {
+    events.onCancel = () async {};
+    events.addSync(user);
+  });
+
   @override
   Future<UserCredential> createUserWithEmailAndPassword({
     required String email,
@@ -62,7 +73,7 @@ class _Auth extends Fake implements FirebaseAuth {
     events.add('create');
     if (failCreate) throw FirebaseAuthException(code: 'email-already-in-use');
     if (nullCredential) return _Credential(null);
-    user = _User(events);
+    user = _User(events, onSend);
     return _Credential(user);
   }
 
@@ -132,7 +143,14 @@ void main() {
     save.complete();
     await registration;
     expect(profiles.submittedName, 'Cafe Owner');
-    expect(events, ['create', 'name', 'profile', 'profileSaved', 'signOut']);
+    expect(events, [
+      'create',
+      'name',
+      'profile',
+      'profileSaved',
+      'sendVerification',
+      'signOut',
+    ]);
     expect(auth.currentUser, isNull);
     expect(await service.canRestoreSession(), isFalse);
   });
@@ -269,7 +287,7 @@ void main() {
   });
 
   test(
-    'Existing persisted sessions do not require email verification',
+    'Existing sessions are restored for the separate workspace checkpoint',
     () async {
       auth.user = _User(events);
       expect(await service.canRestoreSession(), isTrue);
@@ -315,7 +333,7 @@ void main() {
       expect(find.byType(LoginPage), findsOneWidget);
       expect(find.byType(SignUpPage), findsNothing);
       expect(
-        find.text('Account created successfully! Please log in.'),
+        find.textContaining('Account created. Check your inbox'),
         findsOneWidget,
       );
       expect(
@@ -338,7 +356,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.text('Account created successfully! Please log in.'),
+        find.textContaining('Account created. Check your inbox'),
         findsNothing,
       );
       expect(
@@ -347,6 +365,20 @@ void main() {
       );
     },
   );
+
+  testWidgets('uncertain email delivery keeps registration successful', (
+    tester,
+  ) async {
+    auth.onSend = () async =>
+        throw FirebaseAuthException(code: 'network-request-failed');
+    await openSignup(tester);
+    await tester.pumpAndSettle();
+    expect(find.byType(LoginPage), findsOneWidget);
+    expect(find.textContaining('log in to check or resend it'), findsOneWidget);
+    expect(events.where((event) => event == 'sendVerification'), hasLength(1));
+    expect(auth.creates, 1);
+    expect(auth.currentUser, isNull);
+  });
 
   testWidgets(
     'Splash never restores an unfinished registration, even if sign-out fails',

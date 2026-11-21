@@ -8,6 +8,7 @@ import '../../repositories/workspace_inventory_repository.dart';
 import '../../repositories/workspace_inventory_movement_repository.dart';
 import '../../services/workspace_session.dart';
 import '../../services/workspace_inventory_create_service.dart';
+import '../../services/workspace_inventory_https_transport.dart';
 import '../../services/workspace_inventory_update_service.dart';
 import '../../services/workspace_inventory_stock_service.dart';
 import '../../services/workspace_inventory_lifecycle_service.dart';
@@ -44,6 +45,31 @@ class InventoryPage extends StatefulWidget {
     this.lifecycleManager,
     this.csvExportService,
   });
+
+  /// Used by the opt-in WorkspaceGate handoff with a synthetic read repository.
+  factory InventoryPage.offlineRest({
+    Key? key,
+    required WorkspaceSession workspaceSession,
+    required WorkspaceInventoryRepository repository,
+    required HttpsWorkspaceInventory transport,
+  }) {
+    final mutations =
+        workspaceSession.isActive &&
+            transport.endpoint == Uri.https('inventory.offline.invalid') &&
+            identical(repository.session, workspaceSession) &&
+            identical(transport.currentSession()?.workspace, workspaceSession)
+        ? transport
+        : null;
+    return InventoryPage(
+      key: key,
+      workspaceSession: workspaceSession,
+      repository: repository,
+      inventoryCreator: mutations,
+      inventoryUpdater: mutations,
+      stockAdjuster: mutations,
+      lifecycleManager: mutations,
+    );
+  }
 
   @override
   State<InventoryPage> createState() => _InventoryPageState();

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import 'widgets_home/bottom_bar.dart';
+import '../../widgets/responsive_navigation.dart';
 import '../../widgets/dashboard/dashboard_style.dart';
 import '../../services/android_pilot_policy.dart';
 import '../../services/mutation_recovery_service.dart';
@@ -31,11 +33,15 @@ final class OfflineInventoryRest {
   static const projectId = 'velora-spark-test';
 
   final InventoryHttpsSession session;
+  final Future<String?> Function(InventoryHttpsSession) refreshSyntheticBearer;
+  final DateTime Function() now;
   final Future<http.Response> Function(http.Request) respond;
   final MutationRecoveryJournal? journal;
 
   const OfflineInventoryRest({
     required this.session,
+    required this.refreshSyntheticBearer,
+    this.now = DateTime.now,
     required this.respond,
     this.journal,
   });
@@ -48,6 +54,43 @@ final class OfflineInventoryRest {
       session.projectId == projectId &&
       session.emailVerified &&
       session.revision >= 0;
+
+  Future<String?> _refresh(InventoryHttpsSession captured) async {
+    if (!session.matches(captured) || !_matches(captured.workspace)) {
+      return null;
+    }
+    try {
+      final token = await refreshSyntheticBearer(captured);
+      if (!_matches(captured.workspace) ||
+          token == null ||
+          token.length > 8192) {
+        return null;
+      }
+      final parts = token.split('.');
+      if (parts.length != 3 ||
+          !parts.every((part) => RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(part))) {
+        return null;
+      }
+      // Local binding only. The canonical backend verifies the signature,
+      // account freshness and transactional membership.
+      final claims = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      );
+      if (claims is! Map<String, dynamic> ||
+          claims['sub'] != captured.uid ||
+          claims['aud'] != captured.projectId ||
+          claims['iss'] !=
+              'https://securetoken.google.com/${captured.projectId}' ||
+          claims['email_verified'] != true ||
+          claims['exp'] is! int ||
+          (claims['exp'] as int) <= now().millisecondsSinceEpoch ~/ 1000) {
+        return null;
+      }
+      return token;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 class HomePage extends StatefulWidget {
@@ -154,7 +197,7 @@ class _HomePageState extends State<HomePage> {
           ? config.session
           : null,
       sessionChanges: _inventorySessionChanges.stream,
-      idToken: (_) async => 'synthetic-inventory-token',
+      idToken: config._refresh,
       journal: config.journal,
     );
     _inventoryMutations = adapter;
@@ -265,20 +308,27 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final side = usesSideNavigation(context);
+    final navigation = VeloraBottomBar(
+      currentIndex: _selectedIndex,
+      onTap: _changePage,
+      side: side,
+    );
+    final content = widget.workspaceSession.isActive
+        ? KeyedSubtree(
+            key: ObjectKey(widget.workspaceSession),
+            child: _pages[_selectedIndex],
+          )
+        : const Center(child: Text('Workspace access could not be verified.'));
     return Scaffold(
       backgroundColor: DashboardStyle.background,
-      body: widget.workspaceSession.isActive
-          ? KeyedSubtree(
-              key: ObjectKey(widget.workspaceSession),
-              child: _pages[_selectedIndex],
-            )
-          : const Center(
-              child: Text('Workspace access could not be verified.'),
-            ),
-      bottomNavigationBar: VeloraBottomBar(
-        currentIndex: _selectedIndex,
-        onTap: _changePage,
+      body: Row(
+        children: [
+          if (side) navigation,
+          Expanded(key: const ValueKey('workspace-content'), child: content),
+        ],
       ),
+      bottomNavigationBar: side ? null : navigation,
     );
   }
 }

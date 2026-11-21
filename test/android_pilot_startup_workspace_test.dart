@@ -45,6 +45,22 @@ class _User extends Fake implements User {
   _User({this.uid = 'synthetic-owner', this.emailVerified = true});
   @override
   String get email => 'synthetic@example.test';
+
+  @override
+  Future<void> reload() async {}
+
+  @override
+  Future<IdTokenResult> getIdTokenResult([bool forceRefresh = false]) async {
+    expect(forceRefresh, isTrue);
+    return _VerifiedToken(emailVerified);
+  }
+}
+
+class _VerifiedToken extends Fake implements IdTokenResult {
+  final bool verified;
+  _VerifiedToken(this.verified);
+  @override
+  Map<String, dynamic> get claims => {'email_verified': verified};
 }
 
 class _Credential extends Fake implements UserCredential {

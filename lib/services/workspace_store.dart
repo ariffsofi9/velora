@@ -11,14 +11,21 @@ abstract interface class WorkspaceStore {
 /// Read-only server transaction: offline or denied reads fail closed.
 class FirestoreWorkspaceStore implements WorkspaceStore {
   final FirebaseFirestore firestore;
-  FirestoreWorkspaceStore({FirebaseFirestore? firestore})
-    : firestore = firestore ?? FirebaseFirestore.instance;
+  final Duration timeout;
+  final int maxAttempts;
+  FirestoreWorkspaceStore({
+    FirebaseFirestore? firestore,
+    this.timeout = const Duration(seconds: 30),
+    this.maxAttempts = 5,
+  }) : firestore = firestore ?? FirebaseFirestore.instance;
 
   @override
   Future<T> readTransaction<T>(
     Future<T> Function(WorkspaceReader reader) read,
   ) => firestore.runTransaction(
     (transaction) => read(_FirestoreWorkspaceReader(firestore, transaction)),
+    timeout: timeout,
+    maxAttempts: maxAttempts,
   );
 }
 

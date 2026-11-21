@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../models/cafe_workspace.dart';
 import '../../services/workspace_resolver.dart';
+import '../../services/offline_verified_workspace_inventory.dart';
+import '../../services/workspace_inventory_https_transport.dart';
 import '../../services/workspace_session.dart';
 import '../business_setup/business_setup_page.dart';
 import '../home/home_page.dart';
@@ -151,21 +153,34 @@ class PilotAccessBlockedPage extends StatelessWidget {
 /// Resolves trusted membership before exposing any workspace-backed home UI.
 class WorkspaceGate extends StatefulWidget {
   final AndroidPilotAuthDependencies? pilot;
+  final AuthService? authService;
   final WorkspaceResolver? resolver;
   final Widget Function(BuildContext context, WorkspaceSession session)?
   homeBuilder;
   final WidgetBuilder? setupBuilder;
   final bool initiallyBlocked;
   final OwnerEmailVerification? ownerVerification;
+  final OfflineVerifiedWorkspaceInventory? offlineInventory;
+  final Stream<bool>? offlineAuthority;
+  final Widget Function(
+    BuildContext context,
+    WorkspaceSession session,
+    HttpsWorkspaceInventory transport,
+  )?
+  offlineHomeBuilder;
 
   const WorkspaceGate({
     super.key,
     this.pilot,
+    this.authService,
     this.resolver,
     this.homeBuilder,
     this.setupBuilder,
     this.initiallyBlocked = false,
     this.ownerVerification,
+    this.offlineInventory,
+    this.offlineAuthority,
+    this.offlineHomeBuilder,
   });
 
   @override
@@ -175,6 +190,11 @@ class WorkspaceGate extends StatefulWidget {
 class _WorkspaceGateState extends State<WorkspaceGate> {
   AndroidPilotAuthDependencies? get _pilot =>
       widget.pilot ?? AndroidPilotAuthScope.read(context);
+  FirebaseAuth get _auth =>
+      _pilot?.auth ?? widget.authService?.firebaseAuth ?? FirebaseAuth.instance;
+  EmailVerificationSession? _session;
+  OwnerEmailVerification? _verification;
+  bool _showVerification = false;
   int _revision = 0;
   bool _resolving = false;
   WorkspaceResolutionException? _failure;
@@ -194,53 +214,207 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
     }
   }
 
-  Future<void> _resolve() async {
-    if (_routing || _resolving) return;
+  Future<bool> _resolve({bool fromVerificationPage = false}) async {
+    if (_routing || _resolving) return false;
     _resolving = true;
     final revision = ++_revision;
     final pilot = _pilot;
-    setState(() {
-      _loading = true;
-      _failure = null;
-    });
+    final inventory = widget.offlineInventory;
+    final offlineBuilder = widget.offlineHomeBuilder;
+    final offlineAuthority = widget.offlineAuthority;
+    final offline =
+        inventory != null || offlineBuilder != null || offlineAuthority != null;
+    if (!fromVerificationPage) {
+      setState(() {
+        _loading = true;
+        _failure = null;
+      });
+    }
     try {
-      final workspace = await (pilot != null
-          ? pilot.resolveEligibleWorkspace()
-          : (widget.resolver ?? WorkspaceResolver()).resolve());
-      if (!mounted || revision != _revision || !identical(pilot, _pilot)) {
-        return;
+      if (pilot?.policy.isValid == false) {
+        throw const WorkspaceResolutionException(
+          WorkspaceFailure.unauthenticated,
+        );
       }
-      if (pilot != null && ModalRoute.of(context)?.isCurrent == false) return;
+      final offlineAuth = pilot == null
+          ? widget.authService?.firebaseAuth
+          : pilot.firebaseAuth;
+      if (offline &&
+          (inventory == null ||
+              offlineBuilder == null ||
+              offlineAuthority == null ||
+              offlineAuth == null ||
+              widget.resolver == null ||
+              pilot?.policy.isRestricted == true ||
+              !inventory.usesAuth(offlineAuth))) {
+        throw const WorkspaceResolutionException(
+          WorkspaceFailure.sessionChanged,
+        );
+      }
+      final auth = offline ? offlineAuth! : _auth;
+      final uid = auth.currentUser?.uid;
+      if (uid == null) {
+        throw const WorkspaceResolutionException(
+          WorkspaceFailure.unauthenticated,
+        );
+      }
+      final bound = _session ??= EmailVerificationSession(auth, uid);
+      if (!identical(bound.auth, auth)) {
+        throw const WorkspaceResolutionException(
+          WorkspaceFailure.sessionChanged,
+        );
+      }
+      await bound.ready(FirebaseOwnerEmailVerification.defaultTimeout);
+      if (!mounted || revision != _revision || !identical(pilot, _pilot)) {
+        return false;
+      }
+      final verification = _verification ??=
+          widget.ownerVerification ??
+          FirebaseOwnerEmailVerification(
+            session: bound,
+            pilotPolicy: pilot?.policy,
+          );
+      final verified = await verification.refreshVerified();
+      bound.requireCurrent();
+      if (!mounted || revision != _revision || !identical(pilot, _pilot)) {
+        return false;
+      }
+      if (!verified || auth.currentUser?.emailVerified != true) {
+        if (pilot?.policy.isRestricted == true) {
+          throw const WorkspaceResolutionException(
+            WorkspaceFailure.unauthenticated,
+          );
+        }
+        setState(() {
+          _loading = false;
+          _showVerification = true;
+        });
+        return false;
+      }
+      final inventoryRevision = inventory?.revision;
+      final resolver = widget.resolver ?? WorkspaceResolver(auth: auth);
+      final workspace = await (pilot != null
+          ? pilot.resolveEligibleWorkspace(
+              resolve: offline ? resolver.resolve : null,
+            )
+          : resolver.resolve());
+      bound.requireCurrent();
+      if (workspace.uid != bound.uid ||
+          auth.currentUser?.emailVerified != true) {
+        throw const WorkspaceResolutionException(
+          WorkspaceFailure.sessionChanged,
+        );
+      }
+      if (!mounted || revision != _revision || !identical(pilot, _pilot)) {
+        return false;
+      }
+      if (ModalRoute.of(context)?.isCurrent == false) return false;
       final session = WorkspaceSession.fromVerified(workspace);
-      _replace((context) {
-        final child =
-            widget.homeBuilder?.call(context, session) ??
-            HomePage(workspaceSession: session);
-        return pilot != null ||
-                (widget.homeBuilder == null && widget.resolver == null)
-            ? WorkspaceSessionBoundary(
-                session: session,
-                pilot: pilot,
-                child: child,
-              )
-            : child;
-      }, '/workspace-home');
+      if (inventory != null) {
+        if (inventory.revision != inventoryRevision ||
+            !inventory.usesAuth(auth)) {
+          session.invalidate();
+          throw const WorkspaceResolutionException(
+            WorkspaceFailure.sessionChanged,
+          );
+        }
+        late final routeTransport = inventory.transportForWorkspace(session);
+        _replace(
+          (context) => WorkspaceSessionBoundary(
+            session: session,
+            pilot: pilot,
+            identities: auth.authStateChanges().map((user) => user?.uid),
+            authority: offlineAuthority!,
+            resolve: resolver.resolve,
+            offlineInventory: inventory,
+            offlineInventoryRevision: inventoryRevision,
+            child: Builder(
+              builder: (context) =>
+                  offlineBuilder!(context, session, routeTransport),
+            ),
+          ),
+          '/workspace-home',
+          bound,
+        );
+        return true;
+      }
+      final homeBuilder = widget.homeBuilder;
+      final useBoundary =
+          pilot != null || (homeBuilder == null && widget.resolver == null);
+      _replace(
+        (context) {
+          final child =
+              homeBuilder?.call(context, session) ??
+              HomePage(workspaceSession: session);
+          return useBoundary
+              ? WorkspaceSessionBoundary(
+                  session: session,
+                  pilot: pilot,
+                  child: child,
+                )
+              : child;
+        },
+        '/workspace-home',
+        bound,
+      );
+      return true;
     } on WorkspaceResolutionException catch (error) {
-      if (!mounted || revision != _revision) return;
-      if ((pilot == null ||
-              !pilot.policy.isRestricted && pilot.policy.isValid) &&
-          error.failure == WorkspaceFailure.missingMembership) {
-        _replace(widget.setupBuilder ?? _ownerSetup, '/business-setup');
-        return;
+      if (!mounted || revision != _revision || !identical(pilot, _pilot)) {
+        return false;
+      }
+      final current = _session?.isCurrent ?? false;
+      if (current &&
+          !offline &&
+          pilot?.policy.isRestricted != true &&
+          _auth.currentUser?.emailVerified == true &&
+          error.failure == WorkspaceFailure.missingMembership &&
+          ModalRoute.of(context)?.isCurrent != false) {
+        final setup = widget.setupBuilder;
+        final verification =
+            widget.ownerVerification ??
+            FirebaseOwnerEmailVerification(
+              auth: _auth,
+              pilotPolicy: pilot?.policy,
+            );
+        _replace(
+          (context) =>
+              setup?.call(context) ??
+              BusinessSetupPage(verification: verification),
+          '/business-setup',
+          _session!,
+        );
+        return true;
       }
       setState(() {
         _loading = false;
-        _failure = error;
+        _showVerification = false;
+        _failure = _session != null && !current
+            ? const WorkspaceResolutionException(
+                WorkspaceFailure.sessionChanged,
+              )
+            : error;
+      });
+    } on OwnerVerificationException catch (error) {
+      if (!mounted || revision != _revision) return false;
+      final replaced =
+          _session?.isCurrent == false ||
+          error.failure == OwnerVerificationFailure.changed ||
+          error.failure == OwnerVerificationFailure.signedOut;
+      if (fromVerificationPage && !replaced) rethrow;
+      setState(() {
+        _loading = false;
+        _showVerification = false;
+        _failure = WorkspaceResolutionException(
+          replaced
+              ? WorkspaceFailure.sessionChanged
+              : WorkspaceFailure.unavailable,
+        );
       });
     } catch (_) {
-      if (!mounted || revision != _revision) return;
+      if (!mounted || revision != _revision) return false;
       setState(() {
         _loading = false;
+        _showVerification = false;
         _failure = const WorkspaceResolutionException(
           WorkspaceFailure.unavailable,
         );
@@ -248,15 +422,17 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
     } finally {
       if (mounted && revision == _revision) _resolving = false;
     }
+    return false;
   }
 
   Future<void> _logout() async {
     final pilot = _pilot;
-    if (pilot == null || _routing) return;
+    if (_routing) return;
     _revision++;
     _routing = true;
     try {
-      await pilot.authService.signOut();
+      await (pilot?.authService ?? widget.authService ?? AuthService())
+          .signOut();
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
         PageRouteBuilder<void>(
@@ -276,9 +452,18 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
   void didUpdateWidget(covariant WorkspaceGate oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.pilot, widget.pilot) ||
-        !identical(oldWidget.resolver, widget.resolver)) {
+        !identical(oldWidget.authService, widget.authService) ||
+        !identical(oldWidget.resolver, widget.resolver) ||
+        !identical(oldWidget.offlineInventory, widget.offlineInventory) ||
+        !identical(oldWidget.offlineAuthority, widget.offlineAuthority) ||
+        !identical(oldWidget.offlineHomeBuilder, widget.offlineHomeBuilder) ||
+        !identical(oldWidget.ownerVerification, widget.ownerVerification)) {
       _revision++;
       _resolving = false;
+      _showVerification = false;
+      unawaited(_session?.close());
+      _session = null;
+      _verification = null;
       if (!_routing) _resolve();
     }
   }
@@ -286,35 +471,35 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
   @override
   void dispose() {
     _revision++;
+    unawaited(_session?.close());
     super.dispose();
   }
 
-  Widget _ownerSetup(BuildContext context) {
-    // Route builders can outlive the originating State. Capture from the
-    // destination context, never from a disposed Gate's context getter.
-    final pilot = widget.pilot ?? AndroidPilotAuthScope.read(context);
-    if (pilot != null && !pilot.allows(AndroidPilotCapability.businessSetup)) {
-      return const PilotAccessBlockedPage();
-    }
-    final verification =
-        widget.ownerVerification ?? FirebaseOwnerEmailVerification();
-    return OwnerEmailVerificationPage(
-      verification: verification,
-      verifiedBuilder: (_) => WorkspaceGate(
-        pilot: pilot,
-        resolver: widget.resolver,
-        homeBuilder: widget.homeBuilder,
-        setupBuilder: (_) => BusinessSetupPage(verification: verification),
-      ),
-    );
-  }
-
-  void _replace(WidgetBuilder builder, String name) {
+  void _replace(
+    WidgetBuilder builder,
+    String name,
+    EmailVerificationSession bound,
+  ) {
     _routing = true;
+    final pilot = _pilot;
+    final authService = widget.authService;
+    var admitted = false;
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: builder,
+        builder: (context) {
+          if (!admitted &&
+              (!bound.isCurrent ||
+                  bound.auth.currentUser?.emailVerified != true)) {
+            return WorkspaceGate(
+              pilot: pilot,
+              authService: authService,
+              initiallyBlocked: true,
+            );
+          }
+          admitted = true;
+          return builder(context);
+        },
         settings: RouteSettings(name: name),
       ),
     );
@@ -337,7 +522,17 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
   };
 
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    if (_showVerification) {
+      return OwnerEmailVerificationPage(
+        verification: _verification!,
+        checkAndContinue: () => _resolve(fromVerificationPage: true),
+      );
+    }
+    return _buildWorkspaceStatus();
+  }
+
+  Widget _buildWorkspaceStatus() => Scaffold(
     backgroundColor: AppColors.background,
     body: SafeArea(
       child: Center(
@@ -402,12 +597,13 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
                           label: const Text('Try Again'),
                         ),
                       ),
-                      if (_pilot != null)
-                        TextButton(
-                          key: const ValueKey('pilot-logout'),
-                          onPressed: _routing ? null : _logout,
-                          child: const Text('Log out'),
-                        ),
+                      TextButton(
+                        key: _pilot == null
+                            ? null
+                            : const ValueKey('pilot-logout'),
+                        onPressed: _routing ? null : _logout,
+                        child: const Text('Log out'),
+                      ),
                     ],
                   ),
           ),

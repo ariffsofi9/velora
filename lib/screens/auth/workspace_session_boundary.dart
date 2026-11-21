@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../../services/workspace_resolver.dart';
+import '../../services/offline_verified_workspace_inventory.dart';
 import '../../services/workspace_session.dart';
 import '../../services/workspace_session_monitor.dart';
 import '../../models/cafe_workspace.dart';
@@ -23,6 +24,8 @@ class WorkspaceSessionBoundary extends StatefulWidget {
   final Stream<DocumentSnapshot<Map<String, dynamic>>> Function(String path)?
   authoritySnapshots;
   final Future<CafeWorkspace> Function()? resolve;
+  final OfflineVerifiedWorkspaceInventory? offlineInventory;
+  final int? offlineInventoryRevision;
   const WorkspaceSessionBoundary({
     super.key,
     this.pilot,
@@ -32,6 +35,8 @@ class WorkspaceSessionBoundary extends StatefulWidget {
     this.authority,
     this.authoritySnapshots,
     this.resolve,
+    this.offlineInventory,
+    this.offlineInventoryRevision,
   });
   @override
   State<WorkspaceSessionBoundary> createState() => _BoundaryState();
@@ -59,12 +64,28 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
           : () => _pilot.resolveEligibleWorkspace(resolve: widget.resolve),
       onState: (ready) {
         if (!mounted) return;
+        final inventory = widget.offlineInventory;
+        final revision = widget.offlineInventoryRevision;
+        if (ready &&
+            !_ready &&
+            inventory != null &&
+            (revision == null ||
+                !inventory.bindVerifiedWorkspace(
+                  _boundSession,
+                  expectedRevision: revision,
+                ))) {
+          _monitor.invalidate();
+          return;
+        }
         _verificationTimeout?.cancel();
         setState(() => _ready = ready);
         if (!ready) {
+          inventory?.releaseVerifiedWorkspace(_boundSession);
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            Widget fallback(BuildContext context) => _identity == null
+            Widget fallback(BuildContext context) => inventory != null
+                ? const PilotAccessBlockedPage()
+                : _identity == null
                 ? LoginPage(pilot: _pilot)
                 : WorkspaceGate(pilot: _pilot, initiallyBlocked: true);
             Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
@@ -94,7 +115,12 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
               ))
           .map((uid) {
             _identity = uid;
-            if (sawIdentity && _pilot?.policy.isRestricted == true) {
+            // A later Firebase Auth event starts a new episode, even if the
+            // next user has the same UID.
+            if (sawIdentity &&
+                (widget.identities == null ||
+                    widget.offlineInventory != null ||
+                    _pilot?.policy.isRestricted == true)) {
               _monitor.invalidate();
             }
             sawIdentity = true;
@@ -182,7 +208,10 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
   void didUpdateWidget(covariant WorkspaceSessionBoundary oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.session, widget.session) ||
+        !identical(oldWidget.offlineInventory, widget.offlineInventory) ||
+        oldWidget.offlineInventoryRevision != widget.offlineInventoryRevision ||
         !identical(oldWidget.pilot, widget.pilot)) {
+      oldWidget.offlineInventory?.releaseVerifiedWorkspace(_boundSession);
       _monitor.invalidate();
     }
   }
@@ -192,6 +221,7 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
     WidgetsBinding.instance.removeObserver(this);
     _verificationTimeout?.cancel();
     _boundSession.invalidate();
+    widget.offlineInventory?.releaseVerifiedWorkspace(_boundSession);
     _monitor.dispose();
     super.dispose();
   }

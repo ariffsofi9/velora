@@ -23,18 +23,23 @@ const recipeRoutes = ['/recipes/save', '/recipes/list', '/recipes/get', '/recipe
 // Unwired TEST-only composition. No listener, defaults for network/credentials,
 // SDK initialization, environment discovery or import of src/index.js.
 export function createApplication({projectId, publicOrigin, allowedOrigins, transport, credential,
+  accessToken: injectedAccessToken,
   now = Date.now, maxConcurrent = 8, httpTimeoutMs = 5000, identityTimeoutMs = 5000,
   verificationTimeoutMs = 5000, bodyTimeoutMs = 5000, cleanupTimeoutMs = 100,
   transactionTimeoutMs = 20000, rpcTimeoutMs = 5000, maxResponseBytes = 262144,
   workspaceIdFactory, allowInvitationRejoin = false, enableSavedRecipes = false, ai} = {}) {
   requireTestProject(projectId);
   if (typeof enableSavedRecipes !== 'boolean') throw new BackendError('configuration', 'invalid-configuration');
-  if (!credential || credential.projectId !== projectId || typeof now !== 'function') {
+  const hasCredential = credential !== undefined;
+  const hasProvider = injectedAccessToken !== undefined;
+  if (typeof now !== 'function' || hasCredential === hasProvider ||
+      (hasCredential && credential?.projectId !== projectId) ||
+      (hasProvider && (typeof injectedAccessToken !== 'function' || injectedAccessToken.projectId !== projectId))) {
     throw new BackendError('configuration', 'invalid-configuration');
   }
   const http = createGoogleHttp({projectId, transport, timeoutMs: httpTimeoutMs, cleanupTimeoutMs, maxBytes: maxResponseBytes});
-  const accessToken = createGoogleOAuth({projectId, http, email: credential.email, sign: credential.sign,
-    now, timeoutMs: identityTimeoutMs});
+  const accessToken = hasProvider ? injectedAccessToken :
+    createGoogleOAuth({projectId, http, email: credential.email, sign: credential.sign, now, timeoutMs: identityTimeoutMs});
   const getAccount = createFirebaseAccounts({projectId, http, accessToken, timeoutMs: identityTimeoutMs});
   const verifyIdentity = createFirebaseIdentity({projectId, http, getAccount, now, timeoutMs: identityTimeoutMs});
   const store = createFirestoreStore({projectId, http, accessToken, now, timeoutMs: transactionTimeoutMs,
