@@ -147,8 +147,15 @@ export function createWorkerAdmission(env) {
     const token = await rpc(() => stub.reserve(attempt, replayUntil), timeoutMs, signal);
     if (token === null) return null;
     if (!uuid(token)) throw unavailable();
-    // Use a fresh stub for release: an ambiguous claim can invalidate its stub.
-    const finish = () => rpc(() => namespace.get(objectId).finish(attempt, token), timeoutMs);
+    const release = () => rpc(() => namespace.get(objectId).finish(attempt, token), timeoutMs);
+    const finish = async () => {
+      try { return await release(); }
+      catch {
+        // A lost acknowledgement can follow a successful release. Retry once
+        // with a fresh stub and the same pair, which SQLite can close only once.
+        return release();
+      }
+    };
     try {
       if (await rpc(() => stub.claim(attempt, token), timeoutMs, signal) !== true || signal?.aborted) throw unavailable();
     } catch {

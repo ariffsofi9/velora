@@ -131,7 +131,7 @@ before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'velora-admission-'));
   const result = await build({stdin: {resolveDir: fileURLToPath(new URL('..', import.meta.url)),
     contents: `
-      import worker, {createWorkerApplication} from './runtime/worker-entry.mjs';
+      import worker, {createWorkerAdmission, createWorkerApplication} from './runtime/worker-entry.mjs';
       export {AdmissionCoordinator} from './runtime/worker-entry.mjs';
       import {CERTIFICATE_URL} from './backend/google-http.mjs';
       const token = Object.assign(async () => 'synthetic-only', {projectId: '${project}'});
@@ -142,6 +142,62 @@ before(async () => {
       let app;
       export default {async fetch(request, env, ctx) {
         const path = new URL(request.url).pathname;
+        if (path === '/__fixture/release') {
+          const {fault} = await request.json();
+          let reserved, stubCount = 0, reserves = 0, claims = 0;
+          const releases = [];
+          const namespace = env.ADMISSION;
+          const objectId = namespace.idFromName(env.VELORA_FIREBASE_PROJECT);
+          const admission = createWorkerAdmission({...env, ADMISSION_RPC_TIMEOUT_MS: '100', ADMISSION: {
+            idFromName: name => namespace.idFromName(name),
+            get(id) {
+              const stub = namespace.get(id);
+              const stubNumber = ++stubCount;
+              return {
+                async reserve(attempt, until) {
+                  reserves++;
+                  const token = await stub.reserve(attempt, until);
+                  reserved = [attempt, token];
+                  return token;
+                },
+                claim(...args) {
+                  claims++;
+                  return stub.claim(...args);
+                },
+                async finish(...args) {
+                  releases.push({stubNumber, matches: args[0] === reserved[0] && args[1] === reserved[1]});
+                  if (fault === 'permanent') return new Promise(() => {});
+                  if (releases.length === 1 && fault === 'transient') throw Error('Synthetic RPC failure');
+                  const result = await stub.finish(...args);
+                  if (releases.length === 1 && fault === 'lost') return new Promise(() => {});
+                  return result;
+                },
+              };
+            },
+          }});
+          const stub = namespace.get(objectId);
+          const otherAttempt = crypto.randomUUID();
+          const otherToken = await stub.reserve(otherAttempt, Date.now() + 30000);
+          await stub.claim(otherAttempt, otherToken);
+          const permit = await admission.acquire();
+          let acknowledged = false;
+          try {
+            try { acknowledged = await permit.finish(); } catch { /* expected synthetic failure */ }
+            const probe = crypto.randomUUID();
+            const probeToken = await stub.reserve(probe, Date.now() + 30000);
+            // At most one slot can be freed. If the other permit was closed,
+            // this second probe would also succeed after an acknowledged release.
+            const extra = crypto.randomUUID();
+            const extraToken = await stub.reserve(extra, Date.now() + 30000);
+            if (probeToken) await stub.finish(probe, probeToken);
+            if (extraToken) await stub.finish(extra, extraToken);
+            return Response.json({acknowledged, releases, reserves, claims,
+              available: probeToken !== null, extraAvailable: extraToken !== null});
+          } finally {
+            await stub.finish(...reserved);
+            await stub.finish(otherAttempt, otherToken);
+          }
+        }
         if (path === '/__fixture/rpc') {
           const {method, args, alternateName} = await request.json();
           try {
@@ -410,6 +466,29 @@ test('storage failure and lost reserve or claim acknowledgements fail before rou
   await finish(first);
   await finish(second);
 });
+
+for (const [fault, attempts, acknowledged] of [
+  ['none', 1, true],
+  ['lost', 2, true],
+  ['transient', 2, true],
+  ['permanent', 2, false],
+]) {
+  test(`release fixture: ${fault} preserves exact-pair matching and admission capacity`, async () => {
+    const result = await call('test', '/__fixture/release', {
+      method: 'POST', body: JSON.stringify({fault}),
+    });
+    assert.deepEqual(result, {status: 200, body: {
+      acknowledged,
+      releases: Array.from({length: attempts}, (_, index) => ({
+        stubNumber: index + 2, matches: true,
+      })),
+      reserves: 1,
+      claims: 1,
+      available: acknowledged,
+      extraAvailable: false,
+    }});
+  });
+}
 
 test('verification timeout returns promptly and retains admission until protected work settles', async () => {
   const late = Promise.withResolvers();
