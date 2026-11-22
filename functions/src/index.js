@@ -30,6 +30,14 @@ const {
 initializeApp();
 const db = getFirestore();
 
+function callableValidationMessage(error) {
+  // The domain's unknown-field diagnostic includes a client-supplied key.
+  if (error.code === 'invalid-argument' && error.message.startsWith('Unsupported field: ')) {
+    return 'Request contains an unsupported field.';
+  }
+  return error.message;
+}
+
 const store = {
   runTransaction: (operation) => db.runTransaction(async (adminTransaction) => {
     const transaction = {
@@ -40,8 +48,11 @@ const store = {
       create: (path, data) => adminTransaction.create(db.doc(path), data),
       update: (path, data) => adminTransaction.update(db.doc(path), data),
       set: (path, data) => adminTransaction.set(db.doc(path), data),
-      members: async (cafeId, limit) => {
-        const snapshot = await adminTransaction.get(db.collection(`cafes/${cafeId}/members`).limit(limit));
+      members: async (cafeId, limit, cursor) => {
+        let query = db.collection(`cafes/${cafeId}/members`).orderBy(FieldPath.documentId());
+        if (cursor !== undefined) query = query.where('role', '==', 'staff');
+        if (cursor) query = query.startAfter(cursor);
+        const snapshot = await adminTransaction.get(query.limit(limit));
         return snapshot.docs.map(doc => ({id: doc.id, data: doc.data()}));
       },
       menuItems: async (cafeId, input) => {
@@ -117,9 +128,9 @@ exports.createWorkspace = onCall(
       });
     } catch (error) {
       if (error instanceof WorkspaceCreationError) {
-        throw new HttpsError(error.code, error.message);
+        throw new HttpsError(error.code, callableValidationMessage(error));
       }
-      console.error('Workspace creation failed without exposing input data.', error);
+      console.error('callable-failure', 'createWorkspace', 'unexpected');
       throw new HttpsError('internal', 'Workspace creation failed.');
     }
   },
@@ -138,12 +149,9 @@ exports.createInventoryItem = onCall(
       });
     } catch (error) {
       if (error instanceof InventoryCreationError) {
-        throw new HttpsError(error.code, error.message);
+        throw new HttpsError(error.code, callableValidationMessage(error));
       }
-      console.error(
-        'Inventory creation failed without exposing request data.',
-        error,
-      );
+      console.error('callable-failure', 'createInventoryItem', 'unexpected');
       throw new HttpsError('internal', 'Inventory creation failed.');
     }
   },
@@ -162,12 +170,9 @@ exports.updateInventoryItem = onCall(
       });
     } catch (error) {
       if (error instanceof InventoryUpdateError) {
-        throw new HttpsError(error.code, error.message);
+        throw new HttpsError(error.code, callableValidationMessage(error));
       }
-      console.error(
-        'Inventory update failed without exposing request data.',
-        error,
-      );
+      console.error('callable-failure', 'updateInventoryItem', 'unexpected');
       throw new HttpsError('internal', 'Inventory update failed.');
     }
   },
@@ -185,13 +190,10 @@ exports.adjustInventoryStock = onCall(
       });
     } catch (error) {
       if (error instanceof InventoryStockError) {
-        throw new HttpsError(error.code, error.message,
+        throw new HttpsError(error.code, callableValidationMessage(error),
           error.reason === 'insufficient-stock' ? {reason: 'insufficient-stock'} : undefined);
       }
-      console.error(
-        'Stock adjustment failed without exposing request data.',
-        error,
-      );
+      console.error('callable-failure', 'adjustInventoryStock', 'unexpected');
       throw new HttpsError('internal', 'Stock adjustment failed.');
     }
   },
@@ -210,9 +212,9 @@ exports.setInventoryLifecycle = onCall(
       });
     } catch (error) {
       if (error instanceof InventoryLifecycleError) {
-        throw new HttpsError(error.code, error.message);
+        throw new HttpsError(error.code, callableValidationMessage(error));
       }
-      console.error('Inventory lifecycle update failed.', error);
+      console.error('callable-failure', 'setInventoryLifecycle', 'unexpected');
       throw new HttpsError('internal', 'Inventory lifecycle update failed.');
     }
   },

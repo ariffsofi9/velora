@@ -9,6 +9,36 @@ const validId = s => typeof s === 'string' && s.length > 0 && s.length <= 128 &&
   s.trim() === s && !/[\\/\p{Cc}]/u.test(s) && !['.', '..'].includes(s);
 const link = (d, uid, cafeId) => d?.uid === uid && d.cafeId === cafeId &&
   d.status === 'active' && d.schemaVersion === 1;
+const pageSize = 20;
+const validAnchor = id => validId(id) && id.isWellFormed() && !id.includes('%');
+const invalid = () => { throw new TeamMembersError('invalid-argument'); };
+// The cursor is a position hint. Only a freshly verified Owner scope can use
+// it, and it is never used to select a workspace or grant authorization.
+const scopeKey = (scope, uid) => [uid, scope.cafeId, scope.generation, scope.ownerGeneration];
+
+function decodeCursor(value) {
+  if (typeof value !== 'string' || value.length > 1900 || !/^[A-Za-z0-9_-]+$/.test(value)) invalid();
+  try {
+    const bytes = Buffer.from(value, 'base64url');
+    if (bytes.toString('base64url') !== value) invalid();
+    const parts = JSON.parse(bytes.toString('utf8'));
+    if (!Array.isArray(parts) || parts.length !== 5 || !validAnchor(parts[4])) invalid();
+    return {scope: parts.slice(0, 4), after: parts[4]};
+  } catch { invalid(); }
+}
+
+async function readDocuments(tx, paths) {
+  const unique = [...new Set(paths)];
+  if (!unique.length) return [];
+  if (typeof tx.getMany !== 'function') {
+    const values = [];
+    for (const path of paths) values.push(await tx.get(path));
+    return values;
+  }
+  const values = await tx.getMany(unique);
+  const documents = new Map(unique.map((path, index) => [path, values[index]]));
+  return paths.map(path => documents.get(path));
+}
 
 async function context(tx, uid) {
   const mapping = await tx.get(`user_cafe_memberships/${uid}`);
@@ -17,9 +47,9 @@ async function context(tx, uid) {
   const cafe = await tx.get(`cafes/${cafeId}`);
   const ownerUid = cafe?.ownerUid;
   if (!validId(ownerUid) || cafe.status !== 'active' || cafe.schemaVersion !== 1) deny();
-  const member = await tx.get(`cafes/${cafeId}/members/${uid}`);
-  const owner = await tx.get(`cafes/${cafeId}/members/${ownerUid}`);
-  const ownerMap = await tx.get(`user_cafe_memberships/${ownerUid}`);
+  const [member, owner, ownerMap] = await readDocuments(tx, [
+    `cafes/${cafeId}/members/${uid}`, `cafes/${cafeId}/members/${ownerUid}`, `user_cafe_memberships/${ownerUid}`,
+  ]);
   const generation = activeMembershipGeneration(mapping, member, uid, cafeId, ownerUid);
   const ownerGeneration = activeMembershipGeneration(ownerMap, owner, ownerUid, cafeId, ownerUid);
   if (!link(member, uid, cafeId) || !['owner', 'staff'].includes(member.role) ||
@@ -31,46 +61,79 @@ async function context(tx, uid) {
 }
 
 // Uses the same owner-list / staff-self-and-owner visibility as repository Rules.
-async function readTeam(tx, uid) {
+async function readTeam(tx, uid, cursor, expected) {
   const scope = await context(tx, uid);
-  let candidates;
+  if (expected && (scope.cafeId !== expected.cafeId || scope.generation !== expected.generation)) deny();
+  if (cursor && (scope.role !== 'owner' || JSON.stringify(cursor.scope) !== JSON.stringify(scopeKey(scope, uid)))) deny();
+  let candidates, nextCursor;
   if (scope.role === 'owner') {
-    candidates = await tx.members(scope.cafeId, 101);
-    if (candidates.length > 100) throw new TeamMembersError('resource-exhausted');
+    const rows = await tx.members(scope.cafeId, pageSize + 1, cursor?.after ?? null);
+    const before = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)) < 0;
+    if (!Array.isArray(rows) || rows.length > pageSize + 1 || rows.some(({id}, index) =>
+      !validAnchor(id) || (index > 0 ? !before(rows[index - 1].id, id) : cursor && !before(cursor.after, id)))) deny();
+    candidates = rows.slice(0, pageSize);
+    if (!cursor) {
+      const data = await tx.get(`cafes/${scope.cafeId}/members/${scope.ownerUid}`);
+      candidates.unshift({id: scope.ownerUid, data});
+    }
+    if (rows.length > pageSize) nextCursor = Buffer.from(JSON.stringify([
+      ...scopeKey(scope, uid), rows[pageSize - 1].id,
+    ])).toString('base64url');
   } else {
-    candidates = await Promise.all([scope.ownerUid, uid].map(async id => ({
-      id, data: await tx.get(`cafes/${scope.cafeId}/members/${id}`),
-    })));
+    const ids = [scope.ownerUid, uid];
+    const docs = await readDocuments(tx, ids.map(id => `cafes/${scope.cafeId}/members/${id}`));
+    candidates = ids.map((id, index) => ({id, data: docs[index]}));
   }
+  const eligible = candidates.filter(({id, data}) => validId(id) && link(data, id, scope.cafeId) &&
+    ['owner', 'staff'].includes(data.role) && (data.role === 'owner') === (id === scope.ownerUid));
+  const mappings = await readDocuments(tx, eligible.map(({id}) => `user_cafe_memberships/${id}`));
   const members = [];
-  for (const {id, data} of candidates) {
-    if (!validId(id) || !link(data, id, scope.cafeId) ||
-        !['owner', 'staff'].includes(data.role) ||
-        (data.role === 'owner') !== (id === scope.ownerUid)) continue;
-    const mapping = await tx.get(`user_cafe_memberships/${id}`);
+  for (const [index, {id, data}] of eligible.entries()) {
+    const mapping = mappings[index];
     const generation = activeMembershipGeneration(mapping, data, id, scope.cafeId, scope.ownerUid);
     if (link(mapping, id, scope.cafeId) && generation !== null) {
       members.push({uid: id, role: data.role, generation});
     }
   }
-  return {...scope, members};
+  const profiles = await readDocuments(tx, members.map(member => `users/${member.uid}`));
+  return {...scope, members: members.map((member, index) => ({...member, profile: profiles[index]})), nextCursor};
 }
 
 const text = (value, max) => typeof value === 'string' && value.length <= max &&
   !/\p{Cc}/u.test(value) ? value.trim() : '';
+const timestamp = value => value instanceof Date ? Number.isFinite(value.getTime()) :
+  typeof value?.toMillis === 'function' && Number.isFinite(value.toMillis());
+const profileName = (profile, email) => profile?.email === email &&
+  ['owner', 'staff'].includes(profile.role) &&
+  typeof profile.photoUrl === 'string' && profile.photoUrl.length <= 2048 &&
+  timestamp(profile.createdAt) && timestamp(profile.updatedAt) ? text(profile.username, 80) : '';
 
-async function listTeamMembers({auth, data, store, accounts}) {
+async function listTeamMembers({auth, data, store, accounts, requireWorkspaceBinding = false}) {
   const uid = auth?.uid;
-  if (!validId(uid)) throw new TeamMembersError('unauthenticated');
-  if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).length) {
-    throw new TeamMembersError('invalid-argument');
+  if (!validId(uid) || auth.token?.email_verified !== true) {
+    throw new TeamMembersError('unauthenticated');
   }
-  const initial = await store.runTransaction(tx => readTeam(tx, uid));
-  const users = await accounts([...new Set([uid, ...initial.members.map(m => m.uid)])]);
-  const profiles = new Map(users.map(user => [user.uid, user]));
-  if (!profiles.get(uid) || profiles.get(uid).disabled) deny();
+  const allowed = requireWorkspaceBinding ? ['cursor', 'expectedCafeId', 'expectedMembershipGeneration'] : ['cursor'];
+  if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some(key => !allowed.includes(key))) invalid();
+  let expected;
+  if (requireWorkspaceBinding) {
+    const {expectedCafeId: cafeId, expectedMembershipGeneration: generation} = data;
+    if (!validId(cafeId) || !Number.isSafeInteger(generation) || generation < 0) invalid();
+    expected = {cafeId, generation};
+  }
+  const cursor = Object.hasOwn(data, 'cursor') ? decodeCursor(data.cursor) : undefined;
+  const initial = await store.runTransaction(tx => readTeam(tx, uid, cursor, expected));
+  const requested = new Set([uid, ...initial.members.map(m => m.uid)]);
+  const users = await accounts([...requested]);
+  const profiles = new Map();
+  for (const user of users) {
+    if (!requested.delete(user?.uid)) deny();
+    profiles.set(user.uid, user);
+  }
+  const caller = profiles.get(uid);
+  if (!caller || caller.disabled !== false || caller.emailVerified !== true) deny();
   // No Auth I/O inside Firestore transactions. Revalidate all returned links.
-  const current = await store.runTransaction(tx => readTeam(tx, uid));
+  const current = await store.runTransaction(tx => readTeam(tx, uid, cursor, expected));
   if (current.cafeId !== initial.cafeId || current.ownerUid !== initial.ownerUid ||
       current.role !== initial.role || current.generation !== initial.generation ||
       current.ownerGeneration !== initial.ownerGeneration) deny();
@@ -79,16 +142,20 @@ async function listTeamMembers({auth, data, store, accounts}) {
     const user = profiles.get(member.uid);
     const email = text(user?.email, 254);
     const finalMember = permitted.get(member.uid);
+    const name = profileName(finalMember?.profile, email) ||
+      (requireWorkspaceBinding ? text(user?.displayName, 80) || email : '');
     if (!finalMember || finalMember.role !== member.role ||
-        finalMember.generation !== member.generation || !user || user.disabled ||
-        user.emailVerified !== true || !email) return [];
-    // Generations are internal authorization snapshots, never roster fields.
-    return [{uid: member.uid, role: member.role,
-      name: text(user.displayName, 80) || email.split('@')[0], email}];
+        finalMember.generation !== member.generation || !user || user.disabled !== false ||
+        user.emailVerified !== true || email !== user.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+        !name || (!requireWorkspaceBinding && !profileName(member.profile, email))) return [];
+    return [{uid: member.uid, role: member.role, name, email,
+      ...(requireWorkspaceBinding && current.role === 'owner' && member.role === 'staff'
+        ? {membershipGeneration: finalMember.generation} : {})}];
   });
   members.sort((a, b) => (a.role === 'owner' ? 0 : 1) - (b.role === 'owner' ? 0 : 1) ||
     a.name.localeCompare(b.name) || a.uid.localeCompare(b.uid));
-  return {cafeId: current.cafeId, viewerRole: current.role, members};
+  return {cafeId: current.cafeId, viewerRole: current.role, members,
+    ...(initial.nextCursor ? {nextCursor: initial.nextCursor} : {})};
 }
 
 module.exports = {listTeamMembers, TeamMembersError};

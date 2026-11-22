@@ -111,7 +111,12 @@ class FirebaseOwnerEmailVerification implements OwnerEmailVerification {
   }
 
   @override
-  Future<bool> refreshVerified() async {
+  Future<bool> refreshVerified() async => await _refreshVerifiedToken() != null;
+
+  Future<String?> freshVerifiedIdToken() async =>
+      (await _refreshVerifiedToken())?.token;
+
+  Future<IdTokenResult?> _refreshVerifiedToken() async {
     _requireCapability(AndroidPilotCapability.existingAccountAuthentication);
     final policy = _pilotPolicy;
     if (policy?.isRestricted == true &&
@@ -124,13 +129,15 @@ class FirebaseOwnerEmailVerification implements OwnerEmailVerification {
       await _auth.currentUser!.reload().timeout(operationTimeout);
       bound.requireCurrent();
       final refreshed = _auth.currentUser!;
-      if (!refreshed.emailVerified) return false;
+      if (!refreshed.emailVerified) return null;
       final token = await refreshed
           .getIdTokenResult(true)
           .timeout(operationTimeout);
       bound.requireCurrent();
       return _auth.currentUser!.emailVerified &&
-          token.claims?['email_verified'] == true;
+              token.claims?['email_verified'] == true
+          ? token
+          : null;
     });
   }
 

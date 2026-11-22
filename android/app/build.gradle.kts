@@ -19,13 +19,19 @@ val stagingProfile = veloraDartDefines.contains("VELORA_STAGING=true")
 val stagingTask = gradle.startParameter.taskNames.any { it.contains("staging", ignoreCase = true) }
 val stagingSelected = stagingProfile || stagingTask
 val cloudProjectDefines = veloraDartDefines.filter { it.substringBefore("=") == "VELORA_FIREBASE_PROJECT" }
-if (cloudProjectDefines.isNotEmpty()) {
-    val conflicting = setOf("VELORA_STAGING", "USE_FIREBASE_EMULATORS", "FIREBASE_EMULATOR_HOST", "STAFF_DEMO", "AI1_MOCK_RECIPES", "RECIPE_CONNECTIVITY_DEMO", "AI1_LIVE_RECIPES")
-    if (cloudProjectDefines != listOf("VELORA_FIREBASE_PROJECT=velora-73222") || stagingSelected ||
-        veloraDartDefines.any { it.substringBefore("=") in conflicting }) {
-        throw GradleException("Explicit Android cloud profile is invalid or conflicts with another profile.")
+val conflictingCloudKeys = setOf("VELORA_STAGING", "USE_FIREBASE_EMULATORS", "FIREBASE_EMULATOR_HOST", "STAFF_DEMO", "AI1_MOCK_RECIPES", "RECIPE_CONNECTIVITY_DEMO", "AI1_LIVE_RECIPES")
+val conflictingCloudProfile = stagingSelected || veloraDartDefines.any { it.substringBefore("=") in conflictingCloudKeys }
+if (cloudProjectDefines.isNotEmpty() &&
+    (cloudProjectDefines != listOf("VELORA_FIREBASE_PROJECT=velora-73222") || conflictingCloudProfile)) {
+    throw GradleException("Explicit Android cloud profile is invalid or conflicts with another profile.")
+}
+val realCloudSelected = !conflictingCloudProfile
+if (realCloudSelected) {
+    val cloudJson = file("google-services.json")
+    if (!cloudJson.isFile) {
+        throw GradleException("REAL Android Firebase requires the approved google-services.json.")
     }
-    val cloudConfig = groovy.json.JsonSlurper().parse(file("google-services.json")) as? Map<*, *>
+    val cloudConfig = groovy.json.JsonSlurper().parse(cloudJson) as? Map<*, *>
     val cloudInfo = cloudConfig?.get("project_info") as? Map<*, *>
     val cloudClient = (cloudConfig?.get("client") as? List<*>)?.singleOrNull() as? Map<*, *>
     val cloudClientInfo = cloudClient?.get("client_info") as? Map<*, *>
@@ -122,8 +128,8 @@ flutter {
 
 androidComponents {
     onVariants(selector().all()) { variant ->
-        if (cloudProjectDefines.isNotEmpty() && variant.applicationId.get() != "com.example.velora") {
-            throw GradleException("Explicit cloud profile requires package com.example.velora.")
+        if (realCloudSelected && variant.applicationId.get() != "com.example.velora") {
+            throw GradleException("REAL Android Firebase requires package com.example.velora.")
         }
     }
 }

@@ -1,14 +1,18 @@
 import 'package:velora/services/android_pilot_policy.dart';
 import 'package:velora/screens/auth/workspace_gate.dart';
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:velora/models/inventory_item.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/models/workspace_activity.dart';
 import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/inventory/widgets_inventory/inventory_lifecycle_action.dart';
+import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_inventory_lifecycle_service.dart';
 import 'package:velora/services/workspace_session.dart';
 
@@ -91,7 +95,260 @@ final _normalPolicy = AndroidPilotPolicy.parse(
   platform: TargetPlatform.android,
 );
 
+Future<void> confirmLifecycle(WidgetTester tester, String buttonKey) async {
+  await tester.tap(find.byKey(ValueKey(buttonKey)));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('lifecycle-confirm')));
+  await tester.pump();
+  await tester.pumpAndSettle();
+}
+
+Future<void> pumpLifecycle(
+  WidgetTester tester, {
+  required bool archived,
+  required WorkspaceSession workspace,
+  required VoidCallback onChanged,
+  WorkspaceInventoryLifecycleManager? manager,
+}) => tester.pumpWidget(
+  MaterialApp(
+    home: Scaffold(
+      body: InventoryLifecycleActionButton(
+        item: InventoryItem.fromMap(
+          'item-a',
+          data(lifecycle: archived ? 'archived' : null),
+        ),
+        workspaceSession: workspace,
+        manager: manager,
+        onChanged: onChanged,
+      ),
+    ),
+  ),
+);
+
+HttpsWorkspaceInventory httpsManager({
+  required WorkspaceSession workspace,
+  required http.Client client,
+  required Future<String?> Function(InventoryHttpsSession) idToken,
+}) {
+  const projectId = 'velora-spark-test';
+  final changes = StreamController<InventoryHttpsSession?>.broadcast(
+    sync: true,
+  );
+  addTearDown(changes.close);
+  final snapshot = InventoryHttpsSession(
+    uid: workspace.uid,
+    projectId: projectId,
+    revision: 1,
+    emailVerified: true,
+    workspace: workspace,
+  );
+  return HttpsWorkspaceInventory(
+    pilotPolicy: _normalPolicy,
+    endpoint: Uri.https('inventory.offline.invalid'),
+    projectId: projectId,
+    endpointProjectId: projectId,
+    client: client,
+    currentSession: () => snapshot,
+    sessionChanges: changes.stream,
+    idToken: idToken,
+  );
+}
+
 void main() {
+  for (final archived in [false, true]) {
+    testWidgets(
+      'lifecycle archived=$archived is unavailable without an explicit manager',
+      (tester) async {
+        var changed = 0;
+        await pumpLifecycle(
+          tester,
+          archived: archived,
+          workspace: session,
+          onChanged: () => changed++,
+        );
+        expect(
+          find.text('Secure inventory updates are unavailable.'),
+          findsOneWidget,
+        );
+        expect(find.byType(OutlinedButton), findsNothing);
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(changed, 0);
+      },
+    );
+  }
+
+  for (final role in CafeRole.values) {
+    final archived = role == CafeRole.staff;
+    final action = archived
+        ? InventoryLifecycleAction.restore
+        : InventoryLifecycleAction.archive;
+    test('${role.name} can dispatch ${action.name} using HTTPS', () async {
+      final workspace = WorkspaceSession.fromVerified(
+        CafeWorkspace(
+          uid: role == CafeRole.owner ? 'owner-a' : 'staff-a',
+          cafeId: 'cafe-a',
+          ownerUid: 'owner-a',
+          role: role,
+          membershipGeneration: 7,
+        ),
+      );
+      final requests = <http.Request>[];
+      final tokenSessions = <InventoryHttpsSession>[];
+      final client = MockClient((request) async {
+        requests.add(request);
+        return http.Response(
+          jsonEncode({
+            'cafeId': workspace.cafeId,
+            'itemId': 'item-a',
+            'lifecycleState': archived ? 'active' : 'archived',
+            'version': 3,
+            'changed': true,
+          }),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      });
+      addTearDown(client.close);
+      final manager = httpsManager(
+        workspace: workspace,
+        client: client,
+        idToken: (captured) async {
+          tokenSessions.add(captured);
+          return 'fixture.id.token';
+        },
+      );
+      final result = await manager.setLifecycle(
+        WorkspaceInventoryLifecycleRequest(
+          idempotencyKey: 'fixture-lifecycle-key',
+          itemId: 'item-a',
+          action: action,
+          expectedVersion: 2,
+        ),
+      );
+      final request = requests.single;
+      expect(request.method, 'POST');
+      expect(
+        request.url,
+        Uri.https('inventory.offline.invalid', '/inventory/lifecycle'),
+      );
+      expect(request.headers['authorization'], 'Bearer fixture.id.token');
+      expect(jsonDecode(request.body), {
+        'idempotencyKey': 'fixture-lifecycle-key',
+        'itemId': 'item-a',
+        'action': action.name,
+        'expectedVersion': 2,
+        'expectedCafeId': 'cafe-a',
+        'expectedMembershipGeneration': 7,
+      });
+      expect(tokenSessions.single.uid, workspace.uid);
+      expect(tokenSessions.single.workspace, same(workspace));
+      expect(result.itemId, 'item-a');
+      expect(result.version, 3);
+      expect(result.lifecycleState, archived ? 'active' : 'archived');
+      expect(result.changed, isTrue);
+    });
+  }
+
+  testWidgets('Restore dispatches through the injected manager', (
+    tester,
+  ) async {
+    final manager = Manager();
+    var changed = 0;
+    await pumpLifecycle(
+      tester,
+      archived: true,
+      workspace: session,
+      manager: manager,
+      onChanged: () => changed++,
+    );
+
+    await confirmLifecycle(tester, 'restore-item');
+
+    final request = manager.requests.single;
+    expect(request.itemId, 'item-a');
+    expect(request.action, InventoryLifecycleAction.restore);
+    expect(request.expectedVersion, 2);
+    expect(request.idempotencyKey, matches(RegExp(r'^[0-9a-f]{48}$')));
+    expect(changed, 1);
+  });
+
+  testWidgets(
+    'lifecycle credential failure does not dispatch or report uncertainty',
+    (tester) async {
+      var tokenReads = 0;
+      var dispatches = 0;
+      var changed = 0;
+      final client = MockClient((_) async {
+        dispatches++;
+        throw StateError('No request is allowed after credential failure.');
+      });
+      addTearDown(client.close);
+      final manager = httpsManager(
+        workspace: session,
+        client: client,
+        idToken: (_) async {
+          tokenReads++;
+          return null;
+        },
+      );
+      await pumpLifecycle(
+        tester,
+        archived: false,
+        workspace: session,
+        manager: manager,
+        onChanged: () => changed++,
+      );
+      await confirmLifecycle(tester, 'archive-item');
+      expect(tokenReads, 1);
+      expect(dispatches, 0);
+      expect(changed, 0);
+      expect(
+        find.text('You no longer have permission to change this item.'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('unknown lifecycle outcome has no automatic redispatch', (
+    tester,
+  ) async {
+    final bodies = <String>[];
+    final client = MockClient((request) async {
+      bodies.add(request.body);
+      return http.Response(
+        '{"error":"unavailable","outcomeUnknown":true}',
+        503,
+        headers: {'content-type': 'application/json'},
+      );
+    });
+    addTearDown(client.close);
+    final manager = httpsManager(
+      workspace: session,
+      client: client,
+      idToken: (_) async => 'fixture.id.token',
+    );
+    var changed = 0;
+    await pumpLifecycle(
+      tester,
+      archived: true,
+      workspace: session,
+      manager: manager,
+      onChanged: () => changed++,
+    );
+    await confirmLifecycle(tester, 'restore-item');
+    expect(bodies, hasLength(1));
+    expect(changed, 0);
+    expect(
+      find.text(
+        'The inventory change could not be confirmed. Check inventory before another submission.',
+      ),
+      findsOneWidget,
+    );
+    await confirmLifecycle(tester, 'restore-item');
+    expect(bodies, [bodies.first, bodies.first]);
+    expect(changed, 0);
+  });
+
   for (final invalid in [false, true]) {
     for (final archived in [false, true]) {
       test(

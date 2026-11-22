@@ -12,7 +12,10 @@
       "request": "launch",
       "type": "dart",
       "deviceId": "chrome",
-      "args": ["--dart-define=VELORA_FIREBASE_PROJECT=velora-73222"]
+      "args": [
+        "--dart-define=VELORA_FIREBASE_PROJECT=velora-73222",
+        "--web-port=58561"
+      ]
     }
   ]
 }

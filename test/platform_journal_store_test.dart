@@ -9,7 +9,7 @@ import 'mutation_recovery_service_test.dart'
 
 // SIMULATION ONLY: serialized in-memory transactions, not disk persistence,
 // browser locking, process isolation, power-loss safety or provider acceptance.
-class _FakeTransactionalEngine implements TransactionalJournalEngine {
+class FakeTransactionalJournalEngine implements TransactionalJournalEngine {
   Map<String, String> values = {};
   Set<String> index = {};
   Future<void> _tail = Future.value();
@@ -18,7 +18,7 @@ class _FakeTransactionalEngine implements TransactionalJournalEngine {
   bool failCommit = false, lostAck = false, failRead = false, failScan = false;
   Completer<void>? commitGate, enteredCommit;
   List<String> Function(List<String>)? scanFault;
-  _Transaction? last;
+  _Transaction? _last;
   @override
   Future<T> transaction<T>(
     Future<T> Function(JournalStorageTransaction tx) action,
@@ -29,7 +29,7 @@ class _FakeTransactionalEngine implements TransactionalJournalEngine {
     _tail = release.future;
     await prior;
     final tx = _Transaction(this, Map.of(values), Set.of(index));
-    last = tx;
+    _last = tx;
     try {
       callbacks++;
       final result = await action(tx);
@@ -54,7 +54,7 @@ class _FakeTransactionalEngine implements TransactionalJournalEngine {
 }
 
 class _Transaction implements JournalStorageTransaction {
-  final _FakeTransactionalEngine engine;
+  final FakeTransactionalJournalEngine engine;
   final Map<String, String> values;
   final Set<String> index;
   bool active = true;
@@ -175,11 +175,310 @@ Matcher storageFailure = isA<PlatformJournalFailure>();
 Matcher mutationFailure = isA<MutationRecoveryFailure>();
 Matcher invitationFailure = isA<InvitationRecoveryFailure>();
 
+MutationRecoveryJournal guardedJournal(PlatformJournalStore s) =>
+    MutationRecoveryJournal(s.guardedMutations, sha256: s.sha256);
+
+Future<MutationDispatchPermit> prepareGuarded(
+  MutationRecoveryJournal journal,
+  String key, {
+  String action = 'adjust-stock',
+  String p = project,
+  String actor = uid,
+  String cafe = 'cafe',
+  String item = 'item',
+  int generation = 0,
+  int version = 1,
+  String direction = 'out',
+}) {
+  return journal.prepare(
+    projectId: p,
+    uid: actor,
+    operation: action == 'archive' || action == 'restore'
+        ? 'lifecycle'
+        : action,
+    request: {
+      'idempotencyKey': key,
+      'expectedCafeId': cafe,
+      'expectedMembershipGeneration': generation,
+      if (action != 'create') 'itemId': item,
+      if (action != 'create') 'expectedVersion': version,
+      if (action == 'adjust-stock') ...{'direction': direction, 'quantity': 2},
+      if (action == 'archive' || action == 'restore') 'action': action,
+      if (action == 'create' || action == 'update') ...{
+        'name': key,
+        'category': 'food',
+        'unit': 'pcs',
+        'expiryDate': '2026-12-01',
+        'imageUrl': '',
+        if (action == 'create') 'quantity': 0,
+      },
+    },
+  );
+}
+
+void guardedAdmissionTests() {
+  for (final (action, direction) in [
+    ('adjust-stock', 'out'),
+    ('adjust-stock', 'in'),
+    ('update', 'out'),
+    ('archive', 'out'),
+    ('restore', 'out'),
+  ]) {
+    final label = action == 'adjust-stock' ? 'Stock $direction' : action;
+    test(
+      'concurrent different-key Stock Out and $label share one item hold',
+      () async {
+        final engine = FakeTransactionalJournalEngine();
+        final first = guardedJournal(store(engine));
+        final second = guardedJournal(store(engine));
+        final results = await Future.wait(
+          [
+            prepareGuarded(first, 'stock-request-0001'),
+            prepareGuarded(
+              second,
+              'other-request-0002',
+              action: action,
+              version: 2,
+              direction: direction,
+            ),
+          ].map((attempt) async {
+            try {
+              return await attempt;
+            } on InventoryOperationPending catch (error) {
+              return error;
+            }
+          }),
+        );
+        expect(results.whereType<MutationDispatchPermit>(), hasLength(1));
+        expect(results.whereType<InventoryOperationPending>(), hasLength(1));
+        expect(engine.commits, 1);
+        expect(engine.values, hasLength(2));
+        expect(engine.index, engine.values.keys.toSet());
+      },
+    );
+  }
+
+  test(
+    'different Add drafts compete in the same café without blocking stock',
+    () async {
+      final engine = FakeTransactionalJournalEngine();
+      final first = guardedJournal(store(engine));
+      final second = guardedJournal(store(engine));
+      final results = await Future.wait(
+        [
+          prepareGuarded(first, 'create-request-0001', action: 'create'),
+          prepareGuarded(second, 'create-request-0002', action: 'create'),
+        ].map((attempt) async {
+          try {
+            return await attempt;
+          } on InventoryOperationPending catch (error) {
+            return error;
+          }
+        }),
+      );
+      expect(results.whereType<MutationDispatchPermit>(), hasLength(1));
+      expect(results.whereType<InventoryOperationPending>(), hasLength(1));
+      await prepareGuarded(second, 'stock-request-0001');
+      await prepareGuarded(
+        second,
+        'create-request-0003',
+        action: 'create',
+        cafe: 'other-cafe',
+      );
+      expect(engine.commits, 3);
+    },
+  );
+
+  test(
+    'session discovery hides stale generations, foreign workspaces and invitation data',
+    () async {
+      final engine = FakeTransactionalJournalEngine();
+      final s = store(engine);
+      final original = guardedJournal(s);
+      final permit = await prepareGuarded(original, 'stock-request-0001');
+      await original.markDispatched(permit);
+      await original.finish(permit, uncertain: true);
+      await InvitationRecoveryJournal(s.invitations).prepare(invitation());
+      final restarted = store(engine);
+      final j = guardedJournal(restarted);
+      await expectLater(
+        prepareGuarded(j, 'stock-request-0002', generation: 1, version: 2),
+        throwsA(isA<InventoryOperationPending>()),
+      );
+      expect(
+        await j.load(project, uid, operation, 'stock-request-0002'),
+        isNull,
+      );
+      await prepareGuarded(
+        j,
+        'stock-request-0003',
+        item: 'another-item',
+        generation: 1,
+      );
+      await prepareGuarded(j, 'stock-request-0004', cafe: 'other-cafe');
+      await prepareGuarded(j, 'stock-request-0005', actor: 'another-owner');
+      await prepareGuarded(j, 'stock-request-0006', p: 'velora-73222');
+
+      final current = await restarted.pendingInventory(
+        project,
+        uid,
+        cafeId: 'cafe',
+        membershipGeneration: 1,
+      );
+      expect(current.map((record) => record.stableKey), ['stock-request-0003']);
+      final historical = await restarted.pendingInventory(
+        project,
+        uid,
+        cafeId: 'cafe',
+        membershipGeneration: 0,
+      );
+      expect(historical.single.stableKey, 'stock-request-0001');
+      expect(historical.single.state, 'unknown');
+    },
+  );
+
+  for (final settle in ['observed commit', 'definite rejection']) {
+    test(
+      '$settle releases the item while preserving the original history',
+      () async {
+        final engine = FakeTransactionalJournalEngine();
+        final j = guardedJournal(store(engine));
+        final permit = await prepareGuarded(j, 'stock-request-0001');
+        await j.markDispatched(permit);
+        if (settle == 'observed commit') {
+          await j.finish(permit, uncertain: true);
+          final pending = (await j.load(
+            project,
+            uid,
+            operation,
+            'stock-request-0001',
+          ))!;
+          await j.recordObservation(
+            pending,
+            MutationReceiptObservation.parse(pending, {'state': 'unknown'}),
+          );
+          await expectLater(
+            prepareGuarded(j, 'stock-request-0002', version: 2),
+            throwsA(isA<InventoryOperationPending>()),
+          );
+          await j.recordObservation(
+            pending,
+            MutationReceiptObservation.parse(pending, {
+              'state': 'committed',
+              'result': {...journalAck(), 'direction': 'out'},
+            }),
+          );
+        } else {
+          await j.finish(permit);
+        }
+        final settled = (await j.load(
+          project,
+          uid,
+          operation,
+          'stock-request-0001',
+        ))!;
+        expect(settled.unresolved, false);
+        final before = Map.of(engine.values);
+        await prepareGuarded(
+          j,
+          'stock-request-0002',
+          version: settle == 'observed commit' ? 2 : 1,
+        );
+        expect(
+          (await j.load(
+            project,
+            uid,
+            operation,
+            'stock-request-0001',
+          ))!.toJson(),
+          settled.toJson(),
+        );
+        for (final entry in before.entries) {
+          expect(engine.values[entry.key], entry.value);
+        }
+      },
+    );
+  }
+
+  test(
+    'guard reaches a later pending page before granting a preparation',
+    () async {
+      final engine = FakeTransactionalJournalEngine();
+      final s = store(engine);
+      final legacy = journal(s);
+      for (var i = 0; i < 102; i++) {
+        await prepareGuarded(
+          legacy,
+          'legacy-stock-${i.toString().padLeft(4, '0')}',
+          item: 'item-$i',
+        );
+      }
+      final first = await s.pending(project, uid, limit: 100);
+      final continuation = await s.pending(
+        project,
+        uid,
+        cursor: first.nextCursor,
+      );
+      final lateRecord = continuation.records.last;
+      final target = (lateRecord.payload['request'] as Map)['itemId'] as String;
+      final before = Map.of(engine.values);
+      await expectLater(
+        prepareGuarded(guardedJournal(s), 'stock-request-0001', item: target),
+        throwsA(isA<InventoryOperationPending>()),
+      );
+      expect(engine.values, before);
+    },
+  );
+
+  for (final fault in [
+    'unavailable',
+    'omitted heads',
+    'corrupt history',
+    'failed commit',
+  ]) {
+    test('guard fails closed without a partial record on $fault', () async {
+      final engine = FakeTransactionalJournalEngine();
+      final s = store(engine);
+      final j = guardedJournal(s);
+      await prepareGuarded(j, 'stock-request-0001');
+      await prepareGuarded(j, 'stock-request-0002', item: 'different-item');
+      switch (fault) {
+        case 'unavailable':
+          engine.failScan = true;
+        case 'omitted heads':
+          engine.scanFault = (keys) =>
+              keys.length > 1 && keys.first.contains('/records/')
+              ? keys.skip(1).toList()
+              : keys;
+        case 'corrupt history':
+          final history = engine.values.keys.firstWhere(
+            (key) => key.contains('/history/'),
+          );
+          engine.values[history] = '{}';
+        case 'failed commit':
+          engine.failCommit = true;
+      }
+      final before = Map.of(engine.values);
+      final index = Set.of(engine.index);
+      await expectLater(
+        prepareGuarded(j, 'stock-request-0003', item: 'unaffected-item'),
+        throwsA(
+          allOf(mutationFailure, isNot(isA<InventoryOperationPending>())),
+        ),
+      );
+      expect(engine.values, before);
+      expect(engine.index, index);
+      expect(engine.commits, 2);
+    });
+  }
+}
+
 void main() {
+  guardedAdmissionTests();
   test(
     'construction is inert; both existing persistence interfaces have no platform default',
     () {
-      final e = _FakeTransactionalEngine(), s = store(e);
+      final e = FakeTransactionalJournalEngine(), s = store(e);
       expect(s.mutations, isA<MutationJournalPersistence>());
       expect(s.invitations, isA<InvitationJournalPersistence>());
       expect(e.transactions, 0);
@@ -189,7 +488,7 @@ void main() {
   test(
     'inventory CAS compares absence/revision, clones values, and atomically indexes head/history',
     () async {
-      final e = _FakeTransactionalEngine(),
+      final e = FakeTransactionalJournalEngine(),
           s = store(e),
           first = prepared(),
           key = storageKey();
@@ -207,13 +506,13 @@ void main() {
       expect(await s.mutations.compareAndSet(key, 1, next(stored)), false);
       expect(e.values, hasLength(3));
       expect(e.index, e.values.keys.toSet());
-      expect(() => e.last!.read('escaped'), throwsA(anything));
+      expect(() => e._last!.read('escaped'), throwsA(anything));
     },
   );
   test(
     'invitation CAS uses complete structural value and retains old pending snapshots',
     () async {
-      final e = _FakeTransactionalEngine(),
+      final e = FakeTransactionalJournalEngine(),
           s = store(e),
           original = invitation().toJson();
       expect(
@@ -254,7 +553,7 @@ void main() {
     test(
       '$kind competing writers across facades permit exactly one expected-absence commit',
       () async {
-        final e = _FakeTransactionalEngine(), a = store(e), b = store(e);
+        final e = FakeTransactionalJournalEngine(), a = store(e), b = store(e);
         final results = await Future.wait(
           kind == 'mutation'
               ? [
@@ -286,7 +585,7 @@ void main() {
     test(
       '$failureAt failure rolls back record and primary index without authorizing dispatch',
       () async {
-        final e = _FakeTransactionalEngine();
+        final e = FakeTransactionalJournalEngine();
         if (failureAt == 'first-put') e.failPut = 1;
         if (failureAt == 'second-put') e.failPut = 2;
         if (failureAt == 'commit') e.failCommit = true;
@@ -306,7 +605,7 @@ void main() {
   test(
     'prepare cannot acknowledge until the simulated engine completes commit',
     () async {
-      final e = _FakeTransactionalEngine()
+      final e = FakeTransactionalJournalEngine()
         ..commitGate = Completer<void>()
         ..enteredCommit = Completer<void>();
       final s = store(e);
@@ -329,7 +628,7 @@ void main() {
     test(
       '$kind lost commit acknowledgement keeps evidence but grants no dispatch',
       () async {
-        final e = _FakeTransactionalEngine()..lostAck = true;
+        final e = FakeTransactionalJournalEngine()..lostAck = true;
         final s = store(e);
         var dispatched = 0;
         final pending = () async {
@@ -358,7 +657,7 @@ void main() {
   test(
     'timed-out transaction may commit late but cannot return a prepare permission',
     () async {
-      final e = _FakeTransactionalEngine()
+      final e = FakeTransactionalJournalEngine()
         ..commitGate = Completer<void>()
         ..enteredCommit = Completer<void>();
       final s = store(e, timeout: const Duration(milliseconds: 15));
@@ -388,7 +687,7 @@ void main() {
     test(
       'malformed inventory write is rejected before persistence: $patch',
       () async {
-        final e = _FakeTransactionalEngine(), s = store(e);
+        final e = FakeTransactionalJournalEngine(), s = store(e);
         await expectLater(
           s.mutations.compareAndSet(storageKey(), null, {
             ...prepared(),
@@ -409,7 +708,7 @@ void main() {
     test(
       'malformed invitation write is rejected before persistence: $patch',
       () async {
-        final e = _FakeTransactionalEngine(), s = store(e);
+        final e = FakeTransactionalJournalEngine(), s = store(e);
         await expectLater(
           s.invitations.compareAndSet(project, uid, null, {
             ...invitation().toJson(),
@@ -433,7 +732,7 @@ void main() {
     test(
       'stored $corrupt corruption is never interpreted as an empty journal',
       () async {
-        final e = _FakeTransactionalEngine(), s = store(e);
+        final e = FakeTransactionalJournalEngine(), s = store(e);
         await s.mutations.compareAndSet(storageKey(), null, prepared());
         final head = e.values.keys.singleWhere((k) => k.contains('/records/'));
         final history = e.values.keys.singleWhere(
@@ -470,7 +769,9 @@ void main() {
   test(
     'valid update cannot change original payload or erase uncertainty/history',
     () async {
-      final e = _FakeTransactionalEngine(), s = store(e), first = prepared();
+      final e = FakeTransactionalJournalEngine(),
+          s = store(e),
+          first = prepared();
       await s.mutations.compareAndSet(storageKey(), null, first);
       final changedRequest = {
         ...journalRequest(),
@@ -524,7 +825,7 @@ void main() {
   test(
     'pending pages are deterministic, bounded, scoped and include invitations',
     () async {
-      final e = _FakeTransactionalEngine(), s = store(e);
+      final e = FakeTransactionalJournalEngine(), s = store(e);
       for (var i = 0; i < 4; i++) {
         await s.mutations.compareAndSet(
           storageKey(key: 'stock-request-000$i'),
@@ -573,7 +874,7 @@ void main() {
   test(
     'settled first page retains a continuation rather than hiding later pending records',
     () async {
-      final e = _FakeTransactionalEngine(), s = store(e);
+      final e = FakeTransactionalJournalEngine(), s = store(e);
       for (final key in ['stock-request-0001', 'stock-request-0002']) {
         await s.mutations.compareAndSet(
           storageKey(key: key),
@@ -603,7 +904,7 @@ void main() {
   test(
     'invalid/cross-account cursor, limits and noncanonical keys fail closed',
     () async {
-      final e = _FakeTransactionalEngine(), s = store(e);
+      final e = FakeTransactionalJournalEngine(), s = store(e);
       for (final key in [
         '[]',
         '["velora-spark-test", "owner", "adjust-stock", "key"]',
@@ -643,7 +944,7 @@ void main() {
     test(
       'discovery validates malformed $fault index evidence including look-ahead',
       () async {
-        final e = _FakeTransactionalEngine(), s = store(e);
+        final e = FakeTransactionalJournalEngine(), s = store(e);
         for (final key in ['stock-request-0001', 'stock-request-0002']) {
           await s.mutations.compareAndSet(
             storageKey(key: key),
@@ -676,7 +977,7 @@ void main() {
   test(
     'restart reconstruction preserves evidence, never dispatch permits or invitation replacement permission',
     () async {
-      final e = _FakeTransactionalEngine(), s = store(e), j = journal(s);
+      final e = FakeTransactionalJournalEngine(), s = store(e), j = journal(s);
       final permit = await prepare(j);
       await j.markDispatched(permit);
       await j.finish(permit, uncertain: true);
@@ -700,7 +1001,7 @@ void main() {
   test(
     'explicit originating invitation replacement keeps prior history after restart',
     () async {
-      final e = _FakeTransactionalEngine(),
+      final e = FakeTransactionalJournalEngine(),
           s = store(e),
           j = InvitationRecoveryJournal(s.invitations);
       await j.prepare(invitation());
@@ -725,7 +1026,7 @@ void main() {
   test(
     'read/scan failures are sanitized and capacity cannot evict unresolved evidence',
     () async {
-      final e = _FakeTransactionalEngine(), s = store(e);
+      final e = FakeTransactionalJournalEngine(), s = store(e);
       await s.mutations.compareAndSet(storageKey(), null, prepared());
       final original = Map.of(e.values);
       e.failRead = true;

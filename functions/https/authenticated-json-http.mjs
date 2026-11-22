@@ -49,7 +49,10 @@ export function createAuthenticatedJsonHttp({projectId, storeProjectId, verifyId
   // Deadlines bound this handler's waiting, not arbitrary injected work. Late
   // verification/read completion cannot re-enter the domain dispatch below.
   // Hosting-level admission/concurrency limits are still required separately.
-  return async request => {
+  async function handle(request) {
+    const checkOpen = () => {
+      if (request.signal?.aborted) throw new PreDomainFailure(408, 'deadline-exceeded');
+    };
     try {
       const url = new URL(request.url);
       const operation = allowedRoutes.get(url.pathname);
@@ -62,13 +65,30 @@ export function createAuthenticatedJsonHttp({projectId, storeProjectId, verifyId
       if (!bearer || !/^Bearer [A-Za-z0-9_.-]{1,8192}$/.test(bearer)) return reply(401, {error: 'unauthenticated'});
       let auth;
       try {
-        auth = await bounded(() => verifyIdentity(bearer.slice(7)), verificationTimeoutMs);
+        auth = await bounded(() => {
+          checkOpen();
+          const work = Promise.resolve(verifyIdentity(bearer.slice(7)));
+          return request.admission?.track(work) ?? work;
+        }, verificationTimeoutMs);
+        checkOpen();
         if (!auth || typeof auth.uid !== 'string' || auth.uid !== auth.token?.sub ||
             auth.token.aud !== projectId || auth.token.iss !== `https://securetoken.google.com/${projectId}` ||
             auth.token.email_verified !== true) throw Error();
       } catch (error) {
         if (error instanceof PreDomainFailure) throw error;
+        checkOpen();
         return reply(401, {error: 'unauthenticated'});
+      }
+      if (request.admission) {
+        let admitted;
+        try { admitted = await request.admission.attribute(auth.uid); }
+        catch {
+          checkOpen();
+          return reply(503, {error: 'unavailable'});
+        }
+        checkOpen();
+        if (admitted === false) return reply(429, {error: 'resource-exhausted'});
+        if (admitted !== true) return reply(503, {error: 'unavailable'});
       }
       const reader = request.body?.getReader();
       if (!reader) return reply(400, {error: 'invalid-argument'});
@@ -77,8 +97,10 @@ export function createAuthenticatedJsonHttp({projectId, storeProjectId, verifyId
         await bounded(async () => {
           for (;;) {
             if (!reading) throw new PreDomainFailure(408, 'deadline-exceeded');
+            checkOpen();
             const {value, done} = await reader.read();
             if (!reading) throw new PreDomainFailure(408, 'deadline-exceeded');
+            checkOpen();
             if (done) break;
             length += value.byteLength;
             if (length > maxRequestBytes) throw new PreDomainFailure(413, 'too-large');
@@ -89,6 +111,7 @@ export function createAuthenticatedJsonHttp({projectId, storeProjectId, verifyId
       reading = false;
       try { await bounded(() => reader.cancel(), cleanupTimeoutMs); }
       catch (error) { bodyFailure ??= error; }
+      checkOpen();
       if (bodyFailure) throw bodyFailure;
       let data;
       try {
@@ -98,6 +121,7 @@ export function createAuthenticatedJsonHttp({projectId, storeProjectId, verifyId
         if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error();
       } catch { return reply(400, {error: 'invalid-argument'}); }
       // Domain owns strict field validation and all canonical authorization.
+      checkOpen();
       const result = await operation({auth, data});
       return reply(200, result);
     } catch (error) {
@@ -114,5 +138,9 @@ export function createAuthenticatedJsonHttp({projectId, storeProjectId, verifyId
       }
       return reply(503, {error: 'unavailable', outcomeUnknown: true});
     }
+  }
+  return request => {
+    const work = handle(request);
+    return request.admission?.track(work) ?? work;
   };
 }

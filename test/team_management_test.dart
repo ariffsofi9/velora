@@ -4,15 +4,20 @@ import 'package:velora/screens/auth/workspace_gate.dart';
 // ignore_for_file: subtype_of_sealed_class
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/screens/team/team_management_page.dart';
 import 'package:velora/services/workspace_resolver.dart';
 import 'package:velora/services/team_members_service.dart';
 import 'package:velora/services/firebase_emulator_config.dart';
+import 'package:velora/services/workspace_session.dart';
 import 'helpers/invitation_firebase.dart';
 
 class _User extends Fake implements User {
@@ -38,6 +43,61 @@ class _Auth extends Fake implements FirebaseAuth {
 
   @override
   Stream<User?> authStateChanges() => changes.stream;
+}
+
+class _RosterApp extends Fake implements FirebaseApp {
+  final String project;
+  _RosterApp(this.project);
+
+  @override
+  FirebaseOptions get options => FirebaseOptions(
+    projectId: project,
+    apiKey: 'offline',
+    appId: 'offline',
+    messagingSenderId: 'offline',
+  );
+}
+
+class _RosterAuth extends _Auth {
+  final FirebaseApp _app;
+
+  @override
+  FirebaseApp get app => _app;
+  _RosterAuth(_RosterUser account, {String project = 'velora-73222'})
+    : _app = _RosterApp(project) {
+    user = account;
+  }
+}
+
+class _RosterUser extends _User {
+  final Map<String, Object> claimOverrides;
+  final refreshes = <bool>[];
+  late String token;
+  _RosterUser(super.id, {this.claimOverrides = const {}});
+
+  @override
+  bool get emailVerified => true;
+
+  @override
+  Future<String?> getIdToken([bool forceRefresh = false]) async {
+    refreshes.add(forceRefresh);
+    String segment(Object value) =>
+        base64Url.encode(utf8.encode(jsonEncode(value))).replaceAll('=', '');
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final header = segment({'alg': 'RS256', 'kid': 'offline'});
+    final claims = segment({
+      'aud': 'velora-73222',
+      'iss': 'https://securetoken.google.com/velora-73222',
+      'sub': uid,
+      'email': email,
+      'email_verified': true,
+      'auth_time': now - 10,
+      'iat': now - 5,
+      'exp': now + 300,
+      ...claimOverrides,
+    });
+    return token = '$header.$claims.offline';
+  }
 }
 
 class _Members implements TeamMembers {
@@ -81,6 +141,29 @@ class _Resolver extends WorkspaceResolver {
     calls++;
     if (failure != null) throw WorkspaceResolutionException(failure!);
     return workspace!;
+  }
+}
+
+class _PagedMembers extends _Members implements PagedTeamMembers {
+  final requested = <String>[];
+  Completer<TeamRoster>? pendingPage;
+
+  @override
+  Future<TeamRoster> load(CafeWorkspace workspace) async =>
+      TeamRoster(workspace, const [], nextCursor: 'page_two');
+
+  @override
+  Future<TeamRoster> loadPage(CafeWorkspace workspace, String cursor) async {
+    requested.add(cursor);
+    if (pendingPage case final page?) return page.future;
+    return TeamRoster(workspace, const [
+      TeamMember(
+        'staff-b',
+        'Second Page',
+        'staff-b@example.test',
+        CafeRole.staff,
+      ),
+    ]);
   }
 }
 
@@ -269,6 +352,259 @@ void main() {
     ),
     home: child,
   );
+
+  const rosterOrigin = 'https://staff-roster.example.test';
+  Future<void> settleRoster(WidgetTester tester) async {
+    await tester.pump();
+    // Stream cleanup can complete on the real event loop before fake time moves.
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+  }
+
+  Map<String, Object> row(String uid, String name, CafeRole role) => {
+    'uid': uid,
+    'name': name,
+    'email': '$uid@example.test',
+    'role': role.name,
+  };
+  http.Response rosterResponse(
+    CafeWorkspace workspace,
+    List<Map<String, Object>> members, {
+    String? cursor,
+  }) => http.Response(
+    jsonEncode({
+      'cafeId': workspace.cafeId,
+      'viewerRole': workspace.role.name,
+      'members': members,
+      'nextCursor': ?cursor,
+    }),
+    200,
+    headers: {'content-type': 'application/json'},
+  );
+
+  testWidgets(
+    'REAL directory uses verified bearer and workspace on every owner page',
+    (tester) async {
+      final user = _RosterUser(ownerWorkspace.uid),
+          requests = <Map<String, dynamic>>[];
+      final workspace = CafeWorkspace(
+        cafeId: ownerWorkspace.cafeId,
+        uid: ownerWorkspace.uid,
+        ownerUid: ownerWorkspace.ownerUid,
+        role: CafeRole.owner,
+        membershipGeneration: 7,
+      );
+      final auth = _RosterAuth(user);
+      await tester.pumpWidget(
+        app(
+          TeamManagementPage(
+            auth: auth,
+            workspaceSession: WorkspaceSession.fromVerified(workspace),
+            rosterOrigin: rosterOrigin,
+            createRosterClient: () => MockClient((request) async {
+              expect(request.url.toString(), '$rosterOrigin/staff/list');
+              expect(request.headers['authorization'], 'Bearer ${user.token}');
+              expect(request.followRedirects, isFalse);
+              final body = jsonDecode(request.body) as Map<String, dynamic>;
+              requests.add(body);
+              return body['cursor'] == null
+                  ? rosterResponse(workspace, [
+                      row(workspace.uid, 'REAL Owner', CafeRole.owner),
+                    ], cursor: 'page_two')
+                  : rosterResponse(workspace, [
+                      row('staff-b', 'REAL Staff', CafeRole.staff),
+                    ]);
+            }),
+          ),
+        ),
+      );
+      await settleRoster(tester);
+      auth.changes.add(user);
+      await tester.pumpAndSettle();
+      expect(find.text('REAL Owner'), findsOneWidget);
+      await tester.tap(find.text('Next page'));
+      await settleRoster(tester);
+      expect(find.text('REAL Staff'), findsOneWidget);
+      expect(requests, [
+        {'expectedCafeId': workspace.cafeId, 'expectedMembershipGeneration': 7},
+        {
+          'cursor': 'page_two',
+          'expectedCafeId': workspace.cafeId,
+          'expectedMembershipGeneration': 7,
+        },
+      ]);
+      expect(user.refreshes, [true, true]);
+      auth.changes.add(user);
+      await tester.pumpAndSettle();
+      expect(find.text('REAL Staff'), findsNothing);
+      expect(find.text('Team members unavailable'), findsOneWidget);
+      expect(requests, hasLength(2));
+    },
+  );
+
+  testWidgets('REAL Staff response cannot include an unrelated Staff user', (
+    tester,
+  ) async {
+    const workspace = CafeWorkspace(
+      cafeId: 'cafe-a',
+      uid: 'staff-a',
+      ownerUid: 'owner-a',
+      role: CafeRole.staff,
+    );
+    final replies = <Map<String, Object>>[
+      row(workspace.ownerUid, 'REAL Owner', CafeRole.owner),
+      row(workspace.uid, 'REAL Staff', CafeRole.staff),
+    ];
+    await tester.pumpWidget(
+      app(
+        TeamManagementPage(
+          auth: _RosterAuth(_RosterUser(workspace.uid)),
+          workspaceSession: WorkspaceSession.fromVerified(workspace),
+          rosterOrigin: rosterOrigin,
+          createRosterClient: () =>
+              MockClient((_) async => rosterResponse(workspace, replies)),
+        ),
+      ),
+    );
+    await settleRoster(tester);
+    expect(find.text('REAL Owner'), findsOneWidget);
+    expect(find.text('REAL Staff'), findsOneWidget);
+    expect(find.text('Next page'), findsNothing);
+    replies.add(row('other-staff', 'Other Staff', CafeRole.staff));
+    await tester.tap(find.text('Refresh members'));
+    await settleRoster(tester);
+    expect(find.text('Team members unavailable'), findsOneWidget);
+    expect(find.text('Other Staff'), findsNothing);
+  });
+
+  for (final failure in [
+    'missing origin',
+    'wrong project',
+    'wrong UID',
+    'expired JWT',
+    'wrong JWT audience',
+    'REST 503',
+  ]) {
+    testWidgets('REAL directory fails closed on $failure', (tester) async {
+      final user = _RosterUser(
+        failure == 'wrong UID' ? 'other-user' : ownerWorkspace.uid,
+        claimOverrides: {
+          if (failure == 'expired JWT') 'exp': 1,
+          if (failure == 'wrong JWT audience') 'aud': 'velora-spark-test',
+        },
+      );
+      final auth = _RosterAuth(
+        user,
+        project: failure == 'wrong project'
+            ? 'velora-spark-test'
+            : 'velora-73222',
+      );
+      var calls = 0;
+      await tester.pumpWidget(
+        app(
+          TeamManagementPage(
+            auth: auth,
+            workspaceSession: WorkspaceSession.fromVerified(ownerWorkspace),
+            rosterOrigin: failure == 'missing origin' ? '' : rosterOrigin,
+            createRosterClient: () => MockClient((_) async {
+              calls++;
+              return http.Response(
+                '{"error":"unavailable"}',
+                503,
+                headers: {'content-type': 'application/json'},
+              );
+            }),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Team members unavailable'), findsOneWidget);
+      expect(calls, failure == 'REST 503' ? 1 : 0);
+    });
+  }
+
+  testWidgets('Owner can advance an empty page and return to the first page', (
+    tester,
+  ) async {
+    final members = _PagedMembers();
+    await tester.pumpWidget(
+      app(
+        TeamManagementPage(
+          auth: _Auth(),
+          members: members,
+          resolver: _Resolver.success(ownerWorkspace),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('No verified members are available.'), findsOneWidget);
+    await tester.tap(find.text('Next page'));
+    await tester.tap(find.text('Next page'));
+    await tester.pumpAndSettle();
+    expect(members.requested, ['page_two']);
+    expect(find.text('Second Page'), findsOneWidget);
+    expect(find.text('Next page'), findsNothing);
+    await tester.tap(find.text('Previous page'));
+    await tester.tap(find.text('Previous page'));
+    await tester.pumpAndSettle();
+    expect(find.text('Second Page'), findsNothing);
+    expect(find.text('Next page'), findsOneWidget);
+  });
+
+  testWidgets('Replacing the workspace clears history and drops a late page', (
+    tester,
+  ) async {
+    final pending = Completer<TeamRoster>();
+    final members = _PagedMembers()..pendingPage = pending;
+    final auth = _Auth();
+    await tester.pumpWidget(
+      app(
+        TeamManagementPage(
+          auth: auth,
+          members: members,
+          resolver: _Resolver.success(ownerWorkspace),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next page'));
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    const replacementWorkspace = CafeWorkspace(
+      cafeId: 'cafe-b',
+      uid: 'owner-a',
+      ownerUid: 'owner-a',
+      role: CafeRole.owner,
+      membershipGeneration: 1,
+    );
+    await tester.pumpWidget(
+      app(
+        TeamManagementPage(
+          auth: auth,
+          members: _Members(),
+          resolver: _Resolver.success(replacementWorkspace),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Previous page'), findsNothing);
+    expect(find.text('Sarah Parker'), findsOneWidget);
+
+    pending.complete(
+      const TeamRoster(ownerWorkspace, [
+        TeamMember(
+          'late-staff',
+          'Late Staff',
+          'late@example.test',
+          CafeRole.staff,
+        ),
+      ]),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Late Staff'), findsNothing);
+    expect(find.text('Sarah Parker'), findsOneWidget);
+  });
 
   testWidgets(
     'Owner sees verified owner and staff without unsupported management menu',

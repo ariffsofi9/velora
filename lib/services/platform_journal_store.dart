@@ -31,6 +31,14 @@ class PlatformJournalFailure implements Exception {
   String toString() => 'Journal storage unavailable.';
 }
 
+/// A different preparation overlaps an unresolved inventory operation.
+final class InventoryOperationPending extends MutationRecoveryFailure {
+  const InventoryOperationPending() : super(outcomeUnknown: true);
+
+  @override
+  String toString() => 'An overlapping inventory operation is unresolved.';
+}
+
 Never _bad() => throw const PlatformJournalFailure();
 const _safe = 9007199254740991;
 bool _integer(Object? n, [int min = 0]) => n is int && n >= min && n <= _safe;
@@ -153,6 +161,10 @@ class PlatformJournalStore {
   final String Function(String) sha256;
   final Duration timeout;
   late final MutationJournalPersistence mutations = _Mutations(this);
+  late final MutationJournalPersistence guardedMutations = _Mutations(
+    this,
+    guarded: true,
+  );
   late final InvitationJournalPersistence invitations = _Invitations(this);
   PlatformJournalStore({
     required this.engine,
@@ -220,6 +232,13 @@ class PlatformJournalStore {
         address.uid,
       ).toJson();
     }
+    return (await _parseMutation(address, value)).toJson();
+  }
+
+  Future<PendingMutationOperation> _parseMutation(
+    _Address address,
+    Map<String, Object> value,
+  ) async {
     final key = jsonDecode(address.journalKey) as List;
     // Reuse the canonical journal parser/digest/ack checks without duplicating
     // its private state machine. This reader performs no engine writes or I/O.
@@ -235,22 +254,10 @@ class PlatformJournalStore {
       key[3] as String,
     );
     if (parsed == null) _bad();
-    return parsed.toJson();
+    return parsed;
   }
 
-  Future<_Record?> _read(JournalStorageTransaction tx, _Address address) async {
-    final raw = await tx.read(address.head);
-    if (raw == null) {
-      final history = await tx.scan(address.historyPrefix, limit: 1);
-      final indexed = await tx.scan(address.head, limit: 1);
-      if (history.isNotEmpty ||
-          indexed.length > 1 ||
-          indexed.any((key) => !key.startsWith(address.head)) ||
-          indexed.contains(address.head)) {
-        _bad();
-      }
-      return null;
-    }
+  Future<_Record> _decodeRecord(_Address address, Object? raw) async {
     if (raw is! String || utf8.encode(raw).length > 16384) _bad();
     final data = jsonDecode(raw);
     if (data is! Map ||
@@ -267,14 +274,30 @@ class PlatformJournalStore {
     final payload = await _validate(address, data['payload']);
     final sequence = data['sequence'] as int;
     if (address.kind == 'mutation' && payload['revision'] != sequence) _bad();
-    final record = _Record(
+    return _Record(
       address,
       sequence,
       payload,
       address.kind == 'invitation' ||
           !['acknowledged', 'rejected'].contains(payload['state']),
     );
-    final historical = await tx.read(address.history(sequence));
+  }
+
+  Future<_Record?> _read(JournalStorageTransaction tx, _Address address) async {
+    final raw = await tx.read(address.head);
+    if (raw == null) {
+      final history = await tx.scan(address.historyPrefix, limit: 1);
+      final indexed = await tx.scan(address.head, limit: 1);
+      if (history.isNotEmpty ||
+          indexed.length > 1 ||
+          indexed.any((key) => !key.startsWith(address.head)) ||
+          indexed.contains(address.head)) {
+        _bad();
+      }
+      return null;
+    }
+    final record = await _decodeRecord(address, raw);
+    final historical = await tx.read(address.history(record.sequence));
     if (historical is! String ||
         historical.length > 16384 ||
         _encode(jsonDecode(historical)) != record.encoded) {
@@ -289,6 +312,108 @@ class PlatformJournalStore {
     if (await tx.read(record.address.history(record.sequence)) != null) _bad();
     await tx.put(record.address.history(record.sequence), record.encoded);
     await tx.put(record.address.head, record.encoded);
+  }
+
+  Future<List<String>> _scanInventoryKeys(
+    JournalStorageTransaction tx,
+    String prefix,
+  ) async {
+    // Both existing engines bound their snapshots to 512 rows and individual
+    // scans to 101. Reaching a page boundary is not evidence of exhaustion.
+    const pageSize = 101;
+    const maxRows = 512;
+    final keys = <String>[];
+    String? cursor;
+    while (true) {
+      final page = await tx.scan(prefix, after: cursor, limit: pageSize);
+      if (page.length > pageSize || keys.length + page.length > maxRows) _bad();
+      for (final key in page) {
+        if (!key.startsWith(prefix) ||
+            cursor != null && key.compareTo(cursor) <= 0) {
+          _bad();
+        }
+        keys.add(key);
+        cursor = key;
+      }
+      if (page.length < pageSize) return keys;
+    }
+  }
+
+  Future<List<_Record>> _pendingInventory(
+    JournalStorageTransaction tx,
+    String project,
+    String uid,
+  ) async {
+    final prefix = _prefix(project, uid);
+    final heads = <String, _Record>{};
+    for (final head in await _scanInventoryKeys(
+      tx,
+      '${prefix}records/mutation/',
+    )) {
+      final address = _fromHead(head, project, uid);
+      final record = await _read(tx, address);
+      if (record == null) _bad();
+      heads[address.suffix] = record;
+    }
+
+    // Cross-check both key spaces so an omitted head or revision cannot turn
+    // existing evidence into an empty or settled journal.
+    final historyPrefix = '${prefix}history/';
+    final sequences = <String, int>{};
+    for (final key in await _scanInventoryKeys(
+      tx,
+      '${historyPrefix}mutation/',
+    )) {
+      final separator = key.lastIndexOf('/');
+      if (separator < historyPrefix.length) _bad();
+      final suffix = key.substring(historyPrefix.length, separator);
+      final head = heads[suffix];
+      final sequence = (sequences[suffix] ?? 0) + 1;
+      if (head == null ||
+          sequence > head.sequence ||
+          head.address.history(sequence) != key) {
+        _bad();
+      }
+      if (sequence < head.sequence) {
+        final earlier = await _decodeRecord(head.address, await tx.read(key));
+        if (earlier.sequence != sequence ||
+            earlier.payload['payloadDigest'] != head.payload['payloadDigest'] ||
+            _encode(earlier.payload['request']) !=
+                _encode(head.payload['request'])) {
+          _bad();
+        }
+      }
+      sequences[suffix] = sequence;
+    }
+    if (heads.entries.any(
+      (entry) => sequences[entry.key] != entry.value.sequence,
+    )) {
+      _bad();
+    }
+    return heads.values.where((record) => record.pending).toList();
+  }
+
+  /// Recovery evidence for the caller's verified café and generation only.
+  /// Older generations remain in storage and can still block overlapping work.
+  Future<List<PendingMutationOperation>> pendingInventory(
+    String project,
+    String uid, {
+    required String cafeId,
+    required int membershipGeneration,
+  }) async {
+    _namespace(project, uid);
+    if (!_id(cafeId) || !_integer(membershipGeneration)) _bad();
+    return _run((tx) async {
+      final pending = <PendingMutationOperation>[];
+      for (final record in await _pendingInventory(tx, project, uid)) {
+        final request = record.payload['request'] as Map;
+        if (request['expectedCafeId'] == cafeId &&
+            request['expectedMembershipGeneration'] == membershipGeneration) {
+          pending.add(await _parseMutation(record.address, record.payload));
+        }
+      }
+      return List.unmodifiable(pending);
+    });
   }
 
   /// Scans at most limit+1 HEADS, including settled records. An empty pending
@@ -347,9 +472,12 @@ class _ValueReader implements MutationJournalPersistence {
   ) => throw const PlatformJournalFailure();
 }
 
+enum _MutationWrite { stale, overlap, committed }
+
 class _Mutations implements MutationJournalPersistence {
   final PlatformJournalStore store;
-  _Mutations(this.store);
+  final bool guarded;
+  _Mutations(this.store, {this.guarded = false});
   @override
   Future<Object?> read(String key) async {
     try {
@@ -373,9 +501,9 @@ class _Mutations implements MutationJournalPersistence {
       if (revision != null && !_integer(revision, 1)) _bad();
       final next = await store._validate(address, snapshot);
       if (next['revision'] != (revision ?? 0) + 1) _bad();
-      return await store._run((tx) async {
+      final result = await store._run((tx) async {
         final current = await store._read(tx, address);
-        if (current?.sequence != revision) return false;
+        if (current?.sequence != revision) return _MutationWrite.stale;
         if (current != null &&
             (current.payload['payloadDigest'] != next['payloadDigest'] ||
                 _encode(current.payload['request']) !=
@@ -387,6 +515,22 @@ class _Mutations implements MutationJournalPersistence {
                         _encode(next['result']))) {
           _bad();
         }
+        if (guarded && next['state'] == 'prepared') {
+          final request = next['request'] as Map;
+          final pending = await store._pendingInventory(
+            tx,
+            address.project,
+            address.uid,
+          );
+          final overlaps = pending.any((record) {
+            final previous = record.payload['request'] as Map;
+            // Create has no itemId. The canonical request validator ensures
+            // every other inventory operation has a stable itemId.
+            return previous['expectedCafeId'] == request['expectedCafeId'] &&
+                previous['itemId'] == request['itemId'];
+          });
+          if (overlaps) return _MutationWrite.overlap;
+        }
         await store._write(
           tx,
           _Record(
@@ -396,8 +540,14 @@ class _Mutations implements MutationJournalPersistence {
             !['acknowledged', 'rejected'].contains(next['state']),
           ),
         );
-        return true;
+        return _MutationWrite.committed;
       });
+      if (result == _MutationWrite.overlap) {
+        throw const InventoryOperationPending();
+      }
+      return result == _MutationWrite.committed;
+    } on InventoryOperationPending {
+      rethrow;
     } catch (_) {
       throw const MutationRecoveryFailure();
     }

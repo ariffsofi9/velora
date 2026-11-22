@@ -8,6 +8,8 @@ import '../../widgets/auth/auth_layout.dart';
 import '../../services/auth_service.dart';
 import '../../services/workspace_resolver.dart';
 import '../../services/android_pilot_policy.dart';
+import '../../services/firebase_startup_config.dart';
+import '../team/staff_invitation_page.dart';
 
 import 'signup_page.dart';
 import 'forgot_password_page.dart';
@@ -59,8 +61,9 @@ class _LoginPageState extends State<LoginPage> {
     super.dispose();
   }
 
-  Future<void> loginUser() async {
+  Future<void> loginUser({bool joinWithInvitation = false}) async {
     if (isLoading) return;
+    if (joinWithInvitation && !_canJoinWithInvitation) return;
     final email = emailController.text.trim();
     final password = passwordController.text.trim();
 
@@ -82,11 +85,13 @@ class _LoginPageState extends State<LoginPage> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => WorkspaceGate(
-            pilot: pilot,
-            authService: authService,
-            resolver: widget.workspaceResolver,
-          ),
+          builder: (_) => joinWithInvitation
+              ? StaffInvitationPage(auth: authService.firebaseAuth)
+              : WorkspaceGate(
+                  pilot: pilot,
+                  authService: authService,
+                  resolver: widget.workspaceResolver,
+                ),
         ),
       );
     } on FirebaseAuthException catch (e) {
@@ -113,6 +118,11 @@ class _LoginPageState extends State<LoginPage> {
       setState(() => isLoading = false);
     }
   }
+
+  bool get _canJoinWithInvitation =>
+      _allows(AndroidPilotCapability.teamCallables) &&
+      FirebaseStartupProfile.read(context)?.projectId ==
+          AndroidPilotPolicy.approvedProject;
 
   void showMessage(String message, bool isError) {
     if (!mounted) return;
@@ -215,6 +225,13 @@ class _LoginPageState extends State<LoginPage> {
             ),
             const SizedBox(height: 8),
             AuthSubmit(label: 'Log In', busy: isLoading, onPressed: loginUser),
+            if (_canJoinWithInvitation)
+              TextButton(
+                onPressed: isLoading
+                    ? null
+                    : () => loginUser(joinWithInvitation: true),
+                child: const Text('Sign in to join with an invitation'),
+              ),
             const SizedBox(height: 16),
             const Row(
               children: [
@@ -239,8 +256,8 @@ class _LoginPageState extends State<LoginPage> {
             ),
             const SizedBox(height: 12),
             AuthAccountLink(
-              prompt: "Don't have an account?",
-              label: 'Sign up',
+              prompt: 'Starting a new workspace?',
+              label: 'Owner sign-up',
               onPressed:
                   isLoading || !_allows(AndroidPilotCapability.registration)
                   ? null

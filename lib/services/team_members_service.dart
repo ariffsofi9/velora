@@ -15,20 +15,45 @@ class TeamPilotPolicyException implements Exception {
 class TeamMember {
   final String uid, name, email;
   final CafeRole role;
-  const TeamMember(this.uid, this.name, this.email, this.role);
+  final int? membershipGeneration;
+  const TeamMember(
+    this.uid,
+    this.name,
+    this.email,
+    this.role, {
+    this.membershipGeneration,
+  });
 }
 
 class TeamRoster {
   final CafeWorkspace workspace;
   final List<TeamMember> members;
-  const TeamRoster(this.workspace, this.members);
+  final String? nextCursor;
+  const TeamRoster(this.workspace, this.members, {this.nextCursor});
 }
 
 abstract interface class TeamMembers {
   Future<TeamRoster> load(CafeWorkspace workspace);
 }
 
-class FirebaseTeamMembers implements TeamMembers {
+abstract interface class PagedTeamMembers implements TeamMembers {
+  Future<TeamRoster> loadPage(CafeWorkspace workspace, String cursor);
+}
+
+String? readTeamCursor(Map<dynamic, dynamic> data, CafeWorkspace workspace) {
+  if (!data.containsKey('nextCursor')) return null;
+  final cursor = data['nextCursor'];
+  if (workspace.role != CafeRole.owner ||
+      cursor is! String ||
+      cursor.isEmpty ||
+      cursor.length > 1900 ||
+      !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(cursor)) {
+    throw StateError('Invalid team response.');
+  }
+  return cursor;
+}
+
+class FirebaseTeamMembers implements PagedTeamMembers {
   final AndroidPilotPolicy pilotPolicy;
   final FirebaseAuth auth;
   final WorkspaceResolver resolver;
@@ -41,7 +66,13 @@ class FirebaseTeamMembers implements TeamMembers {
   });
 
   @override
-  Future<TeamRoster> load(CafeWorkspace workspace) async {
+  Future<TeamRoster> load(CafeWorkspace workspace) => _load(workspace);
+
+  @override
+  Future<TeamRoster> loadPage(CafeWorkspace workspace, String cursor) =>
+      _load(workspace, cursor);
+
+  Future<TeamRoster> _load(CafeWorkspace workspace, [String? cursor]) async {
     if (pilotPolicy.state != AndroidPilotState.normal &&
         !pilotPolicy.permits(AndroidPilotCapability.teamCallables)) {
       throw const TeamPilotPolicyException();
@@ -53,10 +84,11 @@ class FirebaseTeamMembers implements TeamMembers {
         await (functions ??
                 FirebaseFunctions.instanceFor(region: 'asia-southeast1'))
             .httpsCallable('listTeamMembers')
-            .call<Map<String, dynamic>>({});
+            .call<Map<String, dynamic>>({'cursor': ?cursor});
     final current = await resolver.resolve();
     final data = response.data;
     final role = workspace.role == CafeRole.owner ? 'owner' : 'staff';
+    final isOwner = workspace.role == CafeRole.owner;
     if (auth.currentUser?.uid != workspace.uid ||
         current.uid != workspace.uid ||
         current.cafeId != workspace.cafeId ||
@@ -66,7 +98,7 @@ class FirebaseTeamMembers implements TeamMembers {
         data['cafeId'] != workspace.cafeId ||
         data['viewerRole'] != role ||
         data['members'] is! List ||
-        (data['members'] as List).length > 100) {
+        (data['members'] as List).length > (isOwner ? 21 : 2)) {
       throw StateError('Team verification failed.');
     }
     final seen = <String>{};
@@ -88,6 +120,7 @@ class FirebaseTeamMembers implements TeamMembers {
           email.isEmpty ||
           email.length > 254 ||
           !['owner', 'staff'].contains(memberRole) ||
+          (cursor != null && memberRole == 'owner') ||
           (memberRole == 'owner') != (uid == workspace.ownerUid) ||
           (workspace.role == CafeRole.staff &&
               uid != workspace.uid &&
@@ -103,6 +136,15 @@ class FirebaseTeamMembers implements TeamMembers {
         ),
       );
     }
-    return TeamRoster(workspace, List.unmodifiable(members));
+    final nextCursor = readTeamCursor(data, workspace);
+    if (nextCursor != null && nextCursor == cursor ||
+        isOwner && members.where((m) => m.role == CafeRole.staff).length > 20) {
+      throw StateError('Invalid team response.');
+    }
+    return TeamRoster(
+      workspace,
+      List.unmodifiable(members),
+      nextCursor: nextCursor,
+    );
   }
 }

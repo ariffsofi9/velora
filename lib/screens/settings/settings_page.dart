@@ -342,9 +342,13 @@ class _SettingsPageState extends State<SettingsPage> {
   void _openTeamManagement() {
     if (!mounted) return;
     if (!_allows(AndroidPilotCapability.teamCallables) || !_authorized) return;
+    final auth = _auth, workspace = widget.workspaceSession!;
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const TeamManagementPage()),
+      MaterialPageRoute(
+        builder: (_) =>
+            TeamManagementPage(auth: auth, workspaceSession: workspace),
+      ),
     );
   }
 

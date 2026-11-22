@@ -15,10 +15,12 @@ import 'package:velora/screens/auth/login_page.dart';
 import 'package:velora/screens/auth/splash_page.dart';
 import 'package:velora/screens/auth/workspace_gate.dart';
 import 'package:velora/screens/inventory/inventory_page.dart';
+import 'package:velora/screens/inventory/stock/stock_adjustment_page.dart';
 import 'package:velora/services/auth_service.dart';
 import 'package:velora/services/android_pilot_policy.dart';
 import 'package:velora/services/offline_verified_workspace_inventory.dart';
 import 'package:velora/services/mutation_recovery_service.dart';
+import 'package:velora/services/platform_journal_store.dart';
 import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_resolver.dart';
 import 'package:velora/services/workspace_session.dart';
@@ -28,6 +30,7 @@ import 'workspace_inventory_https_transport_test.dart'
 import 'inventory_lifecycle_test.dart' show Source, data;
 import 'mutation_recovery_service_test.dart'
     show FakeMutationPersistence, syntheticSha256;
+import 'platform_journal_store_test.dart' show FakeTransactionalJournalEngine;
 
 class _Resolver extends WorkspaceResolver {
   Future<CafeWorkspace> Function() result;
@@ -159,11 +162,14 @@ class _OfflineHandoff {
   HttpsWorkspaceInventory? transport;
   Future<http.Response> Function(http.Request)? respond;
   final bool showInventory;
+  final WorkspaceInventoryDataSource? inventorySource;
 
   _OfflineHandoff(
     String uid, {
     this.showInventory = false,
+    this.inventorySource,
     MutationRecoveryJournal? journal,
+    PlatformJournalStore? guardedStore,
   }) : auth = _FirebaseAuth(_User(uid: uid)) {
     inventory = OfflineVerifiedWorkspaceInventory(
       auth: auth,
@@ -175,6 +181,7 @@ class _OfflineHandoff {
       ),
       now: () => _offlineNow,
       journal: journal,
+      guardedStore: guardedStore,
       respond: (request) async {
         requests.add(request);
         if (respond case final handler?) return handler(request);
@@ -201,16 +208,18 @@ class _OfflineHandoff {
             workspaceSession: session,
             repository: WorkspaceInventoryRepository(
               session: session,
-              dataSource: Source([
-                WorkspaceInventoryDocument(id: 'item', data: data()),
-                WorkspaceInventoryDocument(
-                  id: 'archived',
-                  data: {
-                    ...data(lifecycle: 'archived'),
-                    'name': 'Archived flour',
-                  },
-                ),
-              ]),
+              dataSource:
+                  inventorySource ??
+                  Source([
+                    WorkspaceInventoryDocument(id: 'item', data: data()),
+                    WorkspaceInventoryDocument(
+                      id: 'archived',
+                      data: {
+                        ...data(lifecycle: 'archived'),
+                        'name': 'Archived flour',
+                      },
+                    ),
+                  ]),
             ),
             transport: transport,
           );
@@ -272,12 +281,16 @@ http.Response _jsonResponse(Map<String, Object?> body, [int status = 200]) =>
 Future<_OfflineHandoff> _openInventory(
   WidgetTester tester, {
   MutationRecoveryJournal? journal,
+  PlatformJournalStore? guardedStore,
+  WorkspaceInventoryDataSource? inventorySource,
   _Resolver? resolver,
 }) async {
   final handoff = _OfflineHandoff(
     staff.uid,
     showInventory: true,
     journal: journal,
+    guardedStore: guardedStore,
+    inventorySource: inventorySource,
   );
   addTearDown(handoff.close);
   tester.view.physicalSize = const Size(900, 1300);
@@ -337,6 +350,27 @@ Future<void> _submitInventory(WidgetTester tester, Finder button) async {
   });
   await tester.pumpAndSettle();
 }
+
+class _ObservedInventorySource extends Source {
+  int watches = 0;
+
+  _ObservedInventorySource(int version, int quantity)
+    : super([
+        WorkspaceInventoryDocument(
+          id: 'item',
+          data: {...data(), 'version': version, 'quantity': quantity},
+        ),
+      ]);
+
+  @override
+  Stream<List<WorkspaceInventoryDocument>> watchCollection(String path) {
+    watches++;
+    return super.watchCollection(path);
+  }
+}
+
+const _stockConfirm = ValueKey('stock-confirm-button');
+const _openInventoryRecovery = ValueKey('inventory-recovery-open');
 
 void _inventoryUiCases() {
   for (final action in [
@@ -604,6 +638,226 @@ void _inventoryUiCases() {
         ]);
         expect(movements, 1);
       });
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'guarded Staff Stock Out blocks a new key after reopening until explicit recovery',
+    (tester) async {
+      final engine = (await tester.runAsync(
+        () async => FakeTransactionalJournalEngine(),
+      ))!;
+      final store = PlatformJournalStore(
+        engine: engine,
+        sha256: syntheticSha256,
+      );
+      final original = await _openInventory(tester, guardedStore: store);
+      final movements = <Map<String, Object?>>[];
+      var version = 2;
+      var quantity = 4;
+      var receiptVisible = false;
+      late Map<String, Object?> historicalReceipt;
+
+      Future<http.Response> respond(http.Request request) async {
+        final payload = jsonDecode(request.body) as Map<String, Object?>;
+        if (request.url.path == '/inventory/reconcile') {
+          return _jsonResponse(
+            receiptVisible
+                ? {'state': 'committed', 'result': historicalReceipt}
+                : {'state': 'unknown'},
+          );
+        }
+        expect(request.url.path, '/inventory/adjust-stock');
+        expect(payload['expectedVersion'], version);
+        expect(payload['direction'], 'out');
+        quantity -= payload['quantity'] as int;
+        version++;
+        final movement = {
+          ...acknowledgement('adjust-stock'),
+          'cafeId': 'cafe-a',
+          'version': version,
+          'resultingQuantity': quantity,
+        };
+        movements.add(movement);
+        if (movements.length == 1) {
+          historicalReceipt = movement;
+          throw http.ClientException('Committed response lost');
+        }
+        return _jsonResponse(movement);
+      }
+
+      original.respond = respond;
+      expect(original.transport!.isGuarded, isTrue);
+      await _openStock(tester, 'Stock Out');
+      await _submitInventory(tester, find.byKey(_stockConfirm));
+      expect(original.requests, hasLength(1));
+      expect(movements, hasLength(1));
+      expect(quantity, 2);
+      expect(version, 3);
+      final firstPayload = jsonDecode(original.requests.single.body);
+      final pending = (await tester.runAsync(
+        original.transport!.pendingInventory,
+      ))!.single;
+      expect(pending.state, 'unknown');
+      expect(pending.request, firstPayload);
+      final before = Map.of(engine.values);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+      final refreshedSource = _ObservedInventorySource(version, quantity);
+      final reopened = await _openInventory(
+        tester,
+        guardedStore: store,
+        inventorySource: refreshedSource,
+      );
+      reopened.respond = respond;
+      expect(reopened.requests, isEmpty);
+      await _openStock(tester, 'Stock Out');
+      expect(
+        tester.widget<StockOutPage>(find.byType(StockOutPage)).item.version,
+        3,
+      );
+      await _submitInventory(tester, find.byKey(_stockConfirm));
+      expect(
+        find.textContaining('Review the original stock adjustment'),
+        findsOneWidget,
+      );
+      expect(reopened.requests, isEmpty);
+      expect(movements, hasLength(1));
+      expect(engine.values, before);
+
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      final watchesBeforeObservation = refreshedSource.watches;
+      await _submitInventory(tester, find.byKey(_openInventoryRecovery));
+      expect(
+        find.text('Pending inventory changes are unresolved.'),
+        findsOneWidget,
+      );
+      expect(reopened.requests, isEmpty);
+
+      await _submitInventory(tester, find.text('Check outcome'));
+      expect(
+        find.text('The original inventory change is still unresolved.'),
+        findsOneWidget,
+      );
+      expect(engine.values, before);
+      expect(refreshedSource.watches, watchesBeforeObservation);
+      expect(movements, hasLength(1));
+
+      receiptVisible = true;
+      await _submitInventory(tester, find.text('Check outcome'));
+      expect(
+        find.text('The original inventory change was confirmed.'),
+        findsOneWidget,
+      );
+      expect(refreshedSource.watches, greaterThan(watchesBeforeObservation));
+      expect(reopened.requests, hasLength(2));
+      for (final request in reopened.requests) {
+        expect(request.url.path, '/inventory/reconcile');
+        expect(jsonDecode(request.body), pending.observationEnvelope);
+      }
+      expect(movements, hasLength(1));
+      final settled = await tester.runAsync(
+        () => reopened.transport!.journal!.load(
+          _offlineProject,
+          staff.uid,
+          pending.operation,
+          pending.stableKey,
+        ),
+      );
+      expect(settled!.state, 'acknowledged');
+      expect(settled.request, pending.request);
+      expect(settled.payloadDigest, pending.payloadDigest);
+
+      await tester.tap(find.byKey(const ValueKey('inventory-recovery-close')));
+      await tester.pumpAndSettle();
+      await _openStock(tester, 'Stock Out');
+      await _submitInventory(tester, find.byKey(_stockConfirm));
+      expect(reopened.requests, hasLength(3));
+      final next = reopened.requests.last;
+      final nextPayload = jsonDecode(next.body) as Map<String, Object?>;
+      expect(next.url.path, '/inventory/adjust-stock');
+      expect(nextPayload['expectedVersion'], 3);
+      expect(nextPayload['idempotencyKey'], isNot(pending.stableKey));
+      expect(movements, hasLength(2));
+      expect(quantity, 0);
+      expect(version, 4);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'same-UID replacement hides recovery and fences a late committed observation',
+    (tester) async {
+      final engine = (await tester.runAsync(
+        () async => FakeTransactionalJournalEngine(),
+      ))!;
+      final store = PlatformJournalStore(
+        engine: engine,
+        sha256: syntheticSha256,
+      );
+      final handoff = await _openInventory(tester, guardedStore: store);
+      late Completer<void> started;
+      late Completer<http.Response> reply;
+      handoff.respond = (request) async {
+        if (request.url.path == '/inventory/reconcile') {
+          started.complete();
+          return reply.future;
+        }
+        throw http.ClientException('Synthetic acknowledgement lost');
+      };
+      await _openStock(tester, 'Stock Out');
+      await _submitInventory(tester, find.byKey(_stockConfirm));
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await _submitInventory(tester, find.byKey(_openInventoryRecovery));
+      expect(find.text('Check outcome'), findsOneWidget);
+      expect(handoff.requests, hasLength(1));
+      final before = Map.of(engine.values);
+      await tester.runAsync(() async {
+        started = Completer<void>();
+        reply = Completer<http.Response>();
+        await tester.tap(find.text('Check outcome'));
+        await started.future.timeout(const Duration(seconds: 3));
+      });
+
+      handoff.auth.replace(_User(uid: staff.uid));
+      await tester.pumpAndSettle();
+      expect(find.text('Check outcome'), findsNothing);
+      expect(
+        find.text('Pending inventory changes are unresolved.'),
+        findsNothing,
+      );
+      await tester.runAsync(() async {
+        reply.complete(
+          _jsonResponse({
+            'state': 'committed',
+            'result': {
+              ...acknowledgement('adjust-stock'),
+              'cafeId': 'cafe-a',
+              'version': 3,
+              'resultingQuantity': 2,
+            },
+          }),
+        );
+        await Future<void>.delayed(Duration.zero);
+      });
+      await tester.pumpAndSettle();
+      expect(
+        find.text('The original inventory change was confirmed.'),
+        findsNothing,
+      );
+      expect(engine.values, before);
+      expect(handoff.requests.map((request) => request.url.path), [
+        '/inventory/adjust-stock',
+        '/inventory/reconcile',
+      ]);
       await tester.pumpWidget(const SizedBox());
     },
   );

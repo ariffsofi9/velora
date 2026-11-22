@@ -64,7 +64,7 @@ class PendingInvitationOperation {
         raw['expectedMembershipGeneration'] is! int ||
         (raw['expectedMembershipGeneration'] as int) < 0 ||
         (raw['expectedMembershipGeneration'] as int) > 9007199254740991 ||
-        raw['state'] != 'pending') {
+        !['pending', 'settled'].contains(raw['state'])) {
       throw const InvitationRecoveryFailure();
     }
     return PendingInvitationOperation(
@@ -115,7 +115,9 @@ class InvitationRecoveryJournal {
           operation.projectId,
           operation.uid,
         );
-        if (_definite[persistence]?[_key(previous)] != previous.requestId ||
+        if ((previous.state != 'settled' &&
+                _definite[persistence]?[_key(previous)] !=
+                    previous.requestId) ||
             previous.requestId == operation.requestId) {
           throw const InvitationRecoveryFailure();
         }
@@ -145,6 +147,21 @@ class InvitationRecoveryJournal {
     );
     final known = _definite[persistence] ??= <String, String>{};
     known[_key(operation)] = operation.requestId;
+  }
+
+  Future<void> settleDefiniteResponse(
+    PendingInvitationOperation operation,
+  ) async {
+    final pending = operation.toJson();
+    if (!await persistence.compareAndSet(
+      operation.projectId,
+      operation.uid,
+      pending,
+      {...pending, 'state': 'settled'},
+    )) {
+      throw const InvitationRecoveryFailure();
+    }
+    recordDefiniteResponse(operation);
   }
 }
 

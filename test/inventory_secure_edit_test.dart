@@ -9,6 +9,7 @@ import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/models/inventory_item.dart';
 import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/inventory/edit_item_page.dart';
+import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_inventory_update_service.dart';
 import 'package:velora/services/workspace_session.dart';
 
@@ -90,7 +91,7 @@ WorkspaceInventoryRepository _repository(InventoryItem item) =>
 
 Widget _app({
   required InventoryItem item,
-  required WorkspaceInventoryUpdater updater,
+  WorkspaceInventoryUpdater? updater,
   WorkspaceInventoryRepository? repository,
   bool verified = true,
   String Function()? keyFactory,
@@ -145,6 +146,60 @@ final _normalPolicy = AndroidPilotPolicy.parse(
 );
 
 void main() {
+  testWidgets(
+    'verified Edit requires an explicit updater before allocating a key',
+    (tester) async {
+      var keys = 0;
+      await tester.pumpWidget(
+        _app(item: _item(), keyFactory: () => 'edit-key-${++keys}'),
+      );
+      await _open(tester);
+      await _save(tester);
+      await tester.pump();
+
+      expect(
+        find.text('Secure inventory updates are unavailable.'),
+        findsOneWidget,
+      );
+      expect(find.byType(EditItemPage), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(keys, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'uncertain HTTPS edit neither auto-retries nor offers stale reload',
+    (tester) async {
+      var keys = 0;
+      final updater = _Updater([
+        InventoryHttpsUpdateException(
+          WorkspaceInventoryUpdateFailure.stale,
+          const InventoryHttpsFailure('aborted', outcomeUnknown: true),
+        ),
+      ]);
+      await tester.pumpWidget(
+        _app(
+          item: _item(),
+          updater: updater,
+          keyFactory: () => 'unknown-edit-${++keys}',
+        ),
+      );
+      await _open(tester);
+      await _save(tester);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('The item update could not be confirmed'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('reload-latest-item')), findsNothing);
+      expect(find.byType(EditItemPage), findsOneWidget);
+      expect(updater.requests, hasLength(1));
+      expect(keys, 1);
+    },
+  );
+
   for (final invalid in [false, true]) {
     testWidgets('direct Edit invalid=$invalid rejects injected updater', (
       tester,
@@ -348,7 +403,15 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     await tester.tap(find.byType(ElevatedButton));
     expect(updater.requests, hasLength(1));
-    expect(updater.requests.single.expectedVersion, 1);
+    final request = updater.requests.single;
+    expect(request.itemId, 'item-a');
+    expect(request.name, 'Whole Milk');
+    expect(request.category, 'Dairy');
+    expect(request.unit, 'L');
+    expect(request.expiryDate, DateTime(2030, 1, 2));
+    expect(request.imageUrl, 'https://example.test/milk.png');
+    expect(request.expectedVersion, 1);
+    expect(request.idempotencyKey, 'fixed-update-key-001');
 
     pending.complete(
       const WorkspaceInventoryUpdateResult(

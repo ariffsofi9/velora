@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../models/cafe_workspace.dart';
 import 'staff_invitation_service.dart';
 import 'invitation_recovery_service.dart';
+import 'staff_https_service.dart';
 
 /// Injected, immutable session snapshot. revision must advance on every auth or
 /// workspace transition, including sign-out/back to the same UID. No SDK defaults.
@@ -26,6 +27,18 @@ class InvitationHttpsSession {
       emailVerified == other.emailVerified;
 }
 
+typedef StaffInvitationStatus = ({
+  String id,
+  String email,
+  String status,
+  DateTime expiresAt,
+});
+
+typedef StaffInvitationPageResult = ({
+  List<StaffInvitationStatus> invitations,
+  String? nextCursor,
+});
+
 /// Unwired foundation. The composition owner supplies the HTTP client, the current
 /// Firebase ID-token provider and a session stream. Never construct a live client
 /// or access Firebase here. Retain sessionScope across service reconstruction.
@@ -44,7 +57,7 @@ class HttpsStaffInvitations implements StaffInvitations {
   final Duration timeout;
   final Duration cleanupTimeout;
   final int maxResponseBytes;
-  final InvitationRecoveryJournal journal;
+  final InvitationRecoveryJournal? journal;
 
   /// Processing plus cleanup budget, subject to normal event-loop scheduling.
   Duration get completionBudget => timeout + cleanupTimeout;
@@ -70,6 +83,8 @@ class HttpsStaffInvitations implements StaffInvitations {
   }) {
     if (!['velora-spark-test', 'velora-73222'].contains(projectId) ||
         endpointProjectId != projectId ||
+        (projectId == StaffHttpsService.realProject &&
+            endpoint.origin != StaffHttpsService.canonicalOrigin) ||
         endpoint.scheme != 'https' ||
         endpoint.host.isEmpty ||
         endpoint.host.length > 253 ||
@@ -191,7 +206,9 @@ class HttpsStaffInvitations implements StaffInvitations {
       check();
       if (pendingOperation != null) {
         try {
-          await journal.prepare(pendingOperation);
+          final recovery = journal;
+          if (recovery == null) throw const InvitationRecoveryFailure();
+          await recovery.prepare(pendingOperation);
         } catch (_) {
           StaffInvitationCreation.forSession(
             sessionScope,
@@ -399,7 +416,17 @@ class HttpsStaffInvitations implements StaffInvitations {
           }
           // This records only an originating, validated creation acknowledgement;
           // status reconciliation can never settle an unresolved journal.
-          journal.recordDefiniteResponse(operation);
+          if (projectId == StaffHttpsService.realProject) {
+            await journal!.settleDefiniteResponse(operation).timeout(timeout);
+          } else {
+            journal!.recordDefiniteResponse(operation);
+          }
+          if (!session.matches(currentSession())) {
+            throw const StaffInvitationTransportException(
+              'session-changed',
+              outcomeUnknown: true,
+            );
+          }
           return response;
         } catch (error) {
           final failure = error is StaffInvitationFailure
@@ -418,7 +445,11 @@ class HttpsStaffInvitations implements StaffInvitations {
                 'resource-exhausted',
                 'not-found',
               ].contains(failure.code)) {
-            journal.recordDefiniteResponse(operation);
+            if (projectId == StaffHttpsService.realProject) {
+              await journal!.settleDefiniteResponse(operation).timeout(timeout);
+            } else {
+              journal!.recordDefiniteResponse(operation);
+            }
           }
           rethrow;
         }
@@ -440,7 +471,9 @@ class HttpsStaffInvitations implements StaffInvitations {
     var stage = StaffRedeemStage.callableConfig;
     try {
       final session = _session();
-      final operation = await journal
+      final recovery = journal;
+      if (recovery == null) throw const InvitationRecoveryFailure();
+      final operation = await recovery
           .load(projectId, session.uid)
           .timeout(timeout);
       if (operation == null) throw const InvitationRecoveryFailure();
@@ -465,6 +498,60 @@ class HttpsStaffInvitations implements StaffInvitations {
     } catch (error) {
       throw StaffInvitationFailure.fromError(stage, error);
     }
+  }
+
+  Future<StaffInvitationPageResult> listInvitations(
+    CafeWorkspace workspace, {
+    String? cursor,
+  }) async {
+    _requirePolicy();
+    final session = _session();
+    final data = await _call('/staff/list', {
+      'view': 'invitations',
+      'cursor': ?cursor,
+      ...captureInvitationOwnerContext(workspace, session.uid),
+    }, session);
+    final rows = data['invitations'];
+    final next = data['nextCursor'];
+    final idShape = RegExp(r'^[a-f0-9]{32}$');
+    if (rows is! List ||
+        rows.length > 20 ||
+        data.length != (next == null ? 1 : 2) ||
+        (next != null &&
+            (next is! String || !idShape.hasMatch(next) || next == cursor))) {
+      throw const FormatException('Invalid invitation status response');
+    }
+    final invitations = <StaffInvitationStatus>[];
+    final seen = <String>{};
+    for (final row in rows) {
+      if (row is! Map ||
+          row.length != 4 ||
+          row['id'] is! String ||
+          !idShape.hasMatch(row['id'] as String) ||
+          !seen.add(row['id'] as String) ||
+          row['email'] is! String ||
+          (row['email'] as String).length > 254 ||
+          ![
+            'pending',
+            'revoked',
+            'redeemed',
+            'expired',
+            'stale',
+          ].contains(row['status']) ||
+          row['expiresAt'] is! String) {
+        throw const FormatException('Invalid invitation status response');
+      }
+      invitations.add((
+        id: row['id'] as String,
+        email: row['email'] as String,
+        status: row['status'] as String,
+        expiresAt: DateTime.parse(row['expiresAt'] as String),
+      ));
+    }
+    return (
+      invitations: List<StaffInvitationStatus>.unmodifiable(invitations),
+      nextCursor: next as String?,
+    );
   }
 
   @override

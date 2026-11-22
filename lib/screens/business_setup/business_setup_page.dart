@@ -1,9 +1,12 @@
 import '../team/staff_invitation_page.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_tokens.dart';
 import '../../models/cafe_workspace.dart';
+import '../../services/firebase_startup_config.dart';
 import '../../services/workspace_provisioning_service.dart';
+import '../../services/workspace_https_provisioner.dart';
 import '../../services/workspace_resolver.dart';
 import '../../services/workspace_session.dart';
 import '../home/home_page.dart';
@@ -137,19 +140,37 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
     });
     try {
       if (!_creationAccepted && !_creationUncertain) {
-        _request.normalized();
-        if (!await _verification.refreshVerified()) {
+        final request = _request.normalized();
+        final provisioner = widget.provisioner;
+        // The built-in provisioner verifies inside the same Auth episode as
+        // its transaction. Injected provisioners still pass the page check.
+        if (provisioner != null && !await _verification.refreshVerified()) {
           throw const WorkspaceProvisioningException(
             WorkspaceProvisioningFailure.emailUnverified,
           );
         }
         if (!mounted || !current()) return;
-        await (widget.provisioner ??
-                FirebaseWorkspaceProvisioner(
-                  pilotPolicy: pilot?.policy,
-                  verification: _verification,
-                ))
-            .createWorkspace(_request.normalized());
+        final startupOptions = FirebaseStartupProfile.read(context);
+        if (provisioner == null &&
+            startupOptions != null &&
+            startupOptions.projectId == AndroidPilotPolicy.approvedProject) {
+          await WorkspaceHttpsProvisioner.createRealWorkspace(
+            selectedProfile: startupOptions,
+            auth: pilot?.auth ?? FirebaseAuth.instance,
+            request: request,
+          );
+        } else {
+          await (provisioner ??
+                  FirebaseWorkspaceProvisioner(
+                    auth: pilot?.auth,
+                    pilotPolicy: pilot?.policy,
+                    resolveProfile: startupOptions == null
+                        ? null
+                        : () => startupOptions,
+                    verification: widget.verification,
+                  ))
+              .createWorkspace(request);
+        }
         if (!mounted || !current()) return;
         setState(() => _creationAccepted = true);
       }
@@ -179,11 +200,14 @@ class _BusinessSetupPageState extends State<BusinessSetupPage> {
         // A lost/invalid response does not establish that the transaction failed.
         _creationUncertain =
             error.outcomeUncertain &&
-            const {
-              WorkspaceProvisioningFailure.unavailable,
-              WorkspaceProvisioningFailure.timedOut,
-              WorkspaceProvisioningFailure.internal,
-            }.contains(error.failure);
+            (const {
+                  WorkspaceProvisioningFailure.unavailable,
+                  WorkspaceProvisioningFailure.timedOut,
+                  WorkspaceProvisioningFailure.internal,
+                }.contains(error.failure) ||
+                (widget.provisioner == null &&
+                    error.failure ==
+                        WorkspaceProvisioningFailure.unauthenticated));
         _submissionError =
             !error.outcomeUncertain &&
                 const {

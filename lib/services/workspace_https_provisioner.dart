@@ -1,6 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:http/http.dart' as http;
+import 'android_pilot_policy.dart';
+import 'firebase_startup_config.dart';
+import 'owner_email_verification.dart';
 import 'workspace_provisioning_service.dart';
 
 /// Trusted identity snapshot, not server authority. Revision advances on every
@@ -52,12 +57,14 @@ bool _id(Object? value) =>
     !['.', '..'].contains(value) &&
     !RegExp(r'[/\\\x00-\x1f\x7f-\x9f]').hasMatch(value);
 
-/// Unwired TEST-only adapter. The caller owns the injected client's lifetime and
+/// The caller owns the injected client's lifetime and
 /// must provide a non-retrying client honoring followRedirects=false. No Firebase
-/// SDK, default client, credential discovery or live endpoint is initialized.
+/// SDK, default client or credential discovery is initialized by this adapter.
 /// Endpoint project metadata is trusted configuration, not remote attestation.
 /// Bindings are in-memory only, not a durable crash journal or resend permission.
 class WorkspaceHttpsProvisioner implements WorkspaceProvisioner {
+  static const _realOrigin =
+      'https://rest-api.velora-smart-inventory.workers.dev';
   final Uri endpoint;
   final String projectId;
   final http.Client client;
@@ -79,7 +86,11 @@ class WorkspaceHttpsProvisioner implements WorkspaceProvisioner {
     this.cleanupTimeout = const Duration(milliseconds: 100),
     this.maxResponseBytes = 2048,
   }) {
-    if (projectId != 'velora-spark-test' ||
+    final allowedProject =
+        projectId == 'velora-spark-test' ||
+        (projectId == AndroidPilotPolicy.approvedProject &&
+            endpoint.origin == _realOrigin);
+    if (!allowedProject ||
         endpointProjectId != projectId ||
         endpoint.scheme != 'https' ||
         endpoint.port != 443 ||
@@ -104,6 +115,83 @@ class WorkspaceHttpsProvisioner implements WorkspaceProvisioner {
         'invalid-configuration',
         outcomeUncertain: false,
       );
+    }
+  }
+
+  static Future<WorkspaceCreationResult> createRealWorkspace({
+    required FirebaseOptions selectedProfile,
+    required FirebaseAuth auth,
+    required WorkspaceCreationRequest request,
+  }) async {
+    try {
+      FirebaseStartupProfile.validateActiveApp(
+        selectedProfile,
+        auth.app.options,
+      );
+      if (selectedProfile.projectId != AndroidPilotPolicy.approvedProject) {
+        throw FirebaseConfigurationException(
+          'REAL workspace profile required.',
+        );
+      }
+    } on FirebaseConfigurationException {
+      throw const WorkspaceProvisioningException(
+        WorkspaceProvisioningFailure.invalidProfile,
+        outcomeUncertain: false,
+      );
+    }
+    final uid = auth.currentUser?.uid;
+    if (uid == null) {
+      throw const WorkspaceProvisioningException(
+        WorkspaceProvisioningFailure.unauthenticated,
+        outcomeUncertain: false,
+      );
+    }
+    final session = EmailVerificationSession(auth, uid);
+    final client = http.Client();
+    const timeout = FirebaseOwnerEmailVerification.defaultTimeout;
+    try {
+      final verification = FirebaseOwnerEmailVerification(session: session);
+      final token = await verification.freshVerifiedIdToken();
+      if (token == null || token.isEmpty) {
+        throw const WorkspaceProvisioningException(
+          WorkspaceProvisioningFailure.emailUnverified,
+          outcomeUncertain: false,
+        );
+      }
+      final identity = WorkspaceProvisioningIdentity(
+        projectId: selectedProfile.projectId,
+        uid: uid,
+        revision: 0,
+        emailVerified: true,
+      );
+      return await WorkspaceHttpsProvisioner(
+        endpoint: Uri.parse(_realOrigin),
+        projectId: selectedProfile.projectId,
+        endpointProjectId: AndroidPilotPolicy.approvedProject,
+        client: client,
+        currentIdentity: () =>
+            session.isCurrent && auth.currentUser?.emailVerified == true
+            ? identity
+            : null,
+        identityChanges: auth.authStateChanges().skip(1).map((_) => null),
+        idToken: (_) async => token,
+        timeout: const Duration(seconds: 30),
+      ).createWorkspace(request);
+    } on OwnerVerificationException catch (error) {
+      throw WorkspaceProvisioningException(
+        error.failure == OwnerVerificationFailure.changed ||
+                error.failure == OwnerVerificationFailure.signedOut
+            ? WorkspaceProvisioningFailure.unauthenticated
+            : WorkspaceProvisioningFailure.unavailable,
+        outcomeUncertain: false,
+      );
+    } finally {
+      client.close();
+      try {
+        await session.close().timeout(timeout);
+      } catch (_) {
+        // close invalidates the Auth episode before cancelling the listener.
+      }
     }
   }
 

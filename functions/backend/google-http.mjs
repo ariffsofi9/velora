@@ -1,4 +1,4 @@
-import {BackendError, bounded, requireTestProject, validBudget} from './backend-errors.mjs';
+import {BackendError, bounded, requireBackendProject, validBudget} from './backend-errors.mjs';
 
 export const CERTIFICATE_URL = 'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
 export const OAUTH_URL = 'https://oauth2.googleapis.com/token';
@@ -33,9 +33,9 @@ function firestoreRows(data, rpc) {
 // No fetch/default transport, credential discovery, listener or import-time I/O.
 // The injected transport is trusted to enforce TLS and the redirect policy and
 // must not implement automatic retries. Deadlines also bound noncooperative fakes.
-export function createGoogleHttp({projectId, transport, timeoutMs = 5000,
+export function createGoogleHttp({projectId, realWorker, transport, timeoutMs = 5000,
   cleanupTimeoutMs = 100, maxBytes = 262144} = {}) {
-  requireTestProject(projectId);
+  requireBackendProject(projectId, realWorker);
   if (typeof transport !== 'function' || !validBudget(timeoutMs) ||
       !validBudget(cleanupTimeoutMs) || !Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > 1048576) {
     throw new BackendError('configuration', 'invalid-configuration');
@@ -48,6 +48,9 @@ export function createGoogleHttp({projectId, transport, timeoutMs = 5000,
     if (u.origin === 'https://firestore.googleapis.com') {
       for (const operation of ['beginTransaction', 'batchGet', 'commit', 'rollback']) {
         if (u.pathname === `${base}:${operation}`) { firestore = true; actualRpc = operation; }
+      }
+      if (realWorker && u.pathname === `${base}:runQuery` && rpc === 'runQuery') {
+        firestore = true; actualRpc = 'runQuery';
       }
       const prefix = `${base}/cafes/`;
       if (u.pathname.startsWith(prefix) && u.pathname.endsWith(':runQuery')) {

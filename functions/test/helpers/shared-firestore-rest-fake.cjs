@@ -66,10 +66,13 @@ function createRestFake(seed = {}) {
     if (method === 'batchGet') {
       assert.equal(parsed.pathname, `/v1/${root}:batchGet`);
       assert.deepEqual(Object.keys(body).sort(), ['documents', 'transaction']);
-      assert.equal(body.documents.length, 1);
-      const path = relative(body.documents[0]);
-      return json([{...(Object.hasOwn(tx.records, path) ? {found: doc(path, tx.records[path])} : {missing: resource(path)}),
-        readTime: instant}]);
+      assert.ok(body.documents.length >= 1 && body.documents.length <= 100);
+      assert.equal(new Set(body.documents).size, body.documents.length);
+      return json(body.documents.toReversed().map(full => {
+        const path = relative(full);
+        return {...(Object.hasOwn(tx.records, path) ? {found: doc(path, tx.records[path])} : {missing: resource(path)}),
+          readTime: instant};
+      }));
     }
     if (method === 'runQuery') {
       assert.deepEqual(Object.keys(body).sort(), ['structuredQuery', 'transaction']);
@@ -86,12 +89,17 @@ function createRestFake(seed = {}) {
       const prefix = `cafes/${cafeId}/${collection}/`;
       let rows = Object.entries(tx.records).filter(([path]) => path.startsWith(prefix) && !path.slice(prefix.length).includes('/'));
       if (q.where) {
-        assert.ok(['menu_items', 'saved_recipes'].includes(collection));
-        const archived = q.where.fieldFilter?.value?.booleanValue;
-        assert.equal(typeof archived, 'boolean');
-        if (collection === 'menu_items') assert.equal(archived, false);
-        assert.deepEqual(q.where, {fieldFilter: {field: {fieldPath: 'isArchived'}, op: 'EQUAL', value: {booleanValue: archived}}});
-        rows = rows.filter(([, data]) => data.isArchived === archived);
+        if (collection === 'members') {
+          assert.deepEqual(q.where, {fieldFilter: {field: {fieldPath: 'role'}, op: 'EQUAL', value: {stringValue: 'staff'}}});
+          rows = rows.filter(([, data]) => data.role === 'staff');
+        } else {
+          assert.ok(['menu_items', 'saved_recipes'].includes(collection));
+          const archived = q.where.fieldFilter?.value?.booleanValue;
+          assert.equal(typeof archived, 'boolean');
+          if (collection === 'menu_items') assert.equal(archived, false);
+          assert.deepEqual(q.where, {fieldFilter: {field: {fieldPath: 'isArchived'}, op: 'EQUAL', value: {booleanValue: archived}}});
+          rows = rows.filter(([, data]) => data.isArchived === archived);
+        }
       }
       rows.sort(([a], [b]) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
       if (q.startAt) {

@@ -39,6 +39,10 @@ function records(generation) {
     seed[`user_cafe_memberships/${uid}`] = link;
     seed[`cafes/cafe/members/${uid}`] = {...link, role: uid};
   }
+  for (const uid of ['owner', 'staff', 'joiner']) seed[`users/${uid}`] = {
+    username: uid, role: 'owner', email: `${uid}@example.test`, photoUrl: '',
+    createdAt: new Date(initial), updatedAt: new Date(initial),
+  };
   return seed;
 }
 function fixture({generation = 0, ...overrides} = {}) {
@@ -60,8 +64,7 @@ function fixture({generation = 0, ...overrides} = {}) {
       assert.equal(options.headers.authorization, 'Bearer synthetic-access');
       const input = JSON.parse(options.body);
       if (input.email) return Response.json({users: Object.values(accounts).filter(user => user.email === input.email[0])});
-      const uid = input.localId[0];
-      return Response.json({users: accounts[uid] ? [accounts[uid]] : []});
+      return Response.json({users: input.localId.map(uid => accounts[uid]).filter(Boolean)});
     }
     return fake.transport(url, options);
   };

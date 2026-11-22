@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../services/workspace_resolver.dart';
 import '../../services/offline_verified_workspace_inventory.dart';
@@ -47,6 +48,7 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
   late WorkspaceSessionMonitor _monitor;
   bool _ready = false;
   Timer? _verificationTimeout;
+  OverlayEntry? _authorityBarrier;
   String? _identity;
   late final AndroidPilotAuthDependencies? _pilot;
   late final WorkspaceSession _boundSession;
@@ -78,6 +80,8 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
           return;
         }
         _verificationTimeout?.cancel();
+        _authorityBarrier?.remove();
+        _authorityBarrier = null;
         setState(() => _ready = ready);
         if (!ready) {
           inventory?.releaseVerifiedWorkspace(_boundSession);
@@ -130,6 +134,29 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
     );
   }
 
+  void _awaitServerAuthority() {
+    if (kDebugMode) {
+      debugPrint('{"stage":"workspace-authority","state":"awaiting-server"}');
+    }
+    _monitor.suspendAuthority();
+    _verificationTimeout?.cancel();
+    _verificationTimeout = Timer(
+      const Duration(seconds: 15),
+      _monitor.invalidate,
+    );
+    if (_authorityBarrier != null) return;
+    final overlay = Overlay.of(context, rootOverlay: true);
+    _authorityBarrier = OverlayEntry(
+      builder: (_) => const BlockSemantics(
+        child: ColoredBox(
+          color: Colors.white,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      ),
+    );
+    overlay.insert(_authorityBarrier!);
+  }
+
   Stream<bool> _authority() {
     final session = widget.session;
     final paths = {
@@ -141,7 +168,14 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
     };
     final values = <String, String>{};
     final subscriptions = <StreamSubscription<dynamic>>[];
-    var started = false;
+    final awaitingServer = <String>{};
+    final recoverWebCache =
+        kIsWeb &&
+        _pilot?.policy.isRestricted != true &&
+        widget.offlineInventory == null &&
+        widget.authoritySnapshots == null &&
+        FirebaseAuth.instance.app.options.projectId == 'velora-73222';
+    var started = false, rechecking = false;
     late StreamController<bool> controller;
     controller = StreamController<bool>(
       onListen: () {
@@ -153,10 +187,21 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
                         .snapshots(includeMetadataChanges: true))
                 .listen(
                   (snapshot) {
-                    if (controller.isClosed) return;
-                    if (snapshot.metadata.isFromCache ||
-                        snapshot.metadata.hasPendingWrites) {
+                    if (controller.isClosed || !mounted) return;
+                    if (snapshot.metadata.hasPendingWrites) {
                       if (started) controller.add(false);
+                      return;
+                    }
+                    if (snapshot.metadata.isFromCache) {
+                      if (started && recoverWebCache) {
+                        awaitingServer.add(path);
+                        if (!rechecking) {
+                          rechecking = true;
+                          _awaitServerAuthority();
+                        }
+                      } else if (started) {
+                        controller.add(false);
+                      }
                       return;
                     }
                     final data = snapshot.data();
@@ -175,6 +220,11 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
                       return;
                     }
                     values[path] = signature;
+                    awaitingServer.remove(path);
+                    if (rechecking && awaitingServer.isEmpty) {
+                      rechecking = false;
+                      controller.add(true);
+                    }
                     if (!started && values.length == paths.length) {
                       started = true;
                       controller.add(true);
@@ -220,6 +270,8 @@ class _BoundaryState extends State<WorkspaceSessionBoundary>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _verificationTimeout?.cancel();
+    _authorityBarrier?.remove();
+    _authorityBarrier = null;
     _boundSession.invalidate();
     widget.offlineInventory?.releaseVerifiedWorkspace(_boundSession);
     _monitor.dispose();

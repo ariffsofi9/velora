@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 import '../../repositories/workspace_inventory_movement_repository.dart';
+import '../../services/mutation_recovery_service.dart';
 import '../../services/workspace_session.dart';
 import '../../services/workspace_inventory_create_service.dart';
 import '../../services/workspace_inventory_https_transport.dart';
@@ -81,6 +82,7 @@ class _InventoryPageState extends State<InventoryPage> {
   late Stream<List<InventoryItem>> _itemsStream;
   bool _exporting = false;
   int _exportGeneration = 0;
+  _InventoryRecovery? _recovery;
 
   String _searchQuery = '';
   String _selectedFilter = 'All Items';
@@ -97,6 +99,9 @@ class _InventoryPageState extends State<InventoryPage> {
   @override
   void didUpdateWidget(covariant InventoryPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_recovery case final recovery? when !_isRecoveryCurrent(recovery)) {
+      _clearRecovery();
+    }
     if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
         !identical(oldWidget.repository, widget.repository)) {
       _configureRepository();
@@ -119,6 +124,179 @@ class _InventoryPageState extends State<InventoryPage> {
   bool get _hasVerifiedContext =>
       widget.workspaceSession.isActive &&
       identical(_repository.session, widget.workspaceSession);
+
+  HttpsWorkspaceInventory? get _guardedInventory {
+    final creator = widget.inventoryCreator;
+    return _hasVerifiedContext &&
+            creator is HttpsWorkspaceInventory &&
+            creator.isGuarded &&
+            identical(
+              creator.currentSession()?.workspace,
+              widget.workspaceSession,
+            )
+        ? creator
+        : null;
+  }
+
+  bool _isRecoveryCurrent(_InventoryRecovery recovery) =>
+      mounted &&
+      identical(_recovery, recovery) &&
+      identical(_guardedInventory, recovery.transport) &&
+      recovery.session.matches(recovery.transport.currentSession());
+
+  void _clearRecovery() {
+    final recovery = _recovery;
+    _recovery = null;
+    unawaited(recovery?.changes?.cancel());
+  }
+
+  Future<void> _openRecovery() async {
+    final transport = _guardedInventory;
+    final session = transport?.currentSession();
+    if (transport == null || session == null || _recovery != null) return;
+    final recovery = _InventoryRecovery(transport, session);
+    setState(() => _recovery = recovery);
+    void revoke() {
+      if (mounted && identical(_recovery, recovery)) setState(_clearRecovery);
+    }
+
+    recovery.changes = transport.sessionChanges.listen(
+      (current) {
+        if (!session.matches(current)) revoke();
+      },
+      onError: (Object _) => revoke(),
+      onDone: revoke,
+    );
+    await _loadPending(recovery);
+  }
+
+  Future<void> _loadPending(_InventoryRecovery recovery) async {
+    if (!_isRecoveryCurrent(recovery) || recovery.busy) return;
+    setState(() {
+      recovery.busy = true;
+      recovery.message = 'Checking pending inventory changes…';
+    });
+    try {
+      final pending = await recovery.transport.pendingInventory();
+      if (!_isRecoveryCurrent(recovery)) return;
+      setState(() {
+        recovery.pending = pending;
+        recovery.message = pending.isEmpty
+            ? 'No pending inventory changes are available for this session.'
+            : 'Pending inventory changes are unresolved.';
+      });
+    } catch (_) {
+      if (!_isRecoveryCurrent(recovery)) return;
+      setState(() {
+        recovery.pending = const [];
+        recovery.message = 'Could not check pending inventory changes.';
+      });
+    } finally {
+      if (_isRecoveryCurrent(recovery)) {
+        setState(() => recovery.busy = false);
+      }
+    }
+  }
+
+  Future<void> _observePending(
+    _InventoryRecovery recovery,
+    PendingMutationOperation pending,
+  ) async {
+    if (!_isRecoveryCurrent(recovery) || recovery.busy) return;
+    setState(() => recovery.busy = true);
+    try {
+      final result = await recovery.transport.reconcile(pending);
+      if (!_isRecoveryCurrent(recovery)) return;
+      setState(() {
+        if (result.committed) {
+          recovery.pending = recovery.pending
+              .where((record) => !identical(record, pending))
+              .toList();
+          recovery.message = 'The original inventory change was confirmed.';
+          _itemsStream = _watchVerifiedItems();
+        } else {
+          recovery.message =
+              'The original inventory change is still unresolved.';
+        }
+      });
+    } catch (_) {
+      if (!_isRecoveryCurrent(recovery)) return;
+      setState(() {
+        recovery.message =
+            'Could not confirm the inventory change. Check pending changes again.';
+      });
+    } finally {
+      if (_isRecoveryCurrent(recovery)) {
+        setState(() => recovery.busy = false);
+      }
+    }
+  }
+
+  Widget _recoverySheet(BuildContext context, _InventoryRecovery recovery) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * .45,
+        ),
+        child: ListView(
+          shrinkWrap: true,
+          padding: const EdgeInsets.all(16),
+          children: [
+            Row(
+              children: [
+                const Expanded(child: Text('Inventory recovery')),
+                TextButton(
+                  key: const ValueKey('inventory-recovery-close'),
+                  onPressed: recovery.busy
+                      ? null
+                      : () => setState(_clearRecovery),
+                  child: const Text('Close'),
+                ),
+              ],
+            ),
+            Text(recovery.message),
+            for (final pending in recovery.pending)
+              ListTile(
+                title: Text(switch (pending.operation) {
+                  'create' => 'Add item',
+                  'update' => 'Edit item',
+                  'adjust-stock' =>
+                    pending.request['direction'] == 'in'
+                        ? 'Stock In'
+                        : 'Stock Out',
+                  'lifecycle' =>
+                    pending.request['action'] == 'archive'
+                        ? 'Archive item'
+                        : 'Restore item',
+                  _ => 'Inventory change',
+                }),
+                subtitle: switch (pending.request['itemId']) {
+                  final String itemId => Text(
+                    itemId,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  _ => null,
+                },
+                trailing: TextButton(
+                  onPressed: recovery.busy
+                      ? null
+                      : () => _observePending(recovery, pending),
+                  child: const Text('Check outcome'),
+                ),
+              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: recovery.busy ? null : () => _loadPending(recovery),
+                child: const Text('Reload pending changes'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Stream<List<InventoryItem>> _watchVerifiedItems() => _hasVerifiedContext
       ? _repository.watchItems()
@@ -145,6 +323,7 @@ class _InventoryPageState extends State<InventoryPage> {
   @override
   void dispose() {
     _exportGeneration++;
+    _clearRecovery();
     _searchController.dispose();
     super.dispose();
   }
@@ -307,6 +486,7 @@ class _InventoryPageState extends State<InventoryPage> {
     final screenWidth = MediaQuery.of(context).size.width;
     final isSmallPhone = screenWidth < 370;
     final horizontalPadding = isSmallPhone ? 16.0 : 20.0;
+    final recovery = _recovery;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -324,6 +504,13 @@ class _InventoryPageState extends State<InventoryPage> {
           ),
         ),
         actions: [
+          if (_guardedInventory != null)
+            IconButton(
+              key: const ValueKey('inventory-recovery-open'),
+              onPressed: recovery == null ? _openRecovery : null,
+              tooltip: 'Inventory recovery',
+              icon: const Icon(Icons.history_rounded),
+            ),
           IconButton(
             key: const ValueKey('open-archived-items'),
             onPressed: _goToArchivedItems,
@@ -530,6 +717,9 @@ class _InventoryPageState extends State<InventoryPage> {
           );
         },
       ),
+      bottomSheet: recovery != null && _isRecoveryCurrent(recovery)
+          ? _recoverySheet(context, recovery)
+          : null,
       floatingActionButton: FloatingActionButton(
         onPressed: _goToAddItem,
         backgroundColor: AppColors.primary,
@@ -540,4 +730,15 @@ class _InventoryPageState extends State<InventoryPage> {
       ),
     );
   }
+}
+
+class _InventoryRecovery {
+  final HttpsWorkspaceInventory transport;
+  final InventoryHttpsSession session;
+  StreamSubscription<InventoryHttpsSession?>? changes;
+  List<PendingMutationOperation> pending = const [];
+  String message = '';
+  bool busy = false;
+
+  _InventoryRecovery(this.transport, this.session);
 }

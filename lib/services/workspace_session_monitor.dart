@@ -48,10 +48,17 @@ class WorkspaceSessionMonitor {
         invalidate();
         return;
       }
+      session.resumeAuthority();
       onState(true);
     } catch (_) {
       invalidate();
     }
+  }
+
+  void suspendAuthority() {
+    if (_closed) return;
+    _revision++;
+    session.suspendAuthority();
   }
 
   void invalidate() {

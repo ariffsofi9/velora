@@ -74,3 +74,6 @@ app.*.map.json
 /android/app/release
 
 /emulator-data/
+
+# Local Wrangler state
+**/.wrangler/

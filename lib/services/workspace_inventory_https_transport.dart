@@ -8,6 +8,7 @@ import 'workspace_inventory_stock_service.dart';
 import 'workspace_inventory_lifecycle_service.dart';
 import 'workspace_session.dart';
 import 'mutation_recovery_service.dart';
+import 'platform_journal_store.dart';
 
 /// Trusted composition snapshot, never a source of server authorization.
 /// revision must advance on EVERY identity/workspace transition, including
@@ -109,6 +110,8 @@ class HttpsWorkspaceInventory
   final Duration timeout, cleanupTimeout;
   final int maxResponseBytes;
   final MutationRecoveryJournal? journal;
+  final PlatformJournalStore? _guardedStore;
+  bool get isGuarded => _guardedStore != null;
   Duration get completionBudget =>
       timeout +
       cleanupTimeout +
@@ -126,9 +129,19 @@ class HttpsWorkspaceInventory
     this.timeout = const Duration(seconds: 15),
     this.cleanupTimeout = const Duration(milliseconds: 100),
     this.maxResponseBytes = 65536,
-    this.journal,
-  }) {
-    if (!['velora-spark-test', 'velora-73222'].contains(projectId) ||
+    MutationRecoveryJournal? journal,
+    PlatformJournalStore? guardedStore,
+  }) : _guardedStore = guardedStore,
+       journal = guardedStore == null
+           ? journal
+           : MutationRecoveryJournal(
+               guardedStore.guardedMutations,
+               sha256: guardedStore.sha256,
+               timeout: guardedStore.timeout,
+             ) {
+    if ((guardedStore != null &&
+            (journal != null || projectId != 'velora-spark-test')) ||
+        !['velora-spark-test', 'velora-73222'].contains(projectId) ||
         endpointProjectId != projectId ||
         endpoint.scheme != 'https' ||
         endpoint.host.length > 253 ||
@@ -162,6 +175,77 @@ class HttpsWorkspaceInventory
         'pilot-policy-denied',
         outcomeUnknown: outcomeUnknown,
       );
+    }
+  }
+
+  /// Local discovery only. A displayed record still requires explicit
+  /// reconciliation and fresh credentials before it can be observed.
+  Future<List<PendingMutationOperation>> pendingInventory() async {
+    _requirePolicy(outcomeUnknown: true);
+    final store = _guardedStore;
+    if (store == null) {
+      throw const InventoryHttpsFailure(
+        'recovery-unavailable',
+        outcomeUnknown: true,
+      );
+    }
+    StreamSubscription<InventoryHttpsSession?>? monitor;
+    var changed = false;
+    try {
+      final session = currentSession();
+      if (session == null ||
+          session.projectId != projectId ||
+          session.uid != session.workspace.uid ||
+          !_identifier(session.uid) ||
+          !_identifier(session.workspace.cafeId) ||
+          !session.emailVerified ||
+          session.revision < 0 ||
+          !_integer(session.workspace.membershipGeneration) ||
+          !session.workspace.isActive) {
+        throw const InventoryHttpsFailure(
+          'session-changed',
+          outcomeUnknown: true,
+        );
+      }
+      monitor = sessionChanges.listen(
+        (value) {
+          if (!session.matches(value)) changed = true;
+        },
+        onError: (Object _) => changed = true,
+        onDone: () => changed = true,
+      );
+      final records = await store.pendingInventory(
+        projectId,
+        session.uid,
+        cafeId: session.workspace.cafeId,
+        membershipGeneration: session.workspace.membershipGeneration,
+      );
+      await monitor.cancel().timeout(cleanupTimeout);
+      monitor = null;
+      if (changed ||
+          !session.matches(currentSession()) ||
+          !session.workspace.isActive) {
+        throw const InventoryHttpsFailure(
+          'session-changed',
+          outcomeUnknown: true,
+        );
+      }
+      return records;
+    } on InventoryHttpsFailure {
+      rethrow;
+    } catch (_) {
+      throw const InventoryHttpsFailure(
+        'recovery-unavailable',
+        outcomeUnknown: true,
+      );
+    } finally {
+      if (monitor != null) {
+        try {
+          await monitor.cancel().timeout(cleanupTimeout);
+        } catch (_) {
+          /* Bounded cleanup on failure. */
+        }
+      }
     }
   }
 
@@ -209,7 +293,11 @@ class HttpsWorkspaceInventory
           current.uid != current.workspace.uid ||
           current.projectId != projectId ||
           !current.emailVerified ||
-          current.revision < 0) {
+          current.revision < 0 ||
+          (isGuarded &&
+              (!_identifier(current.uid) ||
+                  !_identifier(current.workspace.cafeId) ||
+                  !_integer(current.workspace.membershipGeneration)))) {
         throw const InventoryHttpsFailure(
           'unauthenticated',
           outcomeUnknown: false,
@@ -396,6 +484,11 @@ class HttpsWorkspaceInventory
 
     try {
       result = await perform().timeout(timeout);
+    } on InventoryOperationPending {
+      failure = const InventoryHttpsFailure(
+        'inventory-operation-pending',
+        outcomeUnknown: true,
+      );
     } catch (error) {
       failure = error is InventoryHttpsFailure
           ? error
@@ -513,7 +606,12 @@ class HttpsWorkspaceInventory
       checkObservation();
       if (latest == null ||
           latest.revision != pending.revision ||
-          latest.payloadDigest != pending.payloadDigest) {
+          latest.payloadDigest != pending.payloadDigest ||
+          mutationJournalCanonicalJson(latest.operation, latest.request) !=
+              mutationJournalCanonicalJson(
+                pending.operation,
+                pending.request,
+              )) {
         throw const InventoryHttpsFailure(
           'recovery-unavailable',
           outcomeUnknown: true,
@@ -522,8 +620,8 @@ class HttpsWorkspaceInventory
       final observation = await _call(
         pending,
         '/inventory/reconcile',
-        pending.observationEnvelope,
-        (data) => MutationReceiptObservation.parse(pending, data),
+        latest.observationEnvelope,
+        (data) => MutationReceiptObservation.parse(latest, data),
         observedSessionChanged: () => changed,
       );
       // _call has completed bounded listener cleanup/session checks. Persist an

@@ -6,6 +6,7 @@ import 'workspace_resolver.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show appFlavor;
 import 'firebase_startup_config.dart';
 import 'owner_email_verification.dart';
 import 'android_pilot_policy.dart';
@@ -186,9 +187,11 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
   final WorkspaceBootstrapStore _store;
   final FirebaseOptions Function() _resolveProfile;
   final FirebaseOptions Function() _activeOptions;
+  final FirebaseAuth Function()? _sessionAuth;
   final String? Function() _currentUid;
-  final OwnerEmailVerification _verification;
+  final OwnerEmailVerification? _verification;
   FirebaseWorkspaceProvisioner({
+    FirebaseAuth? auth,
     WorkspaceBootstrapStore? store,
     FirebaseOptions Function()? resolveProfile,
     FirebaseOptions Function()? activeOptions,
@@ -196,19 +199,31 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
     OwnerEmailVerification? verification,
     AndroidPilotPolicy? pilotPolicy,
   }) : _pilotPolicy = pilotPolicy,
-       _verification =
-           verification ??
-           FirebaseOwnerEmailVerification(pilotPolicy: pilotPolicy),
+       _verification = verification,
+       _sessionAuth = currentUid == null
+           ? (() => auth ?? FirebaseAuth.instance)
+           : null,
        _store = store ?? FirestoreWorkspaceBootstrapStore(),
        _resolveProfile =
            resolveProfile ??
            (() => FirebaseStartupConfig.current.resolve(
+             // The validated normal startup policy can select REAL when the
+             // build omits a project define. Recheck that same policy here.
+             pilotPolicy:
+                 pilotPolicy ??
+                 AndroidPilotPolicy.fromBuildConfiguration(
+                   isWeb: kIsWeb,
+                   platform: defaultTargetPlatform,
+                   androidFlavor: appFlavor,
+                 ),
              isWeb: kIsWeb,
              platform: defaultTargetPlatform,
+             androidFlavor: appFlavor,
            )),
        _activeOptions = activeOptions ?? (() => Firebase.app().options),
        _currentUid =
-           currentUid ?? (() => FirebaseAuth.instance.currentUser?.uid);
+           currentUid ??
+           (() => (auth ?? FirebaseAuth.instance).currentUser?.uid);
 
   @override
   Future<WorkspaceCreationResult> createWorkspace(
@@ -227,38 +242,58 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
     var transactionStarted = false;
     // Revalidate explicit selection and the initialized app before transport.
     try {
-      final expected = _resolveProfile();
-      final actual = _activeOptions();
-      if (expected.projectId != actual.projectId ||
-          expected.appId != actual.appId ||
-          expected.apiKey != actual.apiKey ||
-          expected.messagingSenderId != actual.messagingSenderId ||
-          expected.authDomain != actual.authDomain ||
-          expected.storageBucket != actual.storageBucket) {
-        throw StateError('Mismatched initialized Firebase app.');
-      }
+      FirebaseStartupProfile.validateActiveApp(
+        _resolveProfile(),
+        _activeOptions(),
+      );
     } catch (_) {
       throw const WorkspaceProvisioningException(
         WorkspaceProvisioningFailure.invalidProfile,
+        outcomeUncertain: false,
       );
     }
+    EmailVerificationSession? session;
     try {
       final uid = _currentUid();
       if (uid == null || uid.isEmpty) {
         throw const WorkspaceProvisioningException(
           WorkspaceProvisioningFailure.unauthenticated,
+          outcomeUncertain: false,
         );
       }
       final input = request.normalized();
-      try {
-        if (_verification.currentUid != uid) {
-          throw const WorkspaceProvisioningException(
+      final auth = _sessionAuth?.call();
+      final bound = session = auth == null
+          ? null
+          : EmailVerificationSession(auth, uid);
+      final verification =
+          _verification ??
+          FirebaseOwnerEmailVerification(session: bound, pilotPolicy: policy);
+      void requireSameUser() {
+        if (_currentUid() != uid ||
+            verification.currentUid != uid ||
+            (bound != null &&
+                (!bound.isCurrent ||
+                    auth?.currentUser?.emailVerified != true))) {
+          throw WorkspaceProvisioningException(
             WorkspaceProvisioningFailure.unauthenticated,
+            outcomeUncertain: transactionStarted,
           );
         }
-        if (!await _verification.refreshVerified()) {
+      }
+
+      try {
+        await bound?.ready(FirebaseOwnerEmailVerification.defaultTimeout);
+        if (verification.currentUid != uid) {
+          throw const WorkspaceProvisioningException(
+            WorkspaceProvisioningFailure.unauthenticated,
+            outcomeUncertain: false,
+          );
+        }
+        if (!await verification.refreshVerified()) {
           throw const WorkspaceProvisioningException(
             WorkspaceProvisioningFailure.emailUnverified,
+            outcomeUncertain: false,
           );
         }
       } on OwnerVerificationException catch (error) {
@@ -270,18 +305,14 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
           outcomeUncertain: false,
         );
       }
-      if (_currentUid() != uid || _verification.currentUid != uid) {
-        throw const WorkspaceProvisioningException(
-          WorkspaceProvisioningFailure.unauthenticated,
-        );
-      }
+      requireSameUser();
       final cafeId = _store.newCafeId(); // Stable across SDK callback retries.
       if (!_validId(uid) || !_validId(cafeId)) _conflict();
       transactionStarted = true;
       final result = await _store.runTransaction((tx) async {
-        _sameUser(uid);
+        requireSameUser();
         final mapping = await tx.readDocument('user_cafe_memberships/$uid');
-        _sameUser(uid);
+        requireSameUser();
         if (mapping != null) {
           final existingId = mapping['cafeId'];
           if (!_validId(existingId) || !_link(mapping, uid, existingId)) {
@@ -291,7 +322,7 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
           final member = await tx.readDocument(
             'cafes/$existingId/members/$uid',
           );
-          _sameUser(uid);
+          requireSameUser();
           if (cafe == null ||
               member == null ||
               !_link(member, uid, existingId) ||
@@ -321,7 +352,7 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
         }
         // Do not read nonexistent cafe/member paths: protected reads are denied.
         // Server-side Rules check their absence and the final three-way graph.
-        _sameUser(uid);
+        requireSameUser();
         final now = _store.serverTimestamp();
         final base = <String, dynamic>{
           'status': 'active',
@@ -355,7 +386,7 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
         });
         return const WorkspaceCreationResult(created: true);
       });
-      _sameUser(uid);
+      requireSameUser();
       return result;
     } on FirebaseException catch (error) {
       throw WorkspaceProvisioningException(switch (error.code) {
@@ -381,14 +412,12 @@ class FirebaseWorkspaceProvisioner implements WorkspaceProvisioner {
         WorkspaceProvisioningFailure.unavailable,
         outcomeUncertain: transactionStarted,
       );
-    }
-  }
-
-  void _sameUser(String uid) {
-    if (_currentUid() != uid || _verification.currentUid != uid) {
-      throw const WorkspaceProvisioningException(
-        WorkspaceProvisioningFailure.unauthenticated,
-      );
+    } finally {
+      try {
+        await session?.close();
+      } catch (_) {
+        // close invalidates the episode before cancelling its subscription.
+      }
     }
   }
 

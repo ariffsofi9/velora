@@ -12,8 +12,12 @@ import 'package:velora/services/workspace_inventory_stock_service.dart';
 import 'package:velora/services/workspace_inventory_lifecycle_service.dart';
 import 'package:velora/services/workspace_session.dart';
 import 'package:velora/services/mutation_recovery_service.dart';
+import 'package:velora/services/platform_journal_store.dart';
 import 'mutation_recovery_service_test.dart'
     show FakeMutationPersistence, syntheticSha256;
+import 'platform_journal_store_test.dart'
+    as journal_test
+    show FakeTransactionalJournalEngine, store;
 
 class FakeClient extends http.BaseClient {
   final Future<http.StreamedResponse> Function(http.BaseRequest) handle;
@@ -81,16 +85,19 @@ class CancelSubscription<T> implements StreamSubscription<T> {
   Future<E> asFuture<E>([E? futureValue]) => source.asFuture<E>(futureValue);
 }
 
-WorkspaceSession workspace({String cafe = 'cafe', int generation = 0}) =>
-    WorkspaceSession.fromVerified(
-      CafeWorkspace(
-        cafeId: cafe,
-        uid: 'owner',
-        ownerUid: 'owner',
-        role: CafeRole.owner,
-        membershipGeneration: generation,
-      ),
-    );
+WorkspaceSession workspace({
+  String cafe = 'cafe',
+  int generation = 0,
+  String uid = 'owner',
+}) => WorkspaceSession.fromVerified(
+  CafeWorkspace(
+    cafeId: cafe,
+    uid: uid,
+    ownerUid: 'owner',
+    role: uid == 'owner' ? CafeRole.owner : CafeRole.staff,
+    membershipGeneration: generation,
+  ),
+);
 InventoryHttpsSession snapshot(
   WorkspaceSession w, {
   String uid = 'owner',
@@ -130,6 +137,7 @@ class Fixture {
     int max = 65536,
     Stream<InventoryHttpsSession?>? stream,
     MutationRecoveryJournal? journal,
+    PlatformJournalStore? guardedStore,
   }) => HttpsWorkspaceInventory(
     pilotPolicy: policy ?? _normalPolicy,
     endpoint: endpoint ?? Uri.parse('https://offline.invalid'),
@@ -143,6 +151,7 @@ class Fixture {
     cleanupTimeout: cleanup,
     maxResponseBytes: max,
     journal: journal,
+    guardedStore: guardedStore,
   );
   Future<void> close() async {
     await changes.close();
@@ -179,10 +188,13 @@ WorkspaceInventoryUpdateRequest update() => WorkspaceInventoryUpdateRequest(
 );
 WorkspaceInventoryStockRequest stock({
   StockDirection direction = StockDirection.stockOut,
+  String key = 'stock-request-0001',
+  String itemId = 'item',
+  int version = 1,
 }) => WorkspaceInventoryStockRequest(
-  idempotencyKey: 'stock-request-0001',
-  itemId: 'item',
-  expectedVersion: 1,
+  idempotencyKey: key,
+  itemId: itemId,
+  expectedVersion: version,
   direction: direction,
   quantity: 2,
   reason: ' Sale ',
@@ -620,6 +632,341 @@ void main() {
         1,
       );
       expect(f.changes.hasListener, false);
+    },
+  );
+
+  test(
+    'guarded Staff Stock Out holds a fresh key and refreshed version until the original receipt is observed',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      f.current = snapshot(
+        workspace(uid: 'staff', generation: 7),
+        uid: 'staff',
+      );
+      final engine = journal_test.FakeTransactionalJournalEngine();
+      final store = journal_test.store(engine);
+
+      final original = stock();
+      final envelope = {
+        ...original.toCallableData(),
+        'expectedCafeId': 'cafe',
+        'expectedMembershipGeneration': 7,
+      };
+      var quantity = 5;
+      var version = 1;
+      var receiptVisible = false;
+      final movements = <String, Map<String, Object>>{};
+      f.client = FakeClient((request) async {
+        final body = jsonDecode((request as http.Request).body);
+        if (request.url.path == '/inventory/reconcile') {
+          expect(body, {'operation': 'adjust-stock', 'request': envelope});
+          if (!receiptVisible) return response({'state': 'unknown'});
+          return response({
+            'state': 'committed',
+            'result': movements[original.idempotencyKey],
+          });
+        }
+        expect(request.url.path, '/inventory/adjust-stock');
+        expect(body['direction'], 'out');
+        expect(body['expectedVersion'], version);
+        quantity -= body['quantity'] as int;
+        version++;
+        final result = {
+          ...acknowledgement('adjust-stock'),
+          'resultingQuantity': quantity,
+          'version': version,
+        };
+        movements[body['idempotencyKey'] as String] = result;
+        if (body['idempotencyKey'] == original.idempotencyKey) {
+          expect(body, envelope);
+          throw http.ClientException('synthetic acknowledgement lost');
+        }
+        return response(result);
+      });
+
+      final originating = f.adapter(guardedStore: store);
+      expect(originating.isGuarded, true);
+      await expectLater(originating.adjustStock(original), throwsA(failure()));
+      expect(quantity, 3);
+      expect(version, 2);
+      expect(movements.keys, [original.idempotencyKey]);
+      final before = Map.of(engine.values);
+      final originalRecord = (await originating.pendingInventory()).single;
+      expect(originalRecord.state, 'unknown');
+      expect(originalRecord.stableKey, original.idempotencyKey);
+      expect(originalRecord.request, envelope);
+
+      // Recreate the adapter with the same storage and a freshly verified session.
+      f.current!.workspace.invalidate();
+      f.current = snapshot(
+        workspace(uid: 'staff', generation: 7),
+        uid: 'staff',
+        revision: 2,
+      );
+      final recreated = f.adapter(guardedStore: journal_test.store(engine));
+      final pending = (await recreated.pendingInventory()).single;
+      expect(pending.toJson(), originalRecord.toJson());
+      final replacement = stock(key: 'fresh-stock-request', version: version);
+      await expectLater(
+        recreated.adjustStock(replacement),
+        throwsA(failure(code: 'inventory-operation-pending')),
+      );
+      expect(f.client.requests.map((r) => r.url.path), [
+        '/inventory/adjust-stock',
+      ]);
+      expect(movements.keys, [original.idempotencyKey]);
+      expect(engine.values, before);
+
+      expect((await recreated.reconcile(pending)).committed, false);
+      expect(engine.values, before);
+      expect(
+        (await recreated.pendingInventory()).single.toJson(),
+        pending.toJson(),
+      );
+      receiptVisible = true;
+      final observed = await recreated.reconcile(pending);
+      expect(observed.committed, true);
+      expect(observed.result, movements[original.idempotencyKey]);
+      expect(await recreated.pendingInventory(), isEmpty);
+      final settled = await store.mutations.read(pending.storageKey) as Map;
+      expect(settled['state'], 'acknowledged');
+      expect(settled['request'], envelope);
+      expect(settled['payloadDigest'], pending.payloadDigest);
+      expect(f.client.requests.map((r) => r.url.path), [
+        '/inventory/adjust-stock',
+        '/inventory/reconcile',
+        '/inventory/reconcile',
+      ]);
+      expect(movements.keys, [original.idempotencyKey]);
+
+      final next = stock(key: 'explicit-stock-next', version: version);
+      final result = await recreated.adjustStock(next);
+      expect(result.version, 3);
+      expect(result.resultingQuantity, 1);
+      expect(movements.keys, [original.idempotencyKey, next.idempotencyKey]);
+      expect(f.client.requests.last.url.path, '/inventory/adjust-stock');
+    },
+  );
+
+  test('guarded mutation paths share the item hold after rejoin', () async {
+    final f = Fixture()
+      ..status = 503
+      ..body = {'error': 'unavailable'};
+    addTearDown(f.close);
+    final engine = journal_test.FakeTransactionalJournalEngine();
+    final store = journal_test.store(engine);
+    final first = f.adapter(guardedStore: store);
+    await expectLater(first.adjustStock(stock()), throwsA(failure()));
+    final pending = (await first.pendingInventory()).single;
+    final before = Map.of(engine.values);
+
+    f.current!.workspace.invalidate();
+    f.current = snapshot(workspace(uid: 'staff'), uid: 'staff', revision: 2);
+    expect(await f.adapter(guardedStore: store).pendingInventory(), isEmpty);
+    f.current = snapshot(workspace(cafe: 'other'), revision: 3);
+    expect(await f.adapter(guardedStore: store).pendingInventory(), isEmpty);
+    f.current = snapshot(workspace(generation: 1), revision: 4);
+    final rejoined = f.adapter(guardedStore: store);
+    expect(await rejoined.pendingInventory(), isEmpty);
+    await expectLater(
+      rejoined.reconcile(pending),
+      throwsA(
+        isA<InventoryHttpsFailure>().having(
+          (error) => error.code,
+          'code',
+          'session-changed',
+        ),
+      ),
+    );
+    for (final overlapping in [
+      stock(
+        key: 'stock-request-0002',
+        version: 2,
+        direction: StockDirection.stockIn,
+      ),
+      update(),
+      lifecycle(),
+      lifecycle(action: InventoryLifecycleAction.restore),
+    ]) {
+      await expectLater(
+        invoke(rejoined, overlapping),
+        throwsA(failure(code: 'inventory-operation-pending')),
+      );
+    }
+    expect(f.client.requests, hasLength(1));
+    expect(engine.values, before);
+
+    f.status = 200;
+    f.body = {...acknowledgement('adjust-stock'), 'itemId': 'other-item'};
+    final result = await rejoined.adjustStock(
+      stock(key: 'other-stock-request', itemId: 'other-item'),
+    );
+    expect(result.adjusted, true);
+    expect(f.client.requests, hasLength(2));
+    expect(await store.mutations.read(pending.storageKey), pending.toJson());
+  });
+
+  for (final awayAndBack in [false, true]) {
+    test(
+      'guarded discovery rejects session changes during a read (away and back: $awayAndBack)',
+      () async {
+        final f = Fixture()
+          ..status = 503
+          ..body = {'error': 'unavailable'};
+        addTearDown(f.close);
+        final engine = journal_test.FakeTransactionalJournalEngine();
+        final store = journal_test.store(engine);
+        final first = f.adapter(guardedStore: store);
+        await expectLater(first.adjustStock(stock()), throwsA(failure()));
+        final original = (await first.pendingInventory()).single;
+        final initialSession = f.current;
+        final entered = Completer<void>(), release = Completer<void>();
+        final holding = engine.transaction((_) async {
+          entered.complete();
+          await release.future;
+        });
+        await entered.future;
+        final discovery = expectLater(
+          first.pendingInventory(),
+          throwsA(
+            isA<InventoryHttpsFailure>().having(
+              (error) => error.code,
+              'code',
+              'session-changed',
+            ),
+          ),
+        );
+        if (awayAndBack) {
+          f.current = null;
+          f.changes.add(null);
+          f.current = initialSession;
+        } else {
+          f.current = snapshot(workspace(), revision: 2);
+        }
+        f.changes.add(f.current);
+        release.complete();
+        await holding;
+        await discovery;
+        final replacement = f.adapter(guardedStore: store);
+        expect(
+          (await replacement.pendingInventory()).single.toJson(),
+          original.toJson(),
+        );
+        expect(f.client.requests, hasLength(1));
+      },
+    );
+  }
+
+  for (final fault in ['scan', 'commit']) {
+    test(
+      'guarded mutation fails closed before sending after a storage $fault failure',
+      () async {
+        final f = Fixture();
+        addTearDown(f.close);
+        final engine = journal_test.FakeTransactionalJournalEngine()
+          ..failScan = fault == 'scan'
+          ..failCommit = fault == 'commit';
+        final adapter = f.adapter(guardedStore: journal_test.store(engine));
+        await expectLater(adapter.adjustStock(stock()), throwsA(failure()));
+        expect(f.client.requests, isEmpty);
+        expect(engine.values, isEmpty);
+        expect(engine.commits, 0);
+      },
+    );
+  }
+
+  test(
+    'guarded observation fails closed with unavailable credentials',
+    () async {
+      final f = Fixture()
+        ..status = 503
+        ..body = {'error': 'unavailable'};
+      addTearDown(f.close);
+      final engine = journal_test.FakeTransactionalJournalEngine();
+      final store = journal_test.store(engine);
+      final first = f.adapter(guardedStore: store);
+      await expectLater(first.adjustStock(stock()), throwsA(failure()));
+      final pending = (await first.pendingInventory()).single;
+      final before = Map.of(engine.values);
+
+      f.token = (_) async => null;
+      final withoutCredentials = f.adapter(guardedStore: store);
+      await expectLater(
+        withoutCredentials.reconcile(pending),
+        throwsA(
+          isA<InventoryHttpsFailure>().having(
+            (error) => error.code,
+            'code',
+            'unauthenticated',
+          ),
+        ),
+      );
+      await expectLater(
+        withoutCredentials.adjustStock(stock(key: 'new-stock-request')),
+        throwsA(failure(unknown: false, code: 'unauthenticated')),
+      );
+      expect(f.client.requests, hasLength(1));
+      expect(engine.values, before);
+    },
+  );
+
+  test(
+    'competing guarded observations cannot revise the same receipt twice',
+    () async {
+      final f = Fixture()
+        ..status = 503
+        ..body = {'error': 'unavailable'};
+      addTearDown(f.close);
+      final engine = journal_test.FakeTransactionalJournalEngine();
+      final store = journal_test.store(engine);
+      final first = f.adapter(guardedStore: store);
+      await expectLater(first.adjustStock(stock()), throwsA(failure()));
+      final pending = (await first.pendingInventory()).single;
+      final waiting = Completer<void>(), release = Completer<void>();
+      var observations = 0;
+      final client = f.client = FakeClient((request) async {
+        expect(request.url.path, '/inventory/reconcile');
+        expect(
+          jsonDecode((request as http.Request).body),
+          pending.observationEnvelope,
+        );
+        if (++observations == 2) waiting.complete();
+        await release.future;
+        return response({
+          'state': 'committed',
+          'result': acknowledgement('adjust-stock'),
+        });
+      });
+
+      Future<Object> observe() async {
+        try {
+          return await f.adapter(guardedStore: store).reconcile(pending);
+        } on InventoryHttpsFailure catch (error) {
+          return error;
+        }
+      }
+
+      final outcomes = Future.wait([observe(), observe()]);
+      try {
+        await waiting.future.timeout(const Duration(seconds: 2));
+      } finally {
+        release.complete();
+      }
+      final results = await outcomes;
+      expect(
+        results.whereType<MutationReceiptObservation>().single.committed,
+        true,
+      );
+      expect(
+        results.whereType<InventoryHttpsFailure>().single.outcomeUnknown,
+        true,
+      );
+      expect(client.requests, hasLength(2));
+      final settled = await store.mutations.read(pending.storageKey) as Map;
+      expect(settled['revision'], pending.revision + 1);
+      expect(settled['state'], 'acknowledged');
+      expect(engine.commits, 4);
     },
   );
 

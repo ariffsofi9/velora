@@ -95,6 +95,48 @@ test('public endpoint binding rejects another host before dispatch', async () =>
   assert.equal(response.status, 404); assert.equal(f.calls(), 0);
 });
 
+test('Fetch ingress passes only route headers, the original stream and the cancellation signal', async () => {
+  const inbound = new Request(publicOrigin + routes[0], {method: 'POST', body: '{}', headers: {
+    host: 'BACKEND.INVALID:443', authorization: 'Bearer synthetic', 'content-type': 'application/json',
+    'x-forwarded-for': '192.0.2.1', 'x-real-ip': '192.0.2.2', 'cf-connecting-ip': '192.0.2.3',
+    forwarded: 'proto=http;host=other.invalid', 'x-forwarded-host': 'other.invalid',
+    'x-forwarded-proto': 'http', 'x-client-uid': 'other-user', 'x-role': 'owner',
+  }});
+  const f = setup({handler: async accepted => {
+    assert.equal(accepted.url, inbound.url);
+    assert.equal(accepted.body, inbound.body);
+    assert.equal(accepted.signal, inbound.signal);
+    assert.deepEqual([...accepted.headers], [
+      ['authorization', 'Bearer synthetic'], ['content-type', 'application/json'],
+    ]);
+    return Response.json({ok: true});
+  }});
+  assert.equal((await f.policy(inbound)).status, 200);
+});
+
+test('ambiguous authority and connection-nominated security headers never reach the handler', async () => {
+  const f = setup();
+  for (const headers of [{host: 'other.invalid'}, {host: 'backend.invalid, backend.invalid'},
+    {host: 'backend.invalid:444'}, {connection: 'keep-alive, Authorization'}]) {
+    const response = await f.policy(request({headers}));
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {error: 'invalid-argument'});
+  }
+  assert.equal(f.calls(), 0);
+});
+
+test('a canceled POST does not consume a dispatch slot', async () => {
+  const f = setup({maxConcurrent: 1});
+  const controller = new AbortController();
+  controller.abort();
+  const canceled = new Request(publicOrigin + routes[0], {method: 'POST', signal: controller.signal});
+  const response = await f.policy(canceled);
+  assert.equal(response.status, 408);
+  assert.deepEqual(await response.json(), {error: 'deadline-exceeded'});
+  assert.equal(f.calls(), 0);
+  assert.equal((await f.policy(request())).status, 200);
+});
+
 test('admission has no queue; preflight bypasses occupancy and capacity releases only on completion', async () => {
   let release, entered;
   const gate = new Promise(resolve => { release = resolve; }), started = new Promise(resolve => { entered = resolve; });

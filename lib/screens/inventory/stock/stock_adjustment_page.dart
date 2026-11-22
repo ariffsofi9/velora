@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_tokens.dart';
 import '../../../models/inventory_item.dart';
 import '../../../repositories/workspace_inventory_repository.dart';
+import '../../../services/workspace_inventory_https_transport.dart'
+    show InventoryHttpsStockException;
 import '../../../services/workspace_inventory_stock_service.dart';
 import '../../../services/workspace_session.dart';
 
@@ -126,7 +128,6 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   final quantityController = TextEditingController();
   final reasonController = TextEditingController();
   late InventoryItem item;
-  late final WorkspaceInventoryStockAdjuster adjuster;
   bool touched = false, saving = false, refreshing = false;
   bool needsReload = false, completed = false;
   String? fingerprint, idempotencyKey;
@@ -163,14 +164,6 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
     super.initState();
     _boundPolicy = _policy;
     item = widget.item;
-    if (_allowed) {
-      adjuster =
-          widget.adjuster ??
-          FirebaseWorkspaceInventoryStockAdjuster(
-            pilotPolicy: _policy,
-            session: widget.workspaceSession,
-          );
-    }
   }
 
   @override
@@ -187,7 +180,8 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   }
 
   Future<void> submit() async {
-    if (!mounted || !_current) return;
+    final adjuster = widget.adjuster;
+    if (!_current || adjuster == null) return;
     setState(() => touched = true);
     if (!verified) return message('A verified workspace item is required.');
     if (saving || needsReload || completed || quantityError != null) return;
@@ -229,14 +223,22 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
       Navigator.pop(context, true);
     } on WorkspaceInventoryStockException catch (error) {
       if (!mounted || !_current) return;
+      final outcomeUnknown =
+          error is InventoryHttpsStockException && error.outcomeUnknown;
       final reload =
-          error.failure == WorkspaceInventoryStockFailure.stale ||
-          error.failure == WorkspaceInventoryStockFailure.insufficientStock;
+          !outcomeUnknown &&
+          (error.failure == WorkspaceInventoryStockFailure.stale ||
+              error.failure ==
+                  WorkspaceInventoryStockFailure.insufficientStock);
       setState(() {
         saving = false;
         needsReload = reload;
       });
-      message(failureMessage(error.failure));
+      message(
+        outcomeUnknown
+            ? 'Could not confirm the result. Review the original stock adjustment before submitting another.'
+            : failureMessage(error.failure),
+      );
     } catch (_) {
       if (!mounted || !_current) return;
       setState(() => saving = false);
@@ -375,11 +377,19 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
                   ),
                 ),
                 const SizedBox(height: 20),
+                if (widget.adjuster == null) ...[
+                  const Text('Stock adjustment is unavailable.'),
+                  const SizedBox(height: 8),
+                ],
                 SizedBox(
                   height: 52,
                   child: ElevatedButton(
                     key: const ValueKey('stock-confirm-button'),
-                    onPressed: saving || needsReload || completed
+                    onPressed:
+                        widget.adjuster == null ||
+                            saving ||
+                            needsReload ||
+                            completed
                         ? null
                         : submit,
                     child: saving

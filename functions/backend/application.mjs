@@ -1,4 +1,4 @@
-import {BackendError, requireTestProject} from './backend-errors.mjs';
+import {BackendError, requireBackendProject} from './backend-errors.mjs';
 import {createGoogleHttp} from './google-http.mjs';
 import {createGoogleOAuth} from './google-oauth.mjs';
 import {createFirebaseAccounts, createFirebaseIdentity} from './firebase-identity.mjs';
@@ -20,30 +20,42 @@ const menuRoutes = ['/menu/create', '/menu/get', '/menu/list', '/menu/update', '
 const aiRoutes = ['/ai/issue', '/ai/generate'];
 const recipeRoutes = ['/recipes/save', '/recipes/list', '/recipes/get', '/recipes/lifecycle', '/recipes/reconcile'];
 
-// Unwired TEST-only composition. No listener, defaults for network/credentials,
-// SDK initialization, environment discovery or import of src/index.js.
-export function createApplication({projectId, publicOrigin, allowedOrigins, transport, credential,
-  accessToken: injectedAccessToken,
-  now = Date.now, maxConcurrent = 8, httpTimeoutMs = 5000, identityTimeoutMs = 5000,
+// TEST uses injected offline dependencies. REAL requires a trusted Worker
+// capability. No listener, credential discovery or Functions SDK.
+export function createApplication({projectId, publicOrigin, allowedOrigins, enableLocalFrontend, transport, credential,
+  accessToken: injectedAccessToken, realWorker, createRealAccessToken,
+  now = Date.now, maxConcurrent = 8, admission, httpTimeoutMs = 5000, identityTimeoutMs = 5000,
   verificationTimeoutMs = 5000, bodyTimeoutMs = 5000, cleanupTimeoutMs = 100,
   transactionTimeoutMs = 20000, rpcTimeoutMs = 5000, maxResponseBytes = 262144,
   workspaceIdFactory, allowInvitationRejoin = false, enableSavedRecipes = false, ai} = {}) {
-  requireTestProject(projectId);
+  requireBackendProject(projectId, realWorker);
   if (typeof enableSavedRecipes !== 'boolean') throw new BackendError('configuration', 'invalid-configuration');
   const hasCredential = credential !== undefined;
   const hasProvider = injectedAccessToken !== undefined;
-  if (typeof now !== 'function' || hasCredential === hasProvider ||
+  const invalidCredentials = realWorker
+    ? hasCredential || hasProvider || typeof createRealAccessToken !== 'function' || admission !== realWorker.admission ||
+      allowInvitationRejoin || enableSavedRecipes || ai !== undefined
+    : createRealAccessToken !== undefined || hasCredential === hasProvider ||
       (hasCredential && credential?.projectId !== projectId) ||
-      (hasProvider && (typeof injectedAccessToken !== 'function' || injectedAccessToken.projectId !== projectId))) {
+      (hasProvider && (typeof injectedAccessToken !== 'function' || injectedAccessToken.projectId !== projectId));
+  if (typeof now !== 'function' || invalidCredentials) {
     throw new BackendError('configuration', 'invalid-configuration');
   }
-  const http = createGoogleHttp({projectId, transport, timeoutMs: httpTimeoutMs, cleanupTimeoutMs, maxBytes: maxResponseBytes});
-  const accessToken = hasProvider ? injectedAccessToken :
-    createGoogleOAuth({projectId, http, email: credential.email, sign: credential.sign, now, timeoutMs: identityTimeoutMs});
-  const getAccount = createFirebaseAccounts({projectId, http, accessToken, timeoutMs: identityTimeoutMs});
-  const verifyIdentity = createFirebaseIdentity({projectId, http, getAccount, now, timeoutMs: identityTimeoutMs});
-  const store = createFirestoreStore({projectId, http, accessToken, now, timeoutMs: transactionTimeoutMs,
-    rpcTimeoutMs, cleanupTimeoutMs});
+  const http = createGoogleHttp({projectId, realWorker, transport, timeoutMs: httpTimeoutMs,
+    cleanupTimeoutMs, maxBytes: maxResponseBytes});
+  function bindGoogle(attempts) {
+    const accessToken = realWorker
+      ? createRealAccessToken({projectId, realWorker, acquire: realWorker.acquire, now, timeoutMs: identityTimeoutMs})
+      : (hasProvider ? injectedAccessToken : createGoogleOAuth({projectId, http, email: credential.email,
+        sign: credential.sign, now, timeoutMs: identityTimeoutMs}));
+    const getAccount = createFirebaseAccounts({projectId, realWorker, http, accessToken, timeoutMs: identityTimeoutMs});
+    const verifyIdentity = createFirebaseIdentity({projectId, realWorker, http, getAccount, now, timeoutMs: identityTimeoutMs});
+    const store = createFirestoreStore({projectId, realWorker, http, accessToken, now, timeoutMs: transactionTimeoutMs,
+      rpcTimeoutMs, cleanupTimeoutMs, ...(attempts === undefined ? {} : {attempts})});
+    return {accessToken, getAccount, verifyIdentity, store};
+  }
+  const google = bindGoogle();
+  const {accessToken, getAccount, verifyIdentity, store} = google;
   if (typeof allowInvitationRejoin !== 'boolean') throw new BackendError('configuration', 'invalid-configuration');
   // Explicit offline-test opt-in only; no environment/client selector. No email
   // lookup provider is constructed or invoked by the default composition.
@@ -73,6 +85,13 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
   if (aiOptions) createAiHttp({...common, ...aiOptions, verifyIdentity, store});
 
   const handler = async request => {
+    const path = new URL(request.url).pathname;
+    // Keep pending REAL credential and certificate I/O in the request that
+    // started it. The outer concurrent admission policy remains shared.
+    // Two snapshots may each retry once and still leave room for rollback
+    // and fresh account checks within the Workers Free subrequest budget.
+    const {getAccount, verifyIdentity, store} = realWorker
+      ? bindGoogle(path === '/staff/list' ? 2 : undefined) : google;
     // Each request retains its own verified token/identity. No shared mutable
     // actor context can bleed across concurrent Owner/Staff requests.
     let capturedToken, capturedIdentity;
@@ -84,14 +103,15 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
     // Preserve the trusted verifier binding for the token-based Saved Recipes domain.
     Object.assign(capture, {projectId});
     const scopedStore = Object.freeze({...store, runTransaction: async callback => {
+      if (request.signal?.aborted) throw new BackendError('request', 'unavailable');
       if (!capturedToken || !capturedIdentity) throw new BackendError('identity', 'unauthenticated');
       // Body reading can outlast identity freshness. Reuse the real verifier
       // before transaction dispatch, outside retryable canonical callbacks.
       const current = await verifyIdentity(capturedToken);
+      if (request.signal?.aborted) throw new BackendError('request', 'unavailable');
       if (current.uid !== capturedIdentity.uid) throw new BackendError('identity', 'unauthenticated');
       return store.runTransaction(callback);
     }});
-    const path = new URL(request.url).pathname;
     const operation = inventoryRoutes.includes(path)
       ? createInventoryHttp({...common, verifyIdentity: capture, store: scopedStore,
         timestamp: store.timestamp, toTimestamp: store.toTimestamp, deleteValue: store.deleteValue})
@@ -112,7 +132,7 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, tran
     // canonical admission policies. Callable disabled flags remain untouched.
     return operation(request);
   };
-  const fetch = createHttpPolicy({projectId, publicOrigin, allowedOrigins, maxConcurrent,
+  const fetch = createHttpPolicy({projectId, realWorker, publicOrigin, allowedOrigins, enableLocalFrontend, maxConcurrent, admission,
     routes: [...inventoryRoutes, ...invitationRoutes, ...workspaceRoutes, ...staffRoutes, ...menuRoutes,
       ...(aiOptions ? aiRoutes : []), ...(enableSavedRecipes ? recipeRoutes : [])], handler});
   return Object.freeze({projectId, fetch});

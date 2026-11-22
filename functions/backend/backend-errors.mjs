@@ -15,6 +15,29 @@ export function requireTestProject(projectId) {
   return projectId;
 }
 
+export const REAL_PROJECT_ID = 'velora-73222';
+const realWorkerAccess = new WeakSet();
+
+// Minted only by trusted Worker composition. A project ID or a caller-provided
+// object with the same fields cannot open the REAL adapter path.
+export function createRealWorkerAccess({projectId, acquire, admission} = {}) {
+  if (projectId !== REAL_PROJECT_ID || typeof acquire !== 'function' || acquire.projectId !== projectId ||
+      admission?.projectId !== projectId || typeof admission.acquire !== 'function') {
+    throw new BackendError('configuration', 'invalid-configuration');
+  }
+  const access = Object.freeze({projectId, acquire, admission});
+  realWorkerAccess.add(access);
+  return access;
+}
+
+export function requireBackendProject(projectId, realWorker) {
+  if (realWorker === undefined) return requireTestProject(projectId);
+  if (projectId !== REAL_PROJECT_ID || !realWorkerAccess.has(realWorker)) {
+    throw new BackendError('configuration', 'invalid-configuration');
+  }
+  return projectId;
+}
+
 // Also bounds injected work that ignores cancellation. Late completions cannot
 // resume the caller. No retries and no dependency exception retention.
 export async function bounded(action, timeoutMs, kind, code = 'unavailable') {

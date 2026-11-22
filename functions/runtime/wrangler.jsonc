@@ -1,0 +1,43 @@
+{
+  "name": "velora-admission-review",
+  "main": "worker-entry.mjs",
+  "compatibility_date": "2026-06-11",
+  "compatibility_flags": ["nodejs_compat", "enable_request_signal"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AdmissionCoordinator"] }],
+  "env": {
+    "test": {
+      "name": "velora-admission-test",
+      "vars": {
+        "VELORA_ENVIRONMENT": "test",
+        "VELORA_FIREBASE_PROJECT": "velora-spark-test",
+        "VELORA_PUBLIC_ORIGIN": "https://velora-test.invalid",
+        "ADMISSION_PROJECT_LIMIT": "8",
+        "ADMISSION_PRE_AUTH_LIMIT": "2",
+        "ADMISSION_UID_LIMIT": "2"
+      },
+      "durable_objects": { "bindings": [{ "name": "ADMISSION", "class_name": "AdmissionCoordinator" }] }
+    },
+    "real": {
+      "name": "rest-api",
+      "workers_dev": true,
+      "preview_urls": false,
+      "vars": {
+        "VELORA_ENVIRONMENT": "real",
+        "VELORA_FIREBASE_PROJECT": "velora-73222",
+        "VELORA_PUBLIC_ORIGIN": "https://rest-api.velora-smart-inventory.workers.dev",
+        "VELORA_ENABLE_LOCAL_FRONTEND": "true",
+        "ADMISSION_PROJECT_LIMIT": "8",
+        "ADMISSION_PRE_AUTH_LIMIT": "2",
+        "ADMISSION_UID_LIMIT": "2"
+      },
+      "services": [{
+        "binding": "VELORA_GOOGLE_TOKEN_SOURCE",
+        "service": "velora-google-token-source-real",
+        "entrypoint": "GoogleTokenSource"
+      }],
+      "durable_objects": { "bindings": [{ "name": "ADMISSION", "class_name": "AdmissionCoordinator" }] }
+    }
+  }
+}

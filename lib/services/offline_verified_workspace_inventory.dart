@@ -6,6 +6,7 @@ import 'package:http/testing.dart';
 
 import 'android_pilot_policy.dart';
 import 'mutation_recovery_service.dart';
+import 'platform_journal_store.dart';
 import 'workspace_inventory_firebase_token_provider.dart';
 import 'workspace_inventory_https_transport.dart';
 import 'workspace_session.dart';
@@ -37,6 +38,7 @@ final class OfflineVerifiedWorkspaceInventory {
     required AndroidPilotPolicy policy,
     required Future<http.Response> Function(http.Request) respond,
     MutationRecoveryJournal? journal,
+    PlatformJournalStore? guardedStore,
     DateTime Function()? now,
   }) : _auth = auth,
        _projectId = projectId,
@@ -59,6 +61,7 @@ final class OfflineVerifiedWorkspaceInventory {
         sessionChanges: _changes.stream,
         idToken: provider.call,
         journal: journal,
+        guardedStore: guardedStore,
       );
     };
     transport = _createTransport(_currentSession);

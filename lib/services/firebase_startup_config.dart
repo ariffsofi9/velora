@@ -1,6 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show appFlavor;
+import 'package:flutter/widgets.dart';
 import '../firebase_options.dart';
 import '../firebase_spark_test_options.dart';
 import 'android_pilot_policy.dart';
@@ -9,6 +9,45 @@ class FirebaseConfigurationException extends StateError {
   FirebaseConfigurationException(super.message);
   @override
   String toString() => 'Local Firebase configuration error: $message';
+}
+
+/// The options admitted at startup, shared by every route in this app.
+class FirebaseStartupProfile extends InheritedWidget {
+  final FirebaseOptions options;
+
+  const FirebaseStartupProfile({
+    super.key,
+    required this.options,
+    required super.child,
+  });
+
+  static FirebaseOptions? read(BuildContext context) =>
+      context.getInheritedWidgetOfExactType<FirebaseStartupProfile>()?.options;
+
+  static void validateActiveApp(
+    FirebaseOptions expected,
+    FirebaseOptions actual,
+  ) {
+    final mismatches = [
+      if (expected.projectId != actual.projectId) 'projectId',
+      if (expected.appId != actual.appId) 'appId',
+      if (expected.apiKey != actual.apiKey) 'apiKey',
+      if (expected.messagingSenderId != actual.messagingSenderId)
+        'messagingSenderId',
+      if (expected.authDomain != actual.authDomain) 'authDomain',
+      if (expected.storageBucket != actual.storageBucket) 'storageBucket',
+    ];
+    if (mismatches.isNotEmpty) {
+      throw FirebaseConfigurationException(
+        'The initialized Firebase app differs from the selected profile in '
+        '${mismatches.join(', ')}. Fully stop and relaunch the app.',
+      );
+    }
+  }
+
+  @override
+  bool updateShouldNotify(FirebaseStartupProfile oldWidget) =>
+      options != oldWidget.options;
 }
 
 /// Pure selection/validation. Never initializes Firebase or reads native defaults.
@@ -21,7 +60,7 @@ class FirebaseStartupConfig {
       ai1Live;
   final bool emulatorFlagPresent;
   final String host;
-  final String cloudProject;
+  final String? cloudProject;
   final bool stagingFlagPresent;
   const FirebaseStartupConfig({
     this.staging = false,
@@ -32,11 +71,13 @@ class FirebaseStartupConfig {
     this.ai1Live = false,
     this.emulatorFlagPresent = false,
     this.host = 'localhost',
-    this.cloudProject = '',
+    this.cloudProject,
     this.stagingFlagPresent = false,
   });
   static const current = FirebaseStartupConfig(
-    cloudProject: String.fromEnvironment('VELORA_FIREBASE_PROJECT'),
+    cloudProject: bool.hasEnvironment('VELORA_FIREBASE_PROJECT')
+        ? String.fromEnvironment('VELORA_FIREBASE_PROJECT')
+        : null,
     stagingFlagPresent: bool.hasEnvironment('VELORA_STAGING'),
     staging: bool.fromEnvironment('VELORA_STAGING'),
     emulators: bool.fromEnvironment('USE_FIREBASE_EMULATORS'),
@@ -79,20 +120,29 @@ class FirebaseStartupConfig {
         );
       }
     }
-    if (cloudProject == SparkTestFirebaseOptions.projectId) {
+    final conflictsWithCloud =
+        stagingFlagPresent ||
+        staging ||
+        emulatorFlagPresent ||
+        emulators ||
+        staffDemo ||
+        ai1Mock ||
+        recipeConnectivity ||
+        ai1Live ||
+        host != 'localhost';
+    // Only the app's validated normal startup can default to REAL. Legacy
+    // callers without a startup policy still need an explicit profile.
+    final project =
+        cloudProject ??
+        (pilotPolicy?.state == AndroidPilotState.normal && !conflictsWithCloud
+            ? AndroidPilotPolicy.approvedProject
+            : null);
+    if (project == SparkTestFirebaseOptions.projectId) {
       // Separate Web-only acceptance target. Native Android remains blocked
       // until its project registration/Google Services identity is reviewed.
       final options = sparkTestWebOptions;
       if (!isWeb ||
-          stagingFlagPresent ||
-          staging ||
-          emulatorFlagPresent ||
-          emulators ||
-          staffDemo ||
-          ai1Mock ||
-          recipeConnectivity ||
-          ai1Live ||
-          host != 'localhost' ||
+          conflictsWithCloud ||
           options == null ||
           options.projectId != SparkTestFirebaseOptions.projectId ||
           !RegExp(r'^[0-9]+$').hasMatch(options.messagingSenderId) ||
@@ -117,21 +167,13 @@ class FirebaseStartupConfig {
       }
       return options;
     }
-    if (cloudProject.isNotEmpty) {
-      if (cloudProject != 'velora-73222' ||
+    if (project != null) {
+      if (project != AndroidPilotPolicy.approvedProject ||
           (!isWeb && platform != TargetPlatform.android) ||
           (!isWeb && androidFlavor != null) ||
-          stagingFlagPresent ||
-          staging ||
-          emulatorFlagPresent ||
-          emulators ||
-          staffDemo ||
-          ai1Mock ||
-          recipeConnectivity ||
-          ai1Live ||
-          host != 'localhost') {
+          conflictsWithCloud) {
         _fail(
-          'Explicit cloud profile requires Web or unflavored Android, velora-73222, and no staging/emulator/demo/AI defines.',
+          'REAL Firebase requires Web or unflavored Android, velora-73222, and no staging/emulator/demo/AI defines.',
         );
       }
       if (isWeb) {
@@ -168,7 +210,7 @@ class FirebaseStartupConfig {
     // Retired profile flags are rejected rather than rerouted to cloud.
     if (staging || stagingFlagPresent) {
       _fail(
-        'Staging is retired. Select VELORA_FIREBASE_PROJECT=velora-73222 explicitly.',
+        'Staging is retired. Remove the staging profile to use REAL Firebase.',
       );
     }
     if (!isWeb && platform == TargetPlatform.android && androidFlavor != null) {
@@ -177,7 +219,7 @@ class FirebaseStartupConfig {
     if (ai1Live) _fail('Live AI is not approved or configured.');
     if (!emulators) {
       _fail(
-        'Select VELORA_FIREBASE_PROJECT=velora-73222 explicitly or an explicit emulator profile. No default cloud project is allowed.',
+        'Firebase selection requires a supported startup profile without conflicting settings.',
       );
     }
     final count = [
@@ -192,7 +234,7 @@ class FirebaseStartupConfig {
     if (host != 'localhost' && host != '127.0.0.1') {
       _fail('Emulator targets must remain loopback.');
     }
-    final project = ai1Mock
+    final emulatorProject = ai1Mock
         ? 'demo-velora-ai1'
         : staffDemo
         ? 'demo-velora-staff'
@@ -203,8 +245,8 @@ class FirebaseStartupConfig {
       apiKey: 'demo-only',
       appId: '1:1234567890:web:demo',
       messagingSenderId: '1234567890',
-      projectId: project,
-      authDomain: '$project.firebaseapp.com',
+      projectId: emulatorProject,
+      authDomain: '$emulatorProject.firebaseapp.com',
     );
   }
 }

@@ -144,10 +144,12 @@ for (const explicit of [false, true]) {
 for (const defect of ['none', 'mismatched-candidate', 'partial-candidate', 'staff-caller']) {
   test(`team generation enforcement includes roster candidates: ${defect}`, async () => {
     const f = fixture(7);
+    for (const uid of ['owner', 'staff']) f.docs.set(`users/${uid}`, {username: uid, email: `${uid}@example.test`,
+      photoUrl: '', role: 'owner', createdAt: new Date(0), updatedAt: new Date(0)});
     if (defect === 'mismatched-candidate') f.docs.get('cafes/a/members/staff').membershipGeneration = 8;
     if (defect === 'partial-candidate') delete f.docs.get('cafes/a/members/staff').membershipGeneration;
     const store = {runTransaction: fn => fn({get: async path => f.docs.get(path) ?? null,
-      members: async () => ['owner', 'staff'].map(uid => ({id: uid, data: f.docs.get(`cafes/a/members/${uid}`)}))})};
+      members: async () => [{id: 'staff', data: f.docs.get('cafes/a/members/staff')}]})};
     const result = await listTeamMembers({store, auth: auth(defect === 'staff-caller' ? 'staff' : 'owner'), data: {},
       accounts: async uids => uids.map(uid => ({uid, email: `${uid}@example.test`, emailVerified: true, disabled: false}))});
     assert.deepEqual(result.members.map(m => m.uid),

@@ -8,6 +8,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../../../services/workspace_inventory_create_service.dart';
+import '../../../services/workspace_inventory_https_transport.dart'
+    show InventoryHttpsCreateException;
 import '../../../services/workspace_session.dart';
 
 import 'widgets_add/add_item_date_box.dart';
@@ -75,8 +77,6 @@ class _AddItemPageState extends State<AddItemPage> {
   String? _submissionFingerprint;
   String? _idempotencyKey;
 
-  late final WorkspaceInventoryCreator _creator;
-
   final categories = ['Meat', 'Dairy', 'Vegetable', 'Fruit', 'Bakery', 'Other'];
   final units = ['kg', 'g', 'L', 'ml', 'pcs'];
 
@@ -86,14 +86,6 @@ class _AddItemPageState extends State<AddItemPage> {
   void initState() {
     super.initState();
     _boundPolicy = _policy;
-    if (_allowed) {
-      _creator =
-          widget.creator ??
-          FirebaseWorkspaceInventoryCreator(
-            pilotPolicy: _policy,
-            session: widget.workspaceSession,
-          );
-    }
   }
 
   @override
@@ -126,6 +118,11 @@ class _AddItemPageState extends State<AddItemPage> {
       return;
     }
     if (isSaving) return;
+    final creator = widget.creator;
+    if (creator == null) {
+      _showMessage('Secure inventory updates are unavailable.');
+      return;
+    }
 
     final quantityText = quantityController.text.trim();
     final quantity = int.tryParse(quantityText);
@@ -165,7 +162,7 @@ class _AddItemPageState extends State<AddItemPage> {
 
     setState(() => isSaving = true);
     try {
-      await _creator.createItem(request);
+      await creator.createItem(request);
       if (!mounted || !_current) return;
       setState(() => isSaving = false);
       _showMessage('${request.name} added successfully');
@@ -173,7 +170,11 @@ class _AddItemPageState extends State<AddItemPage> {
     } on WorkspaceInventoryCreateException catch (error) {
       if (!mounted || !_current) return;
       setState(() => isSaving = false);
-      _showMessage(_failureMessage(error.failure));
+      _showMessage(
+        error is InventoryHttpsCreateException && error.outcomeUnknown
+            ? 'Item creation could not be confirmed. Check your connection and inventory before another submission.'
+            : _failureMessage(error.failure),
+      );
     } catch (_) {
       if (!mounted || !_current) return;
       setState(() => isSaving = false);

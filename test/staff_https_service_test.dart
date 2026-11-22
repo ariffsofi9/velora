@@ -209,23 +209,19 @@ void main() {
   }
 
   test(
-    'full 100-member Unicode roster fits the bounded response budget',
+    'full first Unicode roster page fits the bounded response budget',
     () async {
       final f = _Fixture();
       final rows = List.generate(
-        100,
+        21,
         (i) => <String, Object>{
           ...member(i == 0 ? 'owner' : 'staff-$i'),
           'name': '名' * 80,
           'email': '${'文' * 240}@example.test',
         },
       );
-      expect(
-        utf8.encode(jsonEncode(roster(rows: rows))).length,
-        greaterThan(65536),
-      );
       f.client.handle = (_) async => response(roster(rows: rows));
-      expect((await f.service.load(context(f.w))).members, hasLength(100));
+      expect((await f.service.load(context(f.w))).members, hasLength(21));
       expect(f.client.calls, hasLength(1));
     },
   );
@@ -374,7 +370,7 @@ void main() {
     {},
     {'cafeId': 'other', 'viewerRole': 'owner', 'members': []},
     {...roster(), 'viewerRole': 'staff'},
-    {...roster(), 'nextCursor': 'invented'},
+    {...roster(), 'nextCursor': 'bad/cursor'},
     roster(rows: [member('owner'), member('owner')]),
     roster(rows: [member('other', role: 'owner')]),
     roster(
@@ -392,7 +388,7 @@ void main() {
         {...member('staff'), 'name': 'bad\nname'},
       ],
     ),
-    roster(rows: List.generate(101, (i) => member('staff-$i'))),
+    roster(rows: List.generate(21, (i) => member('staff-$i'))),
   ]) {
     test('strict roster rejects malformed/foreign data: $bad', () async {
       final f = _Fixture();
@@ -406,6 +402,20 @@ void main() {
     f.client.handle = (_) async =>
         response(roster(role: 'staff', rows: [member('other')]));
     await expectLater(f.call(false), throwsA(failure()));
+  });
+  test('roster continuation sends only the server cursor', () async {
+    final f = _Fixture();
+    f.client.handle = (_) async =>
+        response({...roster(), 'nextCursor': 'page_two'});
+    final first = await f.service.load(context(f.w));
+    expect(first.nextCursor, 'page_two');
+    f.client.handle = (_) async => response(roster(rows: [member('staff-2')]));
+    final next = await f.service.loadPage(context(f.w), first.nextCursor!);
+    expect(next.members.single.uid, 'staff-2');
+    expect(next.nextCursor, isNull);
+    expect(jsonDecode((f.client.calls.last as http.Request).body), {
+      'cursor': 'page_two',
+    });
   });
   for (final patch in [
     {'cafeId': 'other'},

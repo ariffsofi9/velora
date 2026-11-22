@@ -1,0 +1,7 @@
+{
+  "name": "velora-google-token-source-real",
+  "main": "google-token-source.mjs",
+  "compatibility_date": "2026-06-11",
+  "workers_dev": false,
+  "preview_urls": false
+}

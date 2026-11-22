@@ -7,6 +7,8 @@ import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/models/inventory_item.dart';
 import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/inventory/stock/stock_adjustment_page.dart';
+import 'package:velora/services/workspace_inventory_https_transport.dart'
+    show InventoryHttpsFailure, InventoryHttpsStockException;
 import 'package:velora/services/workspace_inventory_stock_service.dart';
 import 'package:velora/services/workspace_session.dart';
 
@@ -104,6 +106,40 @@ Future<void> dismissFeedback(WidgetTester tester) async {
 }
 
 void main() {
+  for (final type in StockAdjustmentType.values) {
+    testWidgets('${type.name} requires an explicitly injected adjuster', (
+      tester,
+    ) async {
+      var keys = 0;
+      await tester.pumpWidget(
+        app(
+          StockAdjustmentPage(
+            item: item(),
+            type: type,
+            workspaceSession: session,
+            idempotencyKeyFactory: () {
+              keys++;
+              return 'missing-adjuster-key';
+            },
+          ),
+        ),
+      );
+      final confirm = find.byKey(const ValueKey('stock-confirm-button'));
+      await tester.enterText(
+        find.byKey(const ValueKey('stock-quantity-field')),
+        '2',
+      );
+      await tester.ensureVisible(confirm);
+      await tester.pump();
+      expect(find.text('Stock adjustment is unavailable.'), findsOneWidget);
+      expect(tester.widget<ElevatedButton>(confirm).onPressed, isNull);
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(keys, 0);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('validates limit and previews exact-zero stock out', (
     tester,
   ) async {
@@ -168,12 +204,57 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('stock-confirm-button')));
     expect(adjuster.requests, hasLength(1));
-    expect(adjuster.requests.single.expectedVersion, 1);
+    expect(adjuster.requests.single.toCallableData(), {
+      'idempotencyKey': 'fixed-stock-key-001',
+      'itemId': 'milk',
+      'direction': 'in',
+      'quantity': 2,
+      'expectedVersion': 1,
+    });
     pending.complete(success);
     await tester.pumpAndSettle();
   });
 
-  testWidgets('default runtime key generation reaches callable safely', (
+  testWidgets('stock out sends the direction and snapshot to the adjuster', (
+    tester,
+  ) async {
+    final adjuster = _Adjuster([
+      const WorkspaceInventoryStockResult(
+        itemId: 'milk',
+        direction: StockDirection.stockOut,
+        quantity: 4,
+        resultingQuantity: 0,
+        version: 8,
+        adjusted: true,
+      ),
+    ]);
+    await tester.pumpWidget(
+      app(
+        StockOutPage(
+          item: item(version: 7),
+          workspaceSession: session,
+          adjuster: adjuster,
+          idempotencyKeyFactory: () => 'fixed-stock-out-key',
+        ),
+      ),
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('stock-reason-field')),
+      '  Used in service  ',
+    );
+    await submit(tester, '4');
+    await tester.pumpAndSettle();
+    expect(adjuster.requests.single.toCallableData(), {
+      'idempotencyKey': 'fixed-stock-out-key',
+      'itemId': 'milk',
+      'direction': 'out',
+      'quantity': 4,
+      'expectedVersion': 7,
+      'reason': 'Used in service',
+    });
+  });
+
+  testWidgets('default runtime key generation reaches the injected adjuster', (
     tester,
   ) async {
     final adjuster = _Adjuster([success]);
@@ -273,6 +354,62 @@ void main() {
     expect(changed.idempotencyKey, isNot(retry.idempotencyKey));
     expect(changed.quantity, 3);
     expect(changed.fingerprint, isNot(retry.fingerprint));
+  });
+
+  testWidgets('typed unknown result is distinct from credential rejection', (
+    tester,
+  ) async {
+    final adjuster = _Adjuster([
+      InventoryHttpsStockException(
+        WorkspaceInventoryStockFailure.unauthenticated,
+        const InventoryHttpsFailure('unauthenticated', outcomeUnknown: false),
+      ),
+      InventoryHttpsStockException(
+        WorkspaceInventoryStockFailure.unavailable,
+        const InventoryHttpsFailure('unavailable', outcomeUnknown: true),
+      ),
+      success,
+    ]);
+    var keys = 0;
+    await tester.pumpWidget(
+      app(
+        StockInPage(
+          item: item(),
+          workspaceSession: session,
+          adjuster: adjuster,
+          idempotencyKeyFactory: () => 'stock-outcome-key-${++keys}',
+        ),
+      ),
+    );
+    await submit(tester, '2');
+    await tester.pumpAndSettle();
+    expect(find.text('Please log in again.'), findsOneWidget);
+    expect(adjuster.requests, hasLength(1));
+    await dismissFeedback(tester);
+
+    await submit(tester, '2');
+    await tester.pumpAndSettle();
+    expect(
+      find.text(
+        'Could not confirm the result. Review the original stock adjustment before submitting another.',
+      ),
+      findsOneWidget,
+    );
+    expect(adjuster.requests, hasLength(2));
+    expect(
+      find.byKey(const ValueKey('reload-latest-stock-item')),
+      findsNothing,
+    );
+    await dismissFeedback(tester);
+
+    await submit(tester, '2');
+    await tester.pumpAndSettle();
+    expect(adjuster.requests, hasLength(3));
+    expect(
+      adjuster.requests.map((request) => request.idempotencyKey),
+      everyElement('stock-outcome-key-1'),
+    );
+    expect(keys, 1);
   });
 
   testWidgets('stale result requires explicit scoped reload', (tester) async {

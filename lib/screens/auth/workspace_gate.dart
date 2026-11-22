@@ -425,6 +425,17 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
     return false;
   }
 
+  Future<void> _retry() async {
+    if (_routing || _resolving) return;
+    final previous = _session;
+    if (previous != null && !previous.isCurrent) {
+      _session = null;
+      _verification = null;
+      unawaited(previous.close());
+    }
+    await _resolve();
+  }
+
   Future<void> _logout() async {
     final pilot = _pilot;
     if (_routing) return;
@@ -592,7 +603,7 @@ class _WorkspaceGateState extends State<WorkspaceGate> {
                         height: 48,
                         child: FilledButton.icon(
                           key: const ValueKey('workspace-retry'),
-                          onPressed: _resolve,
+                          onPressed: _retry,
                           icon: const Icon(Icons.refresh_rounded),
                           label: const Text('Try Again'),
                         ),

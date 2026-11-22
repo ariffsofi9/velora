@@ -1,4 +1,4 @@
-import {BackendError, requireTestProject, validBudget} from './backend-errors.mjs';
+import {BackendError, requireBackendProject, validBudget} from './backend-errors.mjs';
 import {firestoreCafeSegment} from './google-http.mjs';
 import {decode, encodeWrite, parseTimestamp, record, timestamp, toTimestamp, deleteValue} from './firestore-codec.mjs';
 
@@ -30,10 +30,10 @@ async function wait(action, ms, expired) {
 
 // Factories only: no SDK initialization, network default, recovery route or auth
 // policy. Canonical callbacks own authority; native transactions enforce atomicity.
-export function createFirestoreStore({projectId, databaseId = '(default)', http, accessToken,
+export function createFirestoreStore({projectId, realWorker, databaseId = '(default)', http, accessToken,
   attempts = 3, timeoutMs = 20000, rpcTimeoutMs = 5000, cleanupTimeoutMs = 100,
   now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), random = Math.random} = {}) {
-  requireTestProject(projectId);
+  requireBackendProject(projectId, realWorker);
   if (databaseId !== '(default)' || typeof http !== 'function' || http.projectId !== projectId ||
       typeof accessToken !== 'function' || accessToken.projectId !== projectId ||
       !Number.isInteger(attempts) || attempts < 1 || attempts > 3 ||
@@ -200,18 +200,25 @@ export function createFirestoreStore({projectId, databaseId = '(default)', http,
         async function query(cafeId, collectionId, limit, input) {
           return read(async () => {
             const segment = firestoreCafeSegment(cafeId);
+            const invitations = collectionId === 'workspace_invitations';
             if (!Number.isInteger(limit) || limit < 1 || limit > 101) invalid('invalid-query');
             const saved = collectionId === 'saved_recipes';
             const archived = saved ? (input.mode === 'all' ? null : input.mode === 'archived')
               : input && !input.includeArchived ? false : null;
             const cursor = saved ? input.afterId : input?.cursor ?? null;
-            const prefix = `${name(`cafes/${cafeId}`)}/${collectionId}/`;
+            const prefix = invitations ? `${root}/${collectionId}/` :
+              `${name(`cafes/${cafeId}`)}/${collectionId}/`;
             const structuredQuery = {from: [{collectionId}], orderBy: [{field: {fieldPath: '__name__'}, direction: 'ASCENDING'}], limit};
+            if (input?.staffOnly) structuredQuery.where = {fieldFilter: {
+              field: {fieldPath: 'role'}, op: 'EQUAL', value: {stringValue: 'staff'}}};
             if (archived !== null) structuredQuery.where = {fieldFilter: {
               field: {fieldPath: 'isArchived'}, op: 'EQUAL', value: {booleanValue: archived}}};
+            if (invitations) structuredQuery.where = {fieldFilter: {
+              field: {fieldPath: 'cafeId'}, op: 'EQUAL', value: {stringValue: cafeId}}};
             if (cursor !== null) structuredQuery.startAt = {
               values: [{referenceValue: prefix + cursor}], before: false};
-            const rows = await rpc('runQuery', {transaction, structuredQuery}, `${endpoint}/cafes/${segment}:runQuery`);
+            const rows = await rpc('runQuery', {transaction, structuredQuery},
+              invitations ? `${endpoint}:runQuery` : `${endpoint}/cafes/${segment}:runQuery`);
             if (!Array.isArray(rows) || rows.length > limit + 2) invalid('invalid-response');
             const result = [], seen = new Set();
             for (const row of rows) {
@@ -228,7 +235,8 @@ export function createFirestoreStore({projectId, databaseId = '(default)', http,
               if (!validId(id) || (saved && !recipeId(id)) || seen.has(id) ||
                   (result.length && Buffer.compare(Buffer.from(result.at(-1).id), Buffer.from(id)) >= 0)) invalid('invalid-response');
               const data = document(row.document, full);
-              if ((archived !== null && data.isArchived !== archived) ||
+              if ((invitations && (data.cafeId !== cafeId || !/^[a-f0-9]{32}$/.test(id))) ||
+                  (input?.staffOnly && data.role !== 'staff') || (archived !== null && data.isArchived !== archived) ||
                   (cursor !== null && Buffer.compare(Buffer.from(id), Buffer.from(cursor)) <= 0)) invalid('invalid-response');
               result.push({id, data}); seen.add(id);
             }
@@ -236,30 +244,41 @@ export function createFirestoreStore({projectId, databaseId = '(default)', http,
             return result;
           });
         }
-        const tx = Object.freeze({
-          get: path => read(async () => {
-            const full = name(path), rows = await rpc('batchGet', {documents: [full], transaction});
-            if (!Array.isArray(rows) || rows.length < 1 || rows.length > 2) invalid('invalid-response');
-            let found = false, result;
+        function getDocuments(paths, single = false) {
+          return read(async () => {
+            if (!Array.isArray(paths) || !paths.length || paths.length > 100) invalid('invalid-path');
+            const documents = Array.from(paths, name), pending = new Set(documents);
+            if (pending.size !== documents.length) invalid('invalid-path');
+            const rows = await rpc('batchGet', {documents, transaction});
+            if (!Array.isArray(rows) || rows.length < documents.length || rows.length > documents.length + 1) invalid('invalid-response');
+            const values = new Map();
             for (const row of rows) {
               if (!ownKeys(row, ['found', 'missing', 'transaction', 'readTime'])) invalid('invalid-response');
               metadata(row);
               const hit = Object.hasOwn(row, 'found') || Object.hasOwn(row, 'missing');
               if (!hit) { if (row.transaction === undefined && row.readTime === undefined) invalid('invalid-response'); continue; }
-              if (found || (Object.hasOwn(row, 'found') && Object.hasOwn(row, 'missing'))) invalid('invalid-response');
-              found = true;
-              if (Object.hasOwn(row, 'missing')) { if (row.missing !== full) invalid('invalid-response'); result = null; }
-              else result = document(row.found, full);
+              const missing = Object.hasOwn(row, 'missing');
+              if (missing && Object.hasOwn(row, 'found')) invalid('invalid-response');
+              const full = missing ? row.missing : row.found?.name;
+              if (!pending.delete(full)) invalid('invalid-response');
+              values.set(full, missing ? null : document(row.found, full));
             }
-            if (!found) invalid('invalid-response');
-            return result;
-          }),
+            if (pending.size) invalid('invalid-response');
+            return single ? values.get(documents[0]) : documents.map(full => values.get(full));
+          });
+        }
+        const tx = Object.freeze({
+          get: path => getDocuments([path], true),
+          getMany: paths => getDocuments(paths),
           create: (path, data) => stage(path, 'create', data),
           update: (path, data) => stage(path, 'update', data),
           set: (path, data) => stage(path, 'set', data),
           // Existence is required: no silent deletion of an already absent doc.
           delete: path => stage(path, 'delete'),
-          members: (cafeId, limit) => query(cafeId, 'members', limit),
+          members: (cafeId, limit, cursor) => query(cafeId, 'members', limit,
+            cursor === undefined ? undefined : {staffOnly: true, cursor, includeArchived: true}),
+          ...(realWorker ? {invitations: (cafeId, cursor) =>
+            query(cafeId, 'workspace_invitations', 21, {includeArchived: true, cursor})} : {}),
           inventory: (cafeId, limit) => query(cafeId, 'inventory', limit),
           menuItems: (cafeId, input) => {
             if (!ownKeys(input, ['includeArchived', 'limit', 'cursor']) ||

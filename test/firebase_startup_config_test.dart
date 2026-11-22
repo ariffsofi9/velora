@@ -539,15 +539,113 @@ void main() {
       );
     },
   );
+  group('normal app startup defaults to validated REAL options', () {
+    AndroidPilotPolicy normalPolicy(bool isWeb) => AndroidPilotPolicy.parse(
+      {},
+      isWeb: isWeb,
+      platform: TargetPlatform.android,
+    );
+
+    for (final isWeb in [true, false]) {
+      final approved = isWeb
+          ? DefaultFirebaseOptions.web
+          : DefaultFirebaseOptions.android;
+      test(
+        'missing project selects REAL on ${isWeb ? 'Web' : 'Android'}',
+        () async {
+          final initialized = <FirebaseOptions>[];
+          await app.initializeVeloraFirebase(
+            policy: normalPolicy(isWeb),
+            configuration: const FirebaseStartupConfig(),
+            isWeb: isWeb,
+            platform: TargetPlatform.android,
+            initialize: (options) async => initialized.add(options),
+          );
+          expect(initialized, [same(approved)]);
+        },
+      );
+
+      test(
+        'invalid profiles cannot initialize ${isWeb ? 'Web' : 'Android'}',
+        () async {
+          for (final config in [
+            const FirebaseStartupConfig(cloudProject: ''),
+            const FirebaseStartupConfig(cloudProject: 'unknown'),
+            const FirebaseStartupConfig(stagingFlagPresent: true),
+            const FirebaseStartupConfig(emulatorFlagPresent: true),
+            const FirebaseStartupConfig(staffDemo: true),
+            const FirebaseStartupConfig(ai1Live: true),
+          ]) {
+            await expectLater(
+              app.initializeVeloraFirebase(
+                policy: normalPolicy(isWeb),
+                configuration: config,
+                isWeb: isWeb,
+                platform: TargetPlatform.android,
+                initialize: (_) async =>
+                    fail('Invalid profile reached Firebase initialization'),
+              ),
+              throwsA(isA<FirebaseConfigurationException>()),
+            );
+          }
+        },
+      );
+    }
+
+    test('implicit REAL still validates the platform options', () {
+      const config = FirebaseStartupConfig();
+      expect(
+        () => config.resolve(
+          isWeb: true,
+          platform: TargetPlatform.android,
+          pilotPolicy: normalPolicy(true),
+          webOptions: null,
+        ),
+        throwsStateError,
+      );
+      expect(
+        () => config.resolve(
+          isWeb: false,
+          platform: TargetPlatform.android,
+          pilotPolicy: normalPolicy(false),
+          cloudOptions: DefaultFirebaseOptions.web,
+        ),
+        throwsStateError,
+      );
+    });
+
+    test(
+      'build configuration distinguishes absent and empty project defines',
+      () {
+        const supplied = bool.hasEnvironment('VELORA_FIREBASE_PROJECT');
+        const value = String.fromEnvironment('VELORA_FIREBASE_PROJECT');
+        const current = FirebaseStartupConfig.current;
+        expect(current.cloudProject, supplied ? value : isNull);
+        if (supplied && value.isEmpty) {
+          expect(
+            () => current.resolve(
+              isWeb: true,
+              platform: TargetPlatform.android,
+              pilotPolicy: normalPolicy(true),
+            ),
+            throwsStateError,
+          );
+        }
+      },
+    );
+
+    test(
+      'legacy resolver calls without a policy still require an explicit profile',
+      () {
+        expect(() => resolve(const FirebaseStartupConfig()), throwsStateError);
+      },
+    );
+  });
   const staging = FirebaseStartupConfig(staging: true);
-  test(
-    'default launch is rejected instead of selecting protected Firebase options',
-    () {
-      expect(() => resolve(const FirebaseStartupConfig()), throwsStateError);
-      expect(StagingFirebaseOptions.web, isNull);
-      expect(StagingFirebaseOptions.android, isNull);
-    },
-  );
+  test('retired staging options remain unconfigured', () {
+    expect(StagingFirebaseOptions.web, isNull);
+    expect(StagingFirebaseOptions.android, isNull);
+  });
   test(
     'staging requires real registered configuration; current scaffold is empty',
     () {
@@ -783,7 +881,7 @@ void main() {
   test('legacy protected input cannot become a startup fallback', () {
     final protected = options(project: 'velora-73222');
     final current = FirebaseStartupConfig.current;
-    if (current.cloudProject.isNotEmpty) {
+    if (current.cloudProject != null) {
       // Cloud profiles are tested through the pure resolver above, never main.
       return;
     }
@@ -835,7 +933,7 @@ void main() {
     },
   );
   testWidgets(
-    'unconfigured main renders a local error without initializing Firebase/plugins',
+    'unsupported native main renders a local error before Firebase initialization',
     (tester) async {
       await app.main();
       await tester.pump();
@@ -845,10 +943,7 @@ void main() {
       );
       expect(tester.takeException(), isNull);
     },
-    skip:
-        FirebaseStartupConfig.current.cloudProject.isNotEmpty ||
-        FirebaseStartupConfig.current.emulators ||
-        FirebaseStartupConfig.current.staging ||
-        FirebaseStartupConfig.current.ai1Live,
+    variant: const TargetPlatformVariant({TargetPlatform.iOS}),
+    skip: FirebaseStartupConfig.current.emulators,
   );
 }

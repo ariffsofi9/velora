@@ -1,5 +1,5 @@
 import {X509Certificate, webcrypto} from 'node:crypto';
-import {BackendError, bounded, requireTestProject, validBudget} from './backend-errors.mjs';
+import {BackendError, bounded, requireBackendProject, validBudget} from './backend-errors.mjs';
 import {CERTIFICATE_URL} from './google-http.mjs';
 
 const uidShape = value => typeof value === 'string' && value.length >= 1 && value.length <= 128 &&
@@ -15,16 +15,17 @@ const clock = now => {
   return time;
 };
 
-// Internal trusted account lookup only, with no public route or positive cache.
-// Batch/email enumeration remains unavailable in this foundation.
-export function createFirebaseAccounts({projectId, http, accessToken, timeoutMs = 5000} = {}) {
-  requireTestProject(projectId);
+// Internal lookup by explicit UIDs only, with no public route or positive cache.
+export function createFirebaseAccounts({projectId, realWorker, http, accessToken, timeoutMs = 5000} = {}) {
+  requireBackendProject(projectId, realWorker);
   if (typeof http !== 'function' || http.projectId !== projectId ||
       typeof accessToken !== 'function' || accessToken.projectId !== projectId || !validBudget(timeoutMs)) {
     throw new BackendError('configuration', 'invalid-configuration');
   }
-  const getAccount = async uid => {
-    if (!uidShape(uid)) fail('account');
+  const lookup = async (uids, roster) => {
+    if (!Array.isArray(uids) || !uids.length || uids.length > 100 ||
+        Array.from(uids).some(uid => !uidShape(uid)) || new Set(uids).size !== uids.length) fail('account');
+    const requested = new Set(uids);
     let active = true;
     try {
       return await bounded(async () => {
@@ -33,22 +34,27 @@ export function createFirebaseAccounts({projectId, http, accessToken, timeoutMs 
             !/^[A-Za-z0-9._~+/-]{1,8192}={0,2}$/.test(token)) throw Error();
         const r = await http(`https://identitytoolkit.googleapis.com/v1/projects/${projectId}/accounts:lookup`, {
           method: 'POST', headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json'},
-          body: JSON.stringify({localId: [uid]})});
-        const users = r.data?.users;
-        if (!active || r.status !== 200 || !Array.isArray(users) || users.length !== 1) throw Error();
-        const u = users[0];
-        if (!object(u) || u.localId !== uid ||
-            (u.disabled !== undefined && typeof u.disabled !== 'boolean') || u.disabled === true ||
-            u.emailVerified !== true || !emailShape(u.email) ||
-            typeof u.validSince !== 'string' || !/^(?:0|[1-9]\d{0,11})$/.test(u.validSince) ||
-            !Number.isSafeInteger(Number(u.validSince)) || Number(u.validSince) > 253402300799) throw Error();
-        return Object.freeze({uid, disabled: false, emailVerified: true, email: u.email,
-          tokensValidAfterTime: new Date(Number(u.validSince) * 1000).toISOString()});
+          body: JSON.stringify({localId: [...requested]})});
+        const users = roster && r.data?.users === undefined ? [] : r.data?.users;
+        if (!active || r.status !== 200 || !Array.isArray(users) || users.length > requested.size ||
+            (!roster && users.length !== requested.size)) throw Error();
+        return users.flatMap(u => {
+          if (!object(u) || !requested.delete(u.localId) ||
+              (u.disabled !== undefined && typeof u.disabled !== 'boolean')) throw Error();
+          const eligible = u.disabled !== true && u.emailVerified === true && emailShape(u.email);
+          if (roster && !eligible) return [];
+          if (!eligible ||
+              typeof u.validSince !== 'string' || !/^(?:0|[1-9]\d{0,11})$/.test(u.validSince) ||
+              !Number.isSafeInteger(Number(u.validSince)) || Number(u.validSince) > 253402300799) throw Error();
+          return [Object.freeze({uid: u.localId, disabled: false, emailVerified: true, email: u.email,
+            tokensValidAfterTime: new Date(Number(u.validSince) * 1000).toISOString()})];
+        });
       }, timeoutMs, 'account');
     } catch { fail('account'); }
     finally { active = false; }
   };
-  return Object.freeze(Object.assign(getAccount, {projectId}));
+  const getAccount = async uid => (await lookup([uid], false))[0];
+  return Object.freeze(Object.assign(getAccount, {projectId, getMany: uids => lookup(uids, true)}));
 }
 
 function decode(value, maxBytes) {
@@ -98,9 +104,9 @@ async function certificate(pem, time) {
   return {key, from, until};
 }
 
-export function createFirebaseIdentity({projectId, http, getAccount, now = Date.now,
+export function createFirebaseIdentity({projectId, realWorker, http, getAccount, now = Date.now,
   timeoutMs = 5000} = {}) {
-  requireTestProject(projectId);
+  requireBackendProject(projectId, realWorker);
   if (typeof http !== 'function' || http.projectId !== projectId ||
       typeof getAccount !== 'function' || getAccount.projectId !== projectId ||
       typeof now !== 'function' || !validBudget(timeoutMs)) {

@@ -441,14 +441,19 @@ test('parent-scoped members/inventory queries preserve 101-row overflow evidence
   assert.ok(f.fake.calls.filter(call => call.method === 'runQuery').every(call => call.url.includes('/cafes/cafe%20one:runQuery')));
 });
 
-test('canonical roster retains 101-row overflow rejection before account enrichment', async () => {
+test('canonical roster reads only 21 Firestore Staff candidates per snapshot with 101 present', async () => {
   const records = seed();
-  for (let i = 0; i < 101; i++) records[`cafes/cafe/members/x${i}`] = {uid: `x${i}`};
+  for (let i = 0; i < 101; i++) records[`cafes/cafe/members/x${i}`] = {uid: `x${i}`, role: 'staff'};
   const f = fixture(records);
-  await assert.rejects(team.listTeamMembers({auth: {uid: 'owner'}, data: {}, store: f.store,
-    accounts: () => { throw Error('account enrichment must not run'); }}),
-  error => error instanceof team.TeamMembersError && error.code === 'resource-exhausted');
-  assert.equal(commits(f).length, 0);
+  const result = await team.listTeamMembers({auth: {uid: 'owner', token: {email_verified: true}}, data: {}, store: f.store,
+    accounts: async uids => {
+      assert.deepEqual(uids, ['owner', 'staff']);
+      return [{uid: 'owner', emailVerified: true, disabled: false}];
+    }});
+  assert.ok(result.nextCursor);
+  assert.deepEqual(result.members, []);
+  const queries = f.fake.calls.filter(call => call.method === 'runQuery');
+  assert.deepEqual(queries.map(call => call.body.structuredQuery.limit), [21, 21]);
 });
 
 test('canonical menu list validates even the look-ahead document through the shared store', async () => {

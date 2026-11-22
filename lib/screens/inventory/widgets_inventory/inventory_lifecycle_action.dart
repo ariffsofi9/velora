@@ -8,6 +8,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 import '../../../models/inventory_item.dart';
+import '../../../services/workspace_inventory_https_transport.dart'
+    show InventoryHttpsLifecycleException;
 import '../../../services/workspace_inventory_lifecycle_service.dart';
 
 class InventoryLifecycleActionButton extends StatefulWidget {
@@ -84,7 +86,8 @@ class _InventoryLifecycleActionButtonState
 
   Future<void> _submit() async {
     if (!mounted || !_current) return;
-    if (_loading || _confirming) return;
+    final manager = widget.manager;
+    if (manager == null || _loading || _confirming) return;
     _confirming = true;
     final archived = widget.item.isArchived;
     final action = archived
@@ -117,12 +120,6 @@ class _InventoryLifecycleActionButtonState
     if (confirmed != true || !_current) return;
     setState(() => _loading = true);
     try {
-      final manager =
-          widget.manager ??
-          FirebaseWorkspaceInventoryLifecycleManager(
-            pilotPolicy: _policy,
-            session: widget.workspaceSession,
-          );
       _key ??= _newKey();
       await manager.setLifecycle(
         WorkspaceInventoryLifecycleRequest(
@@ -136,18 +133,21 @@ class _InventoryLifecycleActionButtonState
       widget.onChanged();
     } on WorkspaceInventoryLifecycleException catch (error) {
       if (!mounted || !_current) return;
-      final message = switch (error.failure) {
-        WorkspaceInventoryLifecycleFailure.stale =>
-          'This item changed. Return to the list and try again.',
-        WorkspaceInventoryLifecycleFailure.permissionDenied ||
-        WorkspaceInventoryLifecycleFailure.unauthenticated =>
-          'You no longer have permission to change this item.',
-        WorkspaceInventoryLifecycleFailure.notFound =>
-          'This inventory item is no longer available.',
-        WorkspaceInventoryLifecycleFailure.conflict =>
-          'This request conflicts with an earlier action.',
-        _ => 'Unable to update this item. Try again.',
-      };
+      final message =
+          error is InventoryHttpsLifecycleException && error.outcomeUnknown
+          ? 'The inventory change could not be confirmed. Check inventory before another submission.'
+          : switch (error.failure) {
+              WorkspaceInventoryLifecycleFailure.stale =>
+                'This item changed. Return to the list and try again.',
+              WorkspaceInventoryLifecycleFailure.permissionDenied ||
+              WorkspaceInventoryLifecycleFailure.unauthenticated =>
+                'You no longer have permission to change this item.',
+              WorkspaceInventoryLifecycleFailure.notFound =>
+                'This inventory item is no longer available.',
+              WorkspaceInventoryLifecycleFailure.conflict =>
+                'This request conflicts with an earlier action.',
+              _ => 'Unable to update this item. Try again.',
+            };
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
@@ -161,6 +161,8 @@ class _InventoryLifecycleActionButtonState
       ? const Text(
           'Inventory changes are unavailable under the Android pilot policy.',
         )
+      : widget.manager == null
+      ? const Text('Secure inventory updates are unavailable.')
       : OutlinedButton.icon(
           key: ValueKey(
             widget.item.isArchived ? 'restore-item' : 'archive-item',

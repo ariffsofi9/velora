@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 
@@ -33,15 +36,30 @@ Future<void> main() async {
     platform: defaultTargetPlatform,
     androidFlavor: appFlavor,
   );
+  const configuration = FirebaseStartupConfig.current;
+  late final FirebaseOptions startupOptions;
   try {
     await initializeVeloraFirebase(
       policy: policy,
-      configuration: FirebaseStartupConfig.current,
+      configuration: configuration,
       isWeb: kIsWeb,
       platform: defaultTargetPlatform,
       androidFlavor: appFlavor,
       initialize: (options) async {
-        await Firebase.initializeApp(options: options);
+        if (kIsWeb &&
+            options.projectId == AndroidPilotPolicy.approvedProject &&
+            configuration.cloudProject == null &&
+            !_isLocalWebDebugOrigin(Uri.base)) {
+          throw FirebaseConfigurationException(
+            'Launch REAL Firebase with '
+            '--dart-define=VELORA_FIREBASE_PROJECT=velora-73222.',
+          );
+        }
+        final app = await Firebase.initializeApp(options: options);
+        if (kIsWeb) {
+          FirebaseStartupProfile.validateActiveApp(options, app.options);
+        }
+        startupOptions = options;
       },
     );
   } on FirebaseConfigurationException catch (error) {
@@ -64,13 +82,22 @@ Future<void> main() async {
     await LocalNotificationService.init();
   }
   runApp(
-    VeloraApp(
-      pilot: policy.isRestricted
-          ? AndroidPilotAuthDependencies(policy: policy)
-          : null,
+    FirebaseStartupProfile(
+      options: startupOptions,
+      child: VeloraApp(
+        pilot: policy.isRestricted
+            ? AndroidPilotAuthDependencies(policy: policy)
+            : null,
+      ),
     ),
   );
 }
+
+bool _isLocalWebDebugOrigin(Uri uri) =>
+    kDebugMode &&
+    uri.scheme == 'http' &&
+    uri.userInfo.isEmpty &&
+    const {'localhost', '127.0.0.1', '::1'}.contains(uri.host);
 
 /// Startup admission shared with offline tests. Resolves/validates before the
 /// initializer can run; tests supply a synthetic callback, never Firebase.
@@ -137,8 +164,49 @@ class VeloraApp extends StatelessWidget {
               builder: (_) => const PilotAccessBlockedPage(),
             ),
     );
-    return pilot == null
-        ? app
-        : AndroidPilotAuthScope(dependencies: pilot!, child: app);
+    if (pilot != null) {
+      return AndroidPilotAuthScope(dependencies: pilot!, child: app);
+    }
+    if (kIsWeb &&
+        Firebase.apps.isNotEmpty &&
+        Firebase.app().options.projectId ==
+            AndroidPilotPolicy.approvedProject) {
+      return _RealWebAuthListener(child: app);
+    }
+    return app;
   }
+}
+
+class _RealWebAuthListener extends StatefulWidget {
+  final Widget child;
+  const _RealWebAuthListener({required this.child});
+
+  @override
+  State<_RealWebAuthListener> createState() => _RealWebAuthListenerState();
+}
+
+class _RealWebAuthListenerState extends State<_RealWebAuthListener> {
+  late final StreamSubscription<User?> _subscription;
+
+  @override
+  void initState() {
+    super.initState();
+    // Keep FlutterFire's shared Web listener connected across route changes.
+    // Reconnecting it can replay the initial user after a route's own snapshot.
+    _subscription = FirebaseAuth.instance.authStateChanges().listen(
+      (_) {},
+      onError: (Object _) {
+        // The route's own verification listener handles Auth failures.
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    unawaited(_subscription.cancel());
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }

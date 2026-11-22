@@ -149,7 +149,7 @@ class _SignUpPageState extends State<SignUpPage> {
   Widget build(BuildContext context) => !_canRegister
       ? const PilotAccessBlockedPage()
       : AuthLayout(
-          title: 'Create an Account',
+          title: 'Create an Owner Account',
           subtitle: "Let's get started with Velora.",
           onBack: isLoading
               ? null

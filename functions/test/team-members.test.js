@@ -3,6 +3,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {listTeamMembers} = require('../src/team-members');
 
+const verifiedAuth = uid => ({uid, token: {email_verified: true}});
+
 function fixture() {
   const docs = new Map();
   const users = new Map();
@@ -12,11 +14,14 @@ function fixture() {
     docs.set(`cafes/${cafeId}/members/${uid}`, {...link,role});
     if (role === 'owner') docs.set(`cafes/${cafeId}`, {ownerUid:uid,status:'active',schemaVersion:1});
     users.set(uid, {uid,email:`${uid}@example.test`,displayName:uid,emailVerified:true,disabled:false});
+    docs.set(`users/${uid}`, {username: uid, email: `${uid}@example.test`, role: 'owner', photoUrl: '',
+      createdAt: new Date(0), updatedAt: new Date(0)});
   }
-  const store = {runTransaction: fn => fn({get: async p => docs.get(p), members: async (id, limit) =>
-    [...docs].filter(([p]) => p.startsWith(`cafes/${id}/members/`)).slice(0,limit)
-      .map(([p,data])=>({id:p.split('/').at(-1),data}))})};
-  const args = {auth:{uid:'owner'},data:{},store,accounts:async ids=>ids.map(id=>users.get(id)).filter(Boolean)};
+  const store = {runTransaction: fn => fn({get: async p => docs.get(p), members: async (id, limit, after) =>
+    [...docs].filter(([p, data]) => p.startsWith(`cafes/${id}/members/`) && data.role === 'staff')
+      .map(([p,data])=>({id:p.split('/').at(-1),data})).filter(row => !after || row.id > after)
+      .sort((a, b) => Buffer.compare(Buffer.from(a.id), Buffer.from(b.id))).slice(0,limit)})};
+  const args = {auth:verifiedAuth('owner'),data:{},store,accounts:async ids=>ids.map(id=>users.get(id)).filter(Boolean)};
   return {docs,users,args};
 }
 test('owner lists all verified same-cafe members and only public display fields',async()=>{
@@ -25,9 +30,59 @@ test('owner lists all verified same-cafe members and only public display fields'
   assert.deepEqual(Object.keys(result.members[0]).sort(),['email','name','role','uid']);
 });
 test('staff visibility preserves existing Rules: owner and self only',async()=>{
-  const f=fixture();const result=await listTeamMembers({...f.args,auth:{uid:'staff'}});
+  const f=fixture();const result=await listTeamMembers({...f.args,auth:verifiedAuth('staff')});
   assert.deepEqual(result.members.map(m=>m.uid),['owner','staff']);
 });
+
+for (const uid of ['owner', 'staff']) {
+  for (const [label, token] of [
+    ['unverified claim', {email_verified: false}],
+    ['missing claim', {}],
+    ['malformed claim', {email_verified: 'true'}],
+  ]) {
+    test(`${uid} roster rejects ${label} before querying membership or accounts`, async () => {
+      const f = fixture();
+      const run = f.args.store.runTransaction;
+      const accounts = f.args.accounts;
+      let transactions = 0, lookups = 0;
+      f.args.store.runTransaction = callback => { transactions++; return run(callback); };
+      f.args.accounts = ids => { lookups++; return accounts(ids); };
+
+      await assert.rejects(listTeamMembers({...f.args, auth: {uid, token}}), {
+        code: 'unauthenticated', message: 'Team members could not be verified.',
+      });
+      assert.equal(transactions, 0);
+      assert.equal(lookups, 0);
+    });
+  }
+
+  for (const [label, patch] of [
+    ['missing caller account', null],
+    ['disabled caller account', {disabled: true}],
+    ['unverified caller account despite verified claims', {emailVerified: false}],
+    ['missing caller account verification state', {emailVerified: undefined}],
+    ['malformed caller account verification state', {emailVerified: 'true'}],
+    ['missing caller account enablement state', {disabled: undefined}],
+    ['malformed caller account enablement state', {disabled: 0}],
+  ]) {
+    test(`${uid} roster rejects ${label}`, async () => {
+      const f = fixture();
+      if (patch === null) f.users.delete(uid);
+      else Object.assign(f.users.get(uid), patch);
+      const run = f.args.store.runTransaction;
+      const accounts = f.args.accounts;
+      let transactions = 0, lookups = 0;
+      f.args.store.runTransaction = callback => { transactions++; return run(callback); };
+      f.args.accounts = ids => { lookups++; return accounts(ids); };
+
+      await assert.rejects(listTeamMembers({...f.args, auth: verifiedAuth(uid)}), {
+        code: 'permission-denied', message: 'Team members could not be verified.',
+      });
+      assert.equal(transactions, 1);
+      assert.equal(lookups, 1);
+    });
+  }
+}
 test('no unauthenticated or forged authority requests',async()=>{
   const f=fixture();
   await assert.rejects(listTeamMembers({...f.args,auth:null}),{code:'unauthenticated'});
@@ -35,7 +90,8 @@ test('no unauthenticated or forged authority requests',async()=>{
     await assert.rejects(listTeamMembers({...f.args,data}),{code:'invalid-argument'});
   }
 });
-for(const defect of ['unverified','disabled','missing-account','inactive','wrong-map','forged-owner','bad-schema']) {
+for(const defect of ['unverified','disabled','missing-account','inactive','wrong-map','forged-owner','bad-schema',
+  'missing-profile','mismatched-profile','malformed-profile']) {
   test(`exclude member: ${defect}`,async()=>{
     const f=fixture();const user=f.users.get('staff');const member=f.docs.get('cafes/a/members/staff');
     if(defect==='unverified')user.emailVerified=false;
@@ -45,6 +101,9 @@ for(const defect of ['unverified','disabled','missing-account','inactive','wrong
     if(defect==='wrong-map')f.docs.get('user_cafe_memberships/staff').cafeId='b';
     if(defect==='forged-owner')member.role='owner';
     if(defect==='bad-schema')member.schemaVersion=2;
+    if(defect==='missing-profile')f.docs.delete('users/staff');
+    if(defect==='mismatched-profile')f.docs.get('users/staff').email='other@example.test';
+    if(defect==='malformed-profile')f.docs.get('users/staff').createdAt='not-a-timestamp';
     assert.ok(!(await listTeamMembers(f.args)).members.some(m=>m.uid==='staff'));
   });
 }
@@ -58,23 +117,62 @@ test('recheck omits members revoked while Auth profiles are pending',async()=>{
   f.args.accounts=async ids=>{const result=await accounts(ids);f.docs.get('cafes/a/members/staff').status='revoked';return result;};
   assert.ok(!(await listTeamMembers(f.args)).members.some(m=>m.uid==='staff'));
 });
+test('recheck omits a Staff profile deleted between snapshots', async () => {
+  const f = fixture();
+  const accounts = f.args.accounts;
+  f.args.accounts = async ids => {
+    f.docs.delete('users/staff');
+    return accounts(ids);
+  };
+  assert.deepEqual((await listTeamMembers(f.args)).members.map(member => member.uid), ['owner', 'other-staff']);
+});
 test('reject stale ownership, forged caller role and disabled caller',async()=>{
   for(const defect of ['owner-map','role','disabled']) {
     const f=fixture();
     if(defect==='owner-map')f.docs.get('user_cafe_memberships/owner').cafeId='b';
     if(defect==='role')f.docs.get('cafes/a/members/staff').role='owner';
     if(defect==='disabled')f.users.get('staff').disabled=true;
-    await assert.rejects(listTeamMembers({...f.args,auth:{uid:'staff'}}),{code:'permission-denied'});
+    await assert.rejects(listTeamMembers({...f.args,auth:verifiedAuth('staff')}),{code:'permission-denied'});
   }
 });
-test('bounded query fails explicitly instead of silently truncating',async()=>{
+test('pages through more than 100 staff and rejects stale or cross-workspace cursors',async()=>{
   const f=fixture();
-  for(let n=0;n<101;n++)f.docs.set(`cafes/a/members/extra-${n}`,{});
-  await assert.rejects(listTeamMembers(f.args),{code:'resource-exhausted'});
+  for(let n=0;n<103;n++) {
+    const uid = `extra-${String(n).padStart(3, '0')}`;
+    const link = {uid, cafeId: 'a', status: 'active', schemaVersion: 1};
+    f.docs.set(`cafes/a/members/${uid}`, {...link, role: 'staff'});
+    f.docs.set(`user_cafe_memberships/${uid}`, link);
+    f.docs.set(`users/${uid}`, {...f.docs.get('users/staff'), username: uid, email: `${uid}@example.test`});
+    f.users.set(uid, {...f.users.get('staff'), uid, email: `${uid}@example.test`});
+  }
+  const first = await listTeamMembers(f.args);
+  const seen = new Set();
+  let page = first;
+  do {
+    assert.ok(page.members.filter(m => m.role === 'staff').length <= 20);
+    for (const {uid} of page.members) { assert.ok(!seen.has(uid)); seen.add(uid); }
+    if (!page.nextCursor) break;
+    page = await listTeamMembers({...f.args, data: {cursor: page.nextCursor}});
+  } while (true);
+  assert.equal(seen.size, 106);
+  for (const uid of ['foreign', 'staff']) await assert.rejects(listTeamMembers({...f.args,
+    auth: verifiedAuth(uid), data: {cursor: first.nextCursor}}), {code:'permission-denied'});
+  await assert.rejects(listTeamMembers({...f.args, data: {cursor: '../../foreign'}}), {code:'invalid-argument'});
+  setGeneration(f, 'owner', 1);
+  await assert.rejects(listTeamMembers({...f.args, data: {cursor: first.nextCursor}}), {code:'permission-denied'});
 });
 test('provider/store errors propagate to safe callable boundary; no self-only fallback',async()=>{
   const f=fixture();f.args.accounts=async()=>{throw Error('private internal failure');};
   await assert.rejects(listTeamMembers(f.args));
+});
+
+test('duplicate or unexpected account records fail closed', async () => {
+  for (const uid of ['owner', 'foreign']) {
+    const f = fixture();
+    const accounts = f.args.accounts;
+    f.args.accounts = async ids => [...await accounts(ids), f.users.get(uid)];
+    await assert.rejects(listTeamMembers(f.args), {code: 'permission-denied'});
+  }
 });
 
 function setGeneration(f, uid, generation) {
@@ -115,7 +213,7 @@ for (const viewer of ['owner', 'staff']) {
       if (generation !== undefined) {
         for (const uid of ['owner', 'staff', 'other-staff']) setGeneration(f, uid, generation);
       }
-      const result = await listTeamMembers({...f.args, auth: {uid: viewer}});
+      const result = await listTeamMembers({...f.args, auth: verifiedAuth(viewer)});
       assert.deepEqual(Object.keys(result).sort(), ['cafeId', 'members', 'viewerRole']);
       assert.deepEqual(result.members.map(member => member.uid),
         viewer === 'owner' ? ['owner', 'other-staff', 'staff'] : ['owner', 'staff']);
@@ -129,7 +227,7 @@ for (const viewer of ['owner', 'staff']) {
 for (const [viewer, changed] of [['owner', 'owner'], ['staff', 'staff'], ['staff', 'owner']]) {
   test(`${viewer} request denies ${changed} removal/rejoin during account lookup`, async () => {
     const f = fixture(); const lookup = pendingAccounts(f);
-    const result = listTeamMembers({...f.args, auth: {uid: viewer}});
+    const result = listTeamMembers({...f.args, auth: verifiedAuth(viewer)});
     await lookup.ready;
     removeAndRejoin(f, changed);
     lookup.resume();
@@ -159,7 +257,7 @@ for (const defect of ['one-sided', 'malformed', 'mismatched']) {
         };
         let lookup;
         if (duringLookup) lookup = pendingAccounts(f); else corrupt();
-        const result = listTeamMembers({...f.args, auth: {uid: changed === 'other-staff' ? 'owner' : 'staff'}});
+        const result = listTeamMembers({...f.args, auth: verifiedAuth(changed === 'other-staff' ? 'owner' : 'staff')});
         if (duringLookup) { await lookup.ready; corrupt(); lookup.resume(); }
         if (changed === 'other-staff') {
           assert.deepEqual((await result).members.map(member => member.uid), ['owner', 'staff']);
@@ -181,15 +279,18 @@ test('normalizing absent generations to explicit zero preserves the same legacy 
 });
 
 for (const viewer of ['owner', 'staff']) {
-  test(`${viewer} roster retains its existing read/query count`, async () => {
+  test(`${viewer} roster bounds reads and keeps Auth outside the transactions`, async () => {
     const f = fixture(); const run = f.args.store.runTransaction;
-    let reads = 0, queries = 0;
+    const accounts = f.args.accounts;
+    let reads = 0, queries = 0, lookups = 0;
     f.args.store.runTransaction = callback => run(tx => callback({
       get: async path => { reads++; return tx.get(path); },
-      members: async (cafe, limit) => { queries++; return tx.members(cafe, limit); },
+      members: async (...args) => { queries++; return tx.members(...args); },
     }));
-    await listTeamMembers({...f.args, auth: {uid: viewer}});
-    assert.equal(reads, viewer === 'owner' ? 16 : 18);
+    f.args.accounts = ids => { lookups++; return accounts(ids); };
+    await listTeamMembers({...f.args, auth: verifiedAuth(viewer)});
+    assert.equal(reads, viewer === 'owner' ? 24 : 22);
     assert.equal(queries, viewer === 'owner' ? 2 : 0);
+    assert.equal(lookups, 1);
   });
 }

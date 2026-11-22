@@ -12,6 +12,7 @@ const projectId = 'velora-spark-test';
 function fixture({actorGeneration = 0, targetGeneration = 0, ...overrides} = {}) {
   const identity = fakes.fixture(), seed = identity.store.snapshot();
   for (const uid of ['owner', 'staff']) {
+    seed[`users/${uid}`] = profile(uid);
     for (const path of [`user_cafe_memberships/${uid}`, `cafes/cafe/members/${uid}`]) {
       seed[path].membershipGeneration = uid === 'owner' ? actorGeneration : targetGeneration;
       seed[path].createdAt = new Date(identity.now());
@@ -44,6 +45,8 @@ function fixture({actorGeneration = 0, targetGeneration = 0, ...overrides} = {})
   return {identity, fake, options, call, removal, lookups, hooks};
 }
 const commits = f => f.fake.calls.filter(call => call.method === 'commit');
+const profile = uid => ({username: uid, email: `${uid}@example.test`, role: 'owner', photoUrl: '',
+  createdAt: new Date(0), updatedAt: new Date(0)});
 
 test('requires project-bound accounts and compatible store without I/O', () => {
   const f = fixture(); assert.equal(f.fake.calls.length, 0);
@@ -67,6 +70,7 @@ test('Staff sees only self and Owner while Owner sees other current Staff', asyn
   const f = fixture(), link = {uid: 'joiner', cafeId: 'cafe', status: 'active', schemaVersion: 1, membershipGeneration: 0};
   f.fake.replace('user_cafe_memberships/joiner', link);
   f.fake.replace('cafes/cafe/members/joiner', {...link, role: 'staff'});
+  f.fake.replace('users/joiner', profile('joiner'));
   assert.deepEqual((await f.call('/staff/list', {}, {uid: 'staff'})).body.members.map(member => member.uid), ['owner', 'staff']);
   assert.equal(f.lookups.includes('joiner'), false);
   assert.equal((await f.call()).body.members.length, 3);
@@ -121,11 +125,21 @@ test('bounded account concurrency and timeout start no new lookups after deadlin
   assert.equal(f.lookups.length, count); assert.equal(commits(f).length, 1);
 });
 
-test('101-row roster overflow rejects before any account lookup', async () => {
+test('REST roster resumes after the twentieth candidate even if that page has no valid profiles', async () => {
   const f = fixture();
-  for (let i = 0; i < 101; i++) f.fake.replace(`cafes/cafe/members/member${i}`, {});
-  assert.deepEqual(await f.call(), {status: 429, body: {error: 'resource-exhausted'}});
-  assert.equal(f.lookups.length, 0);
+  for (let i = 0; i < 101; i++) f.fake.replace(`cafes/cafe/members/member${i}`, {role: 'staff'});
+  const first = await f.call();
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body.members.map(m => m.uid), ['owner']);
+  let cursor = first.body.nextCursor;
+  assert.ok(cursor);
+  for (let page = 2; page <= 6; page++) {
+    const next = await f.call('/staff/list', {cursor});
+    assert.equal(next.status, 200);
+    assert.deepEqual(next.body.members.map(m => m.uid), page === 6 ? ['staff'] : []);
+    cursor = next.body.nextCursor;
+    assert.equal(Boolean(cursor), page < 6);
+  }
 });
 
 for (const [actorGeneration, targetGeneration] of [[0, 0], [7, 3]]) {

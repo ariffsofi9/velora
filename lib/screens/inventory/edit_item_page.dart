@@ -9,6 +9,8 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
+import '../../services/workspace_inventory_https_transport.dart'
+    show InventoryHttpsUpdateException;
 import '../../services/workspace_inventory_update_service.dart';
 import '../../services/workspace_session.dart';
 
@@ -72,7 +74,6 @@ class _EditItemPageState extends State<EditItemPage> {
   late final TextEditingController _nameController;
   late final TextEditingController _categoryController;
   late final TextEditingController _imageUrlController;
-  late final WorkspaceInventoryUpdater _updater;
   WorkspaceInventoryRepository? _repository;
   late InventoryItem _item;
   late String _unit;
@@ -94,14 +95,6 @@ class _EditItemPageState extends State<EditItemPage> {
     _nameController = TextEditingController();
     _categoryController = TextEditingController();
     _imageUrlController = TextEditingController();
-    if (_allowed) {
-      _updater =
-          widget.updater ??
-          FirebaseWorkspaceInventoryUpdater(
-            pilotPolicy: _policy,
-            session: widget.workspaceSession,
-          );
-    }
     _repository = widget.repository;
     _loadForm(_item);
   }
@@ -145,6 +138,11 @@ class _EditItemPageState extends State<EditItemPage> {
       return;
     }
     if (_isSaving || _hasConflict) return;
+    final updater = widget.updater;
+    if (updater == null) {
+      _showMessage('Secure inventory updates are unavailable.');
+      return;
+    }
 
     final name = _nameController.text.trim();
     final category = _categoryController.text.trim();
@@ -194,18 +192,26 @@ class _EditItemPageState extends State<EditItemPage> {
 
     setState(() => _isSaving = true);
     try {
-      await _updater.updateItem(request);
+      await updater.updateItem(request);
       if (!mounted || !_current) return;
       setState(() => _isSaving = false);
       _showMessage('Item updated successfully');
       Navigator.pop(context, true);
     } on WorkspaceInventoryUpdateException catch (error) {
       if (!mounted || !_current) return;
+      final outcomeUnknown =
+          error is InventoryHttpsUpdateException && error.outcomeUnknown;
       setState(() {
         _isSaving = false;
-        _hasConflict = error.failure == WorkspaceInventoryUpdateFailure.stale;
+        _hasConflict =
+            !outcomeUnknown &&
+            error.failure == WorkspaceInventoryUpdateFailure.stale;
       });
-      _showMessage(_failureMessage(error.failure));
+      _showMessage(
+        outcomeUnknown
+            ? 'The item update could not be confirmed. Check inventory before another submission.'
+            : _failureMessage(error.failure),
+      );
     } catch (_) {
       if (!mounted || !_current) return;
       setState(() => _isSaving = false);

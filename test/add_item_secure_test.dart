@@ -7,6 +7,7 @@ import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/screens/inventory/add_item/add_item_page.dart';
 import 'package:velora/screens/inventory/add_item/widgets_add/add_item_save_button.dart';
 import 'package:velora/services/workspace_inventory_create_service.dart';
+import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_session.dart';
 
 final _session = WorkspaceSession.fromVerified(
@@ -37,7 +38,7 @@ class _Creator implements WorkspaceInventoryCreator {
 }
 
 Widget _app({
-  required WorkspaceInventoryCreator creator,
+  WorkspaceInventoryCreator? creator,
   required String Function() keyFactory,
 }) => MaterialApp(
   theme: AppTheme.light,
@@ -77,6 +78,54 @@ Future<void> _openAndFill(WidgetTester tester) async {
 }
 
 void main() {
+  testWidgets(
+    'verified Add requires an explicit creator before allocating a key',
+    (tester) async {
+      var keys = 0;
+      await tester.pumpWidget(_app(keyFactory: () => 'add-key-${++keys}'));
+      await _openAndFill(tester);
+      await tester.ensureVisible(find.text('Save Item'));
+      await tester.tap(find.text('Save Item'));
+      await tester.pump();
+
+      expect(
+        find.text('Secure inventory updates are unavailable.'),
+        findsOneWidget,
+      );
+      expect(find.byType(AddItemPage), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      expect(keys, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('unknown HTTPS creation remains unconfirmed without auto-retry', (
+    tester,
+  ) async {
+    var keys = 0;
+    final creator = _Creator([
+      InventoryHttpsCreateException(
+        WorkspaceInventoryCreateFailure.unavailable,
+        const InventoryHttpsFailure('unavailable', outcomeUnknown: true),
+      ),
+    ]);
+    await tester.pumpWidget(
+      _app(creator: creator, keyFactory: () => 'unknown-add-${++keys}'),
+    );
+    await _openAndFill(tester);
+    await tester.ensureVisible(find.text('Save Item'));
+    await tester.tap(find.text('Save Item'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Item creation could not be confirmed'),
+      findsOneWidget,
+    );
+    expect(find.byType(AddItemPage), findsOneWidget);
+    expect(creator.requests, hasLength(1));
+    expect(keys, 1);
+  });
+
   testWidgets(
     'unverified direct route fails closed without a callable request',
     (tester) async {
@@ -122,7 +171,14 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.text('Open Add Item'), findsOneWidget);
-      expect(creator.requests.single.imageUrl, '');
+      final request = creator.requests.single;
+      expect(request.imageUrl, '');
+      expect(request.name, 'Fresh Milk');
+      expect(request.category, 'Meat');
+      expect(request.quantity, 4);
+      expect(request.unit, 'kg');
+      expect(request.expiryDate.day, 15);
+      expect(request.idempotencyKey, 'fixed-request-key');
     },
   );
 

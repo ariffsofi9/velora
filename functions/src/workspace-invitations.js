@@ -232,4 +232,37 @@ async function reconcileStaffInvitation({auth, data, store, now = () => new Date
       invite.status === 'pending' && millis(invite.expiresAt) <= time ? 'expired' : invite.status};
   });
 }
-module.exports = {InvitationError, createStaffInvitation, revokeStaffInvitation, redeemStaffInvitation, reconcileStaffInvitation};
+async function listStaffInvitations({auth, data, store, now = () => new Date()}) {
+  const uid = actor(auth);
+  if (auth.token?.email_verified !== true) fail('unauthenticated', 'Verified identity required.');
+  const {episode, payload} = mutationEpisode(data, InvitationError);
+  input(payload, ['view', 'cursor']);
+  const cursor = payload.cursor ?? null;
+  if (payload.view !== 'invitations' ||
+      (cursor !== null && (typeof cursor !== 'string' || !/^[a-f0-9]{32}$/.test(cursor)))) {
+    fail('invalid-argument', 'Invalid invitation page.');
+  }
+  return store.runTransaction(async tx => {
+    const authority = await owner(tx, uid);
+    expectedOwner(episode, authority);
+    const rows = await tx.invitations(authority.cafeId, cursor);
+    const time = now().getTime();
+    const entries = rows.slice(0, 20).flatMap(({id, data: invite}) => {
+      if (invite.ownerUid !== uid || invite.schemaVersion !== 1 || invite.role !== 'staff') return [];
+      const expiry = millis(invite.expiresAt);
+      if (!Number.isFinite(expiry) || typeof invite.email !== 'string' ||
+          invite.email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(invite.email) ||
+          !['pending', 'revoked', 'redeemed'].includes(invite.status)) {
+        fail('unavailable', 'Invitation status unavailable.');
+      }
+      const status = invite.status !== 'pending' ? invite.status :
+        expiry <= time ? 'expired' :
+          invite.issuerBindingVersion !== 1 ||
+          invite.issuerMembershipGeneration !== authority.generation ? 'stale' : 'pending';
+      return [{id, email: invite.email, status, expiresAt: new Date(expiry).toISOString()}];
+    });
+    return {invitations: entries, ...(rows.length > 20 ? {nextCursor: rows[19].id} : {})};
+  });
+}
+module.exports = {InvitationError, createStaffInvitation, revokeStaffInvitation, redeemStaffInvitation,
+  reconcileStaffInvitation, listStaffInvitations};

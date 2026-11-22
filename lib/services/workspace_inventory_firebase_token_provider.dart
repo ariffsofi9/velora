@@ -23,12 +23,15 @@ final class WorkspaceInventoryFirebaseTokenProvider {
        _currentSession = currentSession,
        _now = now ?? DateTime.now;
 
-  Future<String?> call(InventoryHttpsSession session) async {
+  Future<String?> call(
+    InventoryHttpsSession session, {
+    bool forceRefresh = true,
+  }) async {
     try {
       final user = _matchingUser(session);
       if (user == null) return null;
       final token = await user
-          .getIdToken(true)
+          .getIdToken(forceRefresh)
           .timeout(const Duration(seconds: 5));
       final currentUser = _matchingUser(session);
       if (token == null ||

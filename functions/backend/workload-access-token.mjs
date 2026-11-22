@@ -1,4 +1,4 @@
-import {BackendError, requireTestProject, validBudget} from './backend-errors.mjs';
+import {BackendError, requireBackendProject, validBudget} from './backend-errors.mjs';
 
 const expiryReserveMs = 60_000;
 const maxLifetimeSeconds = 3600;
@@ -12,9 +12,10 @@ const validToken = token => typeof token === 'string' &&
  * The callable returned here also accepts an optional per-caller AbortSignal
  * via accessToken({signal}). One caller cannot cancel another caller's refresh.
  */
-export function createWorkloadAccessToken({projectId, acquire, now = Date.now, timeoutMs = 5000} = {}) {
-  requireTestProject(projectId);
-  if (typeof acquire !== 'function' || typeof now !== 'function' || !validBudget(timeoutMs)) {
+export function createWorkloadAccessToken({projectId, realWorker, acquire, now = Date.now, timeoutMs = 5000} = {}) {
+  requireBackendProject(projectId, realWorker);
+  if (typeof acquire !== 'function' || (realWorker !== undefined && acquire !== realWorker.acquire) ||
+      typeof now !== 'function' || !validBudget(timeoutMs)) {
     throw new BackendError('configuration', 'invalid-configuration');
   }
   let cached, pending, lastTime;

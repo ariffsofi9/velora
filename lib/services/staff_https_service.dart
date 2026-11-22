@@ -1,10 +1,13 @@
 import 'android_pilot_policy.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import '../models/cafe_workspace.dart';
 import 'team_members_service.dart';
 import 'workspace_session.dart';
+import 'workspace_inventory_firebase_token_provider.dart';
+import 'workspace_inventory_https_transport.dart';
 
 /// Trusted composition snapshot, not authorization. Revision advances on every
 /// identity/workspace transition, including sign-out/back to the same UID.
@@ -98,11 +101,16 @@ bool _text(Object? s, int max) =>
     !RegExp(r'[\x00-\x1f\x7f-\x9f]').hasMatch(s);
 Never _invalid() => throw const FormatException('Invalid Staff response');
 
-/// Unwired TEST-only service. No SDK/default client, direct writes, credentials
-/// or automatic retries. Caller owns a client honoring redirect rejection and
-/// a real SHA-256 hex provider. Endpoint project metadata is not attestation.
-/// In-memory request bindings do not supply durable process-death recovery.
-class StaffHttpsService implements TeamMembers {
+/// The REAL composition is roster-only. The existing TEST removal adapter
+/// retains its original session and request bindings.
+class StaffHttpsService implements PagedTeamMembers {
+  static const realProject = 'velora-73222';
+  static const canonicalOrigin =
+      'https://rest-api.velora-smart-inventory.workers.dev';
+  static const configuredOrigin = String.fromEnvironment(
+    'VELORA_PUBLIC_ORIGIN',
+    defaultValue: canonicalOrigin,
+  );
   final AndroidPilotPolicy pilotPolicy;
   final Uri endpoint;
   final String projectId;
@@ -110,10 +118,108 @@ class StaffHttpsService implements TeamMembers {
   final StaffHttpsSession? Function() currentSession;
   final Stream<StaffHttpsSession?> sessionChanges;
   final Future<String?> Function(StaffHttpsSession) idToken;
-  final String Function(String) sha256;
+  final Future<String?> Function(StaffHttpsSession)? _readIdToken;
+  final String Function(String)? _sha256;
+  final bool _realRoster;
   final Duration timeout, cleanupTimeout;
   final int maxResponseBytes;
   StaffHttpsService({
+    required AndroidPilotPolicy pilotPolicy,
+    required Uri endpoint,
+    required String projectId,
+    required String endpointProjectId,
+    required http.Client client,
+    required StaffHttpsSession? Function() currentSession,
+    required Stream<StaffHttpsSession?> sessionChanges,
+    required Future<String?> Function(StaffHttpsSession) idToken,
+    required String Function(String) sha256,
+    Duration timeout = const Duration(seconds: 15),
+    Duration cleanupTimeout = const Duration(milliseconds: 100),
+    int maxResponseBytes = 262144,
+  }) : this._(
+         pilotPolicy: pilotPolicy,
+         endpoint: endpoint,
+         projectId: projectId,
+         endpointProjectId: endpointProjectId,
+         client: client,
+         currentSession: currentSession,
+         sessionChanges: sessionChanges,
+         idToken: idToken,
+         sha256: sha256,
+         timeout: timeout,
+         cleanupTimeout: cleanupTimeout,
+         maxResponseBytes: maxResponseBytes,
+       );
+
+  factory StaffHttpsService.realRoster({
+    required AndroidPilotPolicy pilotPolicy,
+    required FirebaseAuth auth,
+    required WorkspaceSession workspace,
+    required http.Client client,
+    required bool Function() isCurrent,
+    String origin = configuredOrigin,
+  }) {
+    final endpoint = Uri.tryParse(origin);
+    if (endpoint == null ||
+        endpoint.scheme != 'https' ||
+        !endpoint.hasAuthority ||
+        origin != canonicalOrigin ||
+        endpoint.host.endsWith('.invalid') ||
+        auth.app.options.projectId != realProject) {
+      throw const StaffHttpsException(
+        'invalid-configuration',
+        outcomeUnknown: false,
+      );
+    }
+    final session = StaffHttpsSession(
+      projectId: realProject,
+      uid: workspace.uid,
+      revision: 0,
+      emailVerified: true,
+      workspace: workspace,
+    );
+    final tokenSession = InventoryHttpsSession(
+      projectId: realProject,
+      uid: workspace.uid,
+      revision: 0,
+      emailVerified: true,
+      workspace: workspace,
+    );
+    StaffHttpsSession? current() {
+      if (!isCurrent() ||
+          !workspace.isActive ||
+          auth.app.options.projectId != realProject) {
+        return null;
+      }
+      final user = auth.currentUser;
+      return user?.uid == workspace.uid && user?.emailVerified == true
+          ? session
+          : null;
+    }
+
+    final provider = WorkspaceInventoryFirebaseTokenProvider(
+      auth: auth,
+      projectId: realProject,
+      currentSession: () => current() == null ? null : tokenSession,
+    );
+    return StaffHttpsService._(
+      pilotPolicy: pilotPolicy,
+      endpoint: endpoint,
+      projectId: realProject,
+      endpointProjectId: realProject,
+      client: client,
+      currentSession: current,
+      sessionChanges: auth.authStateChanges().map((_) => current()),
+      idToken: (captured) async =>
+          captured.matches(current()) ? provider(tokenSession) : null,
+      readIdToken: (captured) async => captured.matches(current())
+          ? provider(tokenSession, forceRefresh: false)
+          : null,
+      realRoster: true,
+    );
+  }
+
+  StaffHttpsService._({
     required this.pilotPolicy,
     required this.endpoint,
     required this.projectId,
@@ -122,12 +228,16 @@ class StaffHttpsService implements TeamMembers {
     required this.currentSession,
     required this.sessionChanges,
     required this.idToken,
-    required this.sha256,
+    Future<String?> Function(StaffHttpsSession)? readIdToken,
+    String Function(String)? sha256,
+    bool realRoster = false,
     this.timeout = const Duration(seconds: 15),
     this.cleanupTimeout = const Duration(milliseconds: 100),
     this.maxResponseBytes = 262144,
-  }) {
-    if (projectId != 'velora-spark-test' ||
+  }) : _readIdToken = readIdToken,
+       _sha256 = sha256,
+       _realRoster = realRoster {
+    if (projectId != (realRoster ? realProject : 'velora-spark-test') ||
         endpointProjectId != projectId ||
         endpoint.scheme != 'https' ||
         endpoint.port != 443 ||
@@ -185,7 +295,13 @@ class StaffHttpsService implements TeamMembers {
   }
 
   @override
-  Future<TeamRoster> load(CafeWorkspace workspace) async {
+  Future<TeamRoster> load(CafeWorkspace workspace) => _load(workspace);
+
+  @override
+  Future<TeamRoster> loadPage(CafeWorkspace workspace, String cursor) =>
+      _load(workspace, cursor);
+
+  Future<TeamRoster> _load(CafeWorkspace workspace, [String? cursor]) async {
     _requirePolicy();
     try {
       final s = _capture(), w = s.workspace;
@@ -199,19 +315,40 @@ class StaffHttpsService implements TeamMembers {
           outcomeUnknown: false,
         );
       }
-      final data = await _call('/staff/list', const {}, s, mutation: false);
-      if (data.length != 3 ||
+      if (cursor != null &&
+          (!w.isOwner ||
+              cursor.isEmpty ||
+              cursor.length > 1900 ||
+              RegExp(r'[^A-Za-z0-9_-]').hasMatch(cursor))) {
+        throw const StaffHttpsException(
+          'invalid-argument',
+          outcomeUnknown: false,
+        );
+      }
+      final data = await _call(
+        '/staff/list',
+        {'cursor': ?cursor, if (_realRoster) ...w.mutationData},
+        s,
+        mutation: false,
+      );
+      final nextCursor = readTeamCursor(data, workspace);
+      if (data.length != (nextCursor == null ? 3 : 4) ||
+          (nextCursor != null && nextCursor == cursor) ||
           data['cafeId'] != w.cafeId ||
           data['viewerRole'] != w.role.name ||
           data['members'] is! List) {
         _invalid();
       }
       final rows = data['members'] as List;
-      if (rows.length > 100 || (!w.isOwner && rows.length > 2)) _invalid();
+      if (rows.length > (w.isOwner ? 21 : 2)) _invalid();
       final seen = <String>{}, members = <TeamMember>[];
       for (final row in rows) {
+        final generation = row is Map ? row['membershipGeneration'] : null;
+        final removalTarget =
+            _realRoster && w.isOwner && row is Map && row['role'] == 'staff';
         if (row is! Map<String, dynamic> ||
-            row.length != 4 ||
+            row.length != (generation == null ? 4 : 5) ||
+            (generation != null && (!removalTarget || !_integer(generation))) ||
             !_id(row['uid']) ||
             !seen.add(row['uid'] as String) ||
             !_text(row['name'], 254) ||
@@ -220,6 +357,7 @@ class StaffHttpsService implements TeamMembers {
               r'^[^\s@]+@[^\s@]+\.[^\s@]+$',
             ).hasMatch(row['email'] as String) ||
             !['owner', 'staff'].contains(row['role']) ||
+            (cursor != null && row['role'] == 'owner') ||
             (row['role'] == 'owner') != (row['uid'] == w.ownerUid) ||
             (!w.isOwner && row['uid'] != w.uid && row['uid'] != w.ownerUid)) {
           _invalid();
@@ -230,11 +368,20 @@ class StaffHttpsService implements TeamMembers {
             row['name'] as String,
             row['email'] as String,
             row['role'] == 'owner' ? CafeRole.owner : CafeRole.staff,
+            membershipGeneration: generation as int?,
           ),
         );
       }
+      if (w.isOwner &&
+          members.where((m) => m.role == CafeRole.staff).length > 20) {
+        _invalid();
+      }
       _check(s, false);
-      return TeamRoster(workspace, List.unmodifiable(members));
+      return TeamRoster(
+        workspace,
+        List.unmodifiable(members),
+        nextCursor: nextCursor,
+      );
     } on StaffHttpsException {
       rethrow;
     } catch (_) {
@@ -286,10 +433,11 @@ class StaffHttpsService implements TeamMembers {
           outcomeUnknown: true,
         );
       }
-      final digest = sha256(
+      final digest = _sha256?.call(
         jsonEncode([s.uid, w.cafeId, request.idempotencyKey]),
       );
-      if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(digest)) {
+      if (!_realRoster &&
+          (digest == null || !RegExp(r'^[a-f0-9]{64}$').hasMatch(digest))) {
         throw const StaffHttpsException(
           'invalid-configuration',
           outcomeUnknown: false,
@@ -309,7 +457,12 @@ class StaffHttpsService implements TeamMembers {
       if (ack.length != 5 ||
           ack['cafeId'] != request.expectedCafeId ||
           ack['targetUid'] != request.targetUid ||
-          ack['eventId'] != 'remove_$digest' ||
+          (digest == null
+              ? ack['eventId'] is! String ||
+                    !RegExp(
+                      r'^remove_[a-f0-9]{64}$',
+                    ).hasMatch(ack['eventId'] as String)
+              : ack['eventId'] != 'remove_$digest') ||
           !_integer(ack['resultGeneration']) ||
           ack['resultGeneration'] != request.expectedGeneration + 1 ||
           ack['changed'] is! bool) {
@@ -376,7 +529,9 @@ class StaffHttpsService implements TeamMembers {
         },
       );
       check();
-      final token = await idToken(captured);
+      final token = await (mutation ? idToken : _readIdToken ?? idToken)(
+        captured,
+      );
       check();
       if (token == null ||
           !RegExp(r'^[A-Za-z0-9_.-]{1,8192}$').hasMatch(token)) {
@@ -386,7 +541,7 @@ class StaffHttpsService implements TeamMembers {
         );
       }
       final body = jsonEncode(data);
-      if (utf8.encode(body).length > 2048) {
+      if (utf8.encode(body).length > (_realRoster ? 2560 : 2048)) {
         throw const StaffHttpsException(
           'invalid-argument',
           outcomeUnknown: false,
@@ -475,10 +630,11 @@ class StaffHttpsService implements TeamMembers {
     } catch (e) {
       failure = e is StaffHttpsException
           ? e
-          : StaffHttpsException(
-              e is TimeoutException ? 'deadline-exceeded' : 'unavailable',
-              outcomeUnknown: mutation && dispatched,
-            );
+          : StaffHttpsException(switch (e) {
+              TimeoutException() => 'deadline-exceeded',
+              http.ClientException() when !mutation => 'network-unavailable',
+              _ => 'unavailable',
+            }, outcomeUnknown: mutation && dispatched);
     }
     active = false;
     Future<bool> cancel(FutureOr<void> Function() action) => Future<void>.sync(

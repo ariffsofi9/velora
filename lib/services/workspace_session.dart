@@ -36,7 +36,10 @@ class WorkspaceSession {
   final CafeRole role;
   final int membershipGeneration;
   bool _active = true;
-  bool get isActive => _active;
+  bool _awaitingAuthority = false;
+  bool get isActive => _active && !_awaitingAuthority;
+  void suspendAuthority() => _awaitingAuthority = true;
+  void resumeAuthority() => _awaitingAuthority = false;
   void invalidate() => _active = false;
   void requireActive() {
     if (!_active) throw StateError('Workspace session invalidated.');
