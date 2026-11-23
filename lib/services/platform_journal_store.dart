@@ -152,13 +152,12 @@ class PendingJournalPage {
     : records = List.unmodifiable(records);
 }
 
-/// Fully injected and unwired. No database, Preferences, platform channel or
-/// physical durability claim. Engines must qualify the contract above separately.
+/// Journal semantics shared by the platform storage engines.
 /// Writes retain immutable history in the same transaction as the indexed head.
 /// Capacity is enforced by the engine by failing writes, never by evicting data.
 class PlatformJournalStore {
   final TransactionalJournalEngine engine;
-  final String Function(String) sha256;
+  final FutureOr<String> Function(String) sha256;
   final Duration timeout;
   late final MutationJournalPersistence mutations = _Mutations(this);
   late final MutationJournalPersistence guardedMutations = _Mutations(

@@ -127,8 +127,18 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
       return false;
     }
     if (!widget.ownerMode) return true;
-    if (widget.workspaceSession?.isActive == false) return false;
+    final session = widget.workspaceSession;
     final scope = widget.workspace;
+    if (session == null && widget.invitations == null) return false;
+    if (session != null &&
+        (!session.isActive ||
+            !session.isOwner ||
+            session.cafeId != scope?.cafeId ||
+            session.uid != scope?.uid ||
+            session.ownerUid != scope?.ownerUid ||
+            session.membershipGeneration != scope?.membershipGeneration)) {
+      return false;
+    }
     return scope != null &&
         _validId(scope.cafeId) &&
         scope.uid == _uid &&
@@ -218,7 +228,9 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
           ).join();
         },
         clock: DateTime.now,
-        journal: widget.ownerMode ? openStaffInvitationJournal() : null,
+        journal: widget.ownerMode
+            ? openStaffInvitationJournal(widget.workspaceSession)
+            : null,
         timeout: const Duration(seconds: 30),
       );
     }
@@ -242,6 +254,9 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
       onError: (Object _) {
         if (!mounted || revision != _revision) return;
         setState(_clearContext);
+      },
+      onDone: () {
+        if (mounted && revision == _revision) setState(_clearContext);
       },
     );
   }
@@ -311,28 +326,67 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
       await action(operation);
     } catch (error) {
       if (_current(operation)) {
-        setState(
-          () => _message = switch (error) {
+        final code = switch (error) {
+          StaffInvitationFailure(:final code) => code,
+          StaffInvitationTransportException(:final code) => code,
+          _ => null,
+        };
+        setState(() {
+          if ([
+                'unauthenticated',
+                'user-token-expired',
+                'invalid-user-token',
+              ].contains(code) ||
+              (code == 'permission-denied' &&
+                  error is StaffInvitationTransportException)) {
+            _invitation = null;
+            _statuses = null;
+            _entry.clear();
+            _revoke.clear();
+          }
+          _message = switch (error) {
             StaffInvitationFailure(outcomeUnknown: true) =>
               'Outcome unknown. The invitation action may have completed. Do not submit again blindly. Ask the owner or support to confirm the current state before another attempt.',
             StaffInvitationFailure(code: 'already-exists') =>
               'This invitation request or account already has a membership. Do not retry creation blindly.',
             StaffInvitationFailure(code: 'resource-exhausted') =>
-              'Too many attempts. Please try later.',
+              'The invitation service is busy. Wait a moment, then retry.',
+            StaffInvitationFailure(code: 'permission-denied') ||
+            StaffInvitationTransportException(code: 'permission-denied') =>
+              'You do not have permission to perform this invitation action.',
+            StaffInvitationFailure(
+              code: 'unauthenticated' ||
+                  'user-token-expired' ||
+                  'invalid-user-token',
+            ) ||
+            StaffInvitationTransportException(
+              code: 'unauthenticated',
+            ) => 'Verify your email and sign in again before retrying.',
+            StaffInvitationTransportException(code: 'resource-exhausted') =>
+              'The invitation service is busy. Wait a moment, then retry.',
             StaffInvitationFailure(code: 'failed-precondition') =>
               'Verify your email, or ask the owner for a new invitation. This code may be expired, revoked or used.',
             OwnerVerificationException() =>
               'Email verification could not be confirmed. Check your sign-in and verify the invited email.',
             _ =>
               'Unable to complete the invitation action. Check your account, email verification and invitation, then try again.',
-          },
-        );
+          };
+        });
       }
     } finally {
-      if (_current(operation)) {
+      if (mounted &&
+          identical(_operation, operation) &&
+          operation.revision == _revision) {
         setState(() {
           _busy = false;
           _operation = null;
+          if (!_validContext) {
+            _invitation = null;
+            _statuses = null;
+            _entry.clear();
+            _revoke.clear();
+            _message = null;
+          }
         });
       }
     }
@@ -368,21 +422,22 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
                         : 'Sign in using the invited email address, verify it, then enter the one-time code. Existing workspace memberships cannot be replaced.',
                   ),
                   const SizedBox(height: 20),
-                  TextField(
-                    controller: _entry,
-                    enabled: !_busy,
-                    obscureText: !widget.ownerMode,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    keyboardType: widget.ownerMode
-                        ? TextInputType.emailAddress
-                        : TextInputType.visiblePassword,
-                    decoration: InputDecoration(
-                      labelText: widget.ownerMode
-                          ? 'Staff email'
-                          : 'Invitation code',
+                  if (_available)
+                    TextField(
+                      controller: _entry,
+                      enabled: !_busy,
+                      obscureText: !widget.ownerMode,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      keyboardType: widget.ownerMode
+                          ? TextInputType.emailAddress
+                          : TextInputType.visiblePassword,
+                      decoration: InputDecoration(
+                        labelText: widget.ownerMode
+                            ? 'Staff email'
+                            : 'Invitation code',
+                      ),
                     ),
-                  ),
                   const SizedBox(height: 16),
                   FilledButton(
                     onPressed:
@@ -480,25 +535,27 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
                       child: const Text('Send verification email'),
                     ),
                   ],
-                  if (_invitation case final invite?) ...[
-                    const SizedBox(height: 20),
-                    SelectableText(invite.code),
-                    Text('Expires: ${invite.expiresAt}'),
-                    TextButton(
-                      onPressed: () async {
-                        if (!_validContext || !identical(_invitation, invite)) {
-                          return;
-                        }
-                        await Clipboard.setData(
-                          ClipboardData(text: invite.code),
-                        );
-                      },
-                      child: const Text('Copy one-time code'),
-                    ),
-                    const Text(
-                      'Clipboard contents are sensitive. Clear them after sharing. No code is saved by VELORA.',
-                    ),
-                  ],
+                  if (_available)
+                    if (_invitation case final invite?) ...[
+                      const SizedBox(height: 20),
+                      SelectableText(invite.code),
+                      Text('Expires: ${invite.expiresAt}'),
+                      TextButton(
+                        onPressed: () async {
+                          if (!_validContext ||
+                              !identical(_invitation, invite)) {
+                            return;
+                          }
+                          await Clipboard.setData(
+                            ClipboardData(text: invite.code),
+                          );
+                        },
+                        child: const Text('Copy one-time code'),
+                      ),
+                      const Text(
+                        'Clipboard contents are sensitive. Clear them after sharing. No code is saved by VELORA.',
+                      ),
+                    ],
                   if (widget.ownerMode) ...[
                     if (_bound && _service is HttpsStaffInvitations) ...[
                       OutlinedButton(
@@ -507,34 +564,42 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
                             : () => _loadStatuses(),
                         child: const Text('Refresh invitation statuses'),
                       ),
-                      if (_statuses case final page?) ...[
-                        if (page.invitations.isEmpty)
-                          const Text('No invitations on this page.'),
-                        for (final invitation in page.invitations)
-                          ListTile(
-                            title: Text(invitation.email),
-                            subtitle: Text(
-                              '${invitation.status} · Expires ${invitation.expiresAt.toLocal()}',
+                      if (_available)
+                        if (_statuses case final page?) ...[
+                          if (page.invitations.isEmpty)
+                            const Text('No invitations on this page.'),
+                          for (final invitation in page.invitations)
+                            ListTile(
+                              title: Text(invitation.email),
+                              subtitle: Text(
+                                '${invitation.status} · Expires ${invitation.expiresAt.toLocal()}',
+                              ),
+                              trailing: invitation.status == 'pending'
+                                  ? TextButton(
+                                      onPressed: _busy || !_available
+                                          ? null
+                                          : () {
+                                              if (!_available ||
+                                                  !identical(_statuses, page)) {
+                                                return;
+                                              }
+                                              setState(
+                                                () => _revoke.text =
+                                                    invitation.id,
+                                              );
+                                            },
+                                      child: const Text('Select to revoke'),
+                                    )
+                                  : null,
                             ),
-                            trailing: invitation.status == 'pending'
-                                ? TextButton(
-                                    onPressed: _busy || !_available
-                                        ? null
-                                        : () => setState(
-                                            () => _revoke.text = invitation.id,
-                                          ),
-                                    child: const Text('Select to revoke'),
-                                  )
-                                : null,
-                          ),
-                        if (page.nextCursor != null)
-                          OutlinedButton(
-                            onPressed: _busy || !_available
-                                ? null
-                                : () => _loadStatuses(page.nextCursor),
-                            child: const Text('Next invitation page'),
-                          ),
-                      ],
+                          if (page.nextCursor != null)
+                            OutlinedButton(
+                              onPressed: _busy || !_available
+                                  ? null
+                                  : () => _loadStatuses(page.nextCursor),
+                              child: const Text('Next invitation page'),
+                            ),
+                        ],
                     ],
                     if (_bound &&
                         _service is HttpsStaffInvitations &&
@@ -559,13 +624,14 @@ class _StaffInvitationPageState extends State<StaffInvitationPage> {
                         child: const Text('Check last invitation status'),
                       ),
                     const SizedBox(height: 24),
-                    TextField(
-                      controller: _revoke,
-                      enabled: !_busy,
-                      decoration: const InputDecoration(
-                        labelText: 'Invitation ID to revoke',
+                    if (_available)
+                      TextField(
+                        controller: _revoke,
+                        enabled: !_busy,
+                        decoration: const InputDecoration(
+                          labelText: 'Invitation ID to revoke',
+                        ),
                       ),
-                    ),
                     const SizedBox(height: 12),
                     OutlinedButton(
                       onPressed: _busy || !_available

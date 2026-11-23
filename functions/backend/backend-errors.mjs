@@ -40,14 +40,14 @@ export function requireBackendProject(projectId, realWorker) {
 
 // Also bounds injected work that ignores cancellation. Late completions cannot
 // resume the caller. No retries and no dependency exception retention.
-export async function bounded(action, timeoutMs, kind, code = 'unavailable') {
+export async function bounded(action, timeoutMs, kind, code = 'unavailable', settlement) {
   let timer;
   try {
     return await Promise.race([
       new Promise((_, reject) => {
         timer = setTimeout(() => reject(new BackendError(kind, code)), timeoutMs);
       }),
-      Promise.resolve().then(action),
+      settlement ? settlement.dispatch(action, {observable: true}) : Promise.resolve().then(action),
     ]);
   } catch {
     throw new BackendError(kind, code);

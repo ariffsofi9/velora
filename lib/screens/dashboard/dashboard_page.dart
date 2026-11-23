@@ -26,6 +26,7 @@ class DashboardPage extends StatefulWidget {
   final VoidCallback? onAddTap;
   final VoidCallback? onInventoryTap;
   final VoidCallback? onAlertTap;
+  final ValueChanged<StockAttention>? onStockAlertTap;
   final VoidCallback? onActivityTap;
 
   const DashboardPage({
@@ -39,6 +40,7 @@ class DashboardPage extends StatefulWidget {
     this.onAddTap,
     this.onInventoryTap,
     this.onAlertTap,
+    this.onStockAlertTap,
     this.onActivityTap,
   });
 
@@ -95,15 +97,18 @@ class _DashboardPageState extends State<DashboardPage> {
     _inventoryRepository =
         widget.inventoryRepository ??
         WorkspaceInventoryRepository(session: widget.workspaceSession);
-    _inventoryStream = _inventoryRepository.watchItems();
+    _inventoryStream = _hasVerifiedInventory
+        ? _inventoryRepository.watchItems()
+        : const Stream.empty();
   }
+
+  bool get _hasVerifiedInventory =>
+      widget.workspaceSession.isActive &&
+      identical(_inventoryRepository.session, widget.workspaceSession);
 
   int _nearExpiryCount(List<InventoryItem> items) => items
       .where((item) => InventoryExpiryPolicy.isNearExpiry(item.expiryDate))
       .length;
-
-  int _lowStockCount(List<InventoryItem> items) =>
-      items.where(LowStockPolicy.isLowStock).length;
 
   void _openSuggestions(BuildContext context) {
     if (_discoverRoute?.isActive == true) return;
@@ -167,7 +172,7 @@ class _DashboardPageState extends State<DashboardPage> {
           key: ObjectKey(_inventoryStream),
           stream: _inventoryStream,
           builder: (context, snapshot) {
-            if (snapshot.hasError) {
+            if (!_hasVerifiedInventory || snapshot.hasError) {
               return const Center(
                 child: Padding(
                   padding: EdgeInsets.all(24),
@@ -180,6 +185,17 @@ class _DashboardPageState extends State<DashboardPage> {
             }
 
             final items = snapshot.data!;
+            var lowStock = 0, outOfStock = 0;
+            for (final item in items) {
+              switch (LowStockPolicy.attention(item)) {
+                case StockAttention.lowStock:
+                  lowStock++;
+                case StockAttention.outOfStock:
+                  outOfStock++;
+                case null:
+                  break;
+              }
+            }
             final user = widget.firestore == null
                 ? FirebaseAuth.instance.currentUser
                 : null;
@@ -189,7 +205,8 @@ class _DashboardPageState extends State<DashboardPage> {
               photoUrl: user?.photoURL,
               totalItems: items.length,
               nearExpiry: _nearExpiryCount(items),
-              lowStock: _lowStockCount(items),
+              lowStock: lowStock,
+              outOfStock: outOfStock,
               expired: items
                   .where(
                     (item) => InventoryExpiryPolicy.isExpired(item.expiryDate),
@@ -213,6 +230,7 @@ class _DashboardPageState extends State<DashboardPage> {
               onSuggestionTap: () => _openSuggestions(context),
               onAlertTap:
                   widget.onAlertTap ?? () => _showMutationsUnavailable(context),
+              onStockAlertTap: widget.onStockAlertTap,
             );
           },
         ),

@@ -26,12 +26,14 @@ class AddItemTextField extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
   final TextInputType keyboardType;
+  final bool enabled;
 
   const AddItemTextField({
     super.key,
     required this.controller,
     required this.hint,
     this.keyboardType = TextInputType.text,
+    this.enabled = true,
   });
 
   @override
@@ -41,6 +43,7 @@ class AddItemTextField extends StatelessWidget {
       decoration: _fieldDecoration(),
       child: TextField(
         controller: controller,
+        enabled: enabled,
         keyboardType: keyboardType,
         decoration: InputDecoration(
           hintText: hint,

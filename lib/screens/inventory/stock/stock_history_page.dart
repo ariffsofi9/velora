@@ -43,7 +43,7 @@ class _StockHistoryPageState extends State<StockHistoryPage> {
   void didUpdateWidget(covariant StockHistoryPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.item.id != widget.item.id ||
-        oldWidget.workspaceSession.cafeId != widget.workspaceSession.cafeId ||
+        !identical(oldWidget.workspaceSession, widget.workspaceSession) ||
         oldWidget.movementReader != widget.movementReader) {
       _generation += 1;
       _configureReader();
@@ -63,6 +63,19 @@ class _StockHistoryPageState extends State<StockHistoryPage> {
         WorkspaceInventoryMovementRepository(session: widget.workspaceSession);
   }
 
+  Future<WorkspaceMovementPage> _readPage({
+    WorkspaceMovementCursor? cursor,
+  }) async {
+    final workspace = widget.workspaceSession;
+    const denied = WorkspaceMovementException(
+      WorkspaceMovementFailure.permissionDenied,
+    );
+    if (!workspace.isActive) throw denied;
+    final page = await _reader.getItemMovements(widget.item.id, cursor: cursor);
+    if (!workspace.isActive) throw denied;
+    return page;
+  }
+
   Future<void> _loadFirstPage() async {
     if (_loading) return;
     final generation = _generation;
@@ -71,7 +84,7 @@ class _StockHistoryPageState extends State<StockHistoryPage> {
       _failure = null;
     });
     try {
-      final page = await _reader.getItemMovements(widget.item.id);
+      final page = await _readPage();
       if (!mounted || generation != _generation) return;
       setState(() {
         _movements
@@ -98,10 +111,7 @@ class _StockHistoryPageState extends State<StockHistoryPage> {
       _loadMoreFailure = null;
     });
     try {
-      final page = await _reader.getItemMovements(
-        widget.item.id,
-        cursor: cursor,
-      );
+      final page = await _readPage(cursor: cursor);
       if (!mounted || generation != _generation) return;
       final existing = _movements.map((movement) => movement.id).toSet();
       setState(() {
@@ -141,6 +151,11 @@ class _StockHistoryPageState extends State<StockHistoryPage> {
   );
 
   Widget _body() {
+    if (!widget.workspaceSession.isActive) {
+      return const Center(
+        child: Text('Workspace access could not be verified.'),
+      );
+    }
     if (_loading && _movements.isEmpty) {
       return const Center(
         key: ValueKey('stock-history-loading'),

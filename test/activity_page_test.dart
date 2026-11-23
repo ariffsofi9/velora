@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/cafe_workspace.dart';
+import 'package:velora/models/inventory_item.dart';
 import 'package:velora/models/workspace_activity.dart';
 import 'package:velora/repositories/workspace_activity_repository.dart';
 import 'package:velora/screens/activity/activity_page.dart';
+import 'package:velora/screens/inventory/item_details_page.dart';
 import 'package:velora/screens/home/widgets_home/recent_activity_card.dart';
 import 'package:velora/services/workspace_session.dart';
 
@@ -23,10 +25,12 @@ WorkspaceActivity _activity(
   String id, {
   WorkspaceActivityType type = WorkspaceActivityType.inventoryCreated,
   String cafeId = 'cafe-a',
+  String direction = 'out',
+  String itemId = 'item-a',
 }) => WorkspaceActivity(
   id: id,
   cafeId: cafeId,
-  itemId: 'item-a',
+  itemId: itemId,
   actorUid: 'staff-a',
   type: type,
   createdAt: DateTime.utc(2030, 1, 2, 3, 4),
@@ -34,13 +38,13 @@ WorkspaceActivity _activity(
   quantity: type == WorkspaceActivityType.inventoryUpdated ? null : 2,
   unit: type == WorkspaceActivityType.inventoryUpdated ? null : 'L',
   direction: type == WorkspaceActivityType.inventoryStockAdjusted
-      ? 'out'
+      ? direction
       : null,
   previousQuantity: type == WorkspaceActivityType.inventoryStockAdjusted
       ? 5
       : null,
   resultingQuantity: type == WorkspaceActivityType.inventoryStockAdjusted
-      ? 3
+      ? (direction == 'in' ? 7 : 3)
       : null,
   changedFields: type == WorkspaceActivityType.inventoryUpdated
       ? const ['name']
@@ -67,36 +71,357 @@ class _Reader implements WorkspaceActivityReader {
 }
 
 class _CursorSource implements WorkspaceActivityDataSource {
+  final bool sparseItems;
+  final positions = <Object?>[];
+
+  _CursorSource({this.sparseItems = false});
+
   @override
   Future<List<WorkspaceActivityDocument>> fetchPage({
     required String path,
     required int limit,
     required bool descending,
     Object? startAfter,
-  }) async => List.generate(
-    20,
-    (index) => WorkspaceActivityDocument(
-      id: 'page-$index',
-      cursorToken: 'cursor-$index',
-      data: {
-        'cafeId': 'cafe-a',
-        'itemId': 'item-a',
-        'actorUid': 'staff-a',
-        'type': 'inventory_created',
-        'itemName': 'Item $index',
-        'quantity': index,
-        'unit': 'pcs',
-        'requestHash': 'request-$index',
-        'schemaVersion': 1,
-        'createdAt': DateTime.utc(2030).subtract(Duration(minutes: index)),
-      },
-    ),
-  );
+  }) async {
+    expect(path, 'cafes/cafe-a/activities');
+    expect(descending, isTrue);
+    positions.add(startAfter);
+    final start = (startAfter as int? ?? -1) + 1;
+    return [
+      for (
+        var index = start;
+        index < start + limit && index < (sparseItems ? 43 : 20);
+        index++
+      )
+        WorkspaceActivityDocument(
+          id: sparseItems ? 'event-$index' : 'page-$index',
+          cursorToken: index,
+          data: {
+            'cafeId': 'cafe-a',
+            'itemId': sparseItems && index != 40 && index != 42
+                ? 'item-b'
+                : 'item-a',
+            'actorUid': 'staff-a',
+            'type': 'inventory_created',
+            'itemName': 'Item $index',
+            'quantity': index,
+            'unit': 'pcs',
+            'requestHash': 'request-$index',
+            'schemaVersion': 1,
+            'createdAt': DateTime.utc(2030).subtract(Duration(minutes: index)),
+          },
+        ),
+    ];
+  }
 }
 
 Widget _app(Widget home) => MaterialApp(theme: AppTheme.light, home: home);
 
 void main() {
+  testWidgets('Item Details opens the existing feed for the exact item ID', (
+    tester,
+  ) async {
+    final workspace = _session('cafe-a');
+    final reader = _Reader([
+      WorkspaceActivityPage(
+        activities: [
+          _activity('other-milk', itemId: 'item-b'),
+          _activity('selected-milk'),
+          _activity('selected-milk'),
+        ],
+      ),
+    ]);
+    final item = InventoryItem(
+      id: 'item-a',
+      name: 'Renamed Milk',
+      category: 'Dairy',
+      quantity: 2,
+      unit: 'L',
+      expiryDate: DateTime.utc(2030),
+      imageUrl: '',
+      createdAt: DateTime.utc(2029),
+    );
+    await tester.pumpWidget(
+      _app(
+        ItemDetailsPage(
+          item: item,
+          workspaceSession: workspace,
+          activityReader: reader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final action = find.byKey(const ValueKey('open-item-activity'));
+    await tester.scrollUntilVisible(action, 150);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+    final feed = tester.widget<ActivityPage>(find.byType(ActivityPage));
+    expect(feed.workspaceSession, same(workspace));
+    expect(find.text('Activity for Renamed Milk'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('activity-selected-milk')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('activity-other-milk')), findsNothing);
+    expect(find.byType(ChoiceChip), findsNothing);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(ItemDetailsPage), findsOneWidget);
+    expect(find.byKey(const ValueKey('open-stock-history')), findsOneWidget);
+  });
+
+  testWidgets(
+    'item scope keeps the workspace cursor across nonmatching pages',
+    (tester) async {
+      final workspace = _session('cafe-a');
+      final source = _CursorSource(sparseItems: true);
+      await tester.pumpWidget(
+        _app(
+          ActivityPage(
+            workspaceSession: workspace,
+            activityReader: WorkspaceActivityRepository(
+              session: workspace,
+              dataSource: source,
+            ),
+            item: (id: 'item-a', name: 'Milk'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      for (var page = 0; page < 2; page++) {
+        expect(
+          find.text('No matching activity in the pages loaded so far.'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const ValueKey('activity-empty')), findsNothing);
+        await tester.tap(find.byKey(const ValueKey('activity-load-more')));
+        await tester.pumpAndSettle();
+      }
+      expect(source.positions, [null, 19, 39]);
+      final newer = find.byKey(const ValueKey('activity-event-40'));
+      final older = find.byKey(const ValueKey('activity-event-42'));
+      expect(newer, findsOneWidget);
+      expect(older, findsOneWidget);
+      expect(
+        tester.getTopLeft(newer).dy,
+        lessThan(tester.getTopLeft(older).dy),
+      );
+      expect(find.byKey(const ValueKey('activity-event-41')), findsNothing);
+      expect(find.byKey(const ValueKey('activity-load-more')), findsNothing);
+    },
+  );
+
+  testWidgets('changing item scope discards a pending page', (tester) async {
+    final workspace = _session('cafe-a');
+    final pending = Completer<WorkspaceActivityPage>();
+    final reader = _Reader([
+      pending.future,
+      const WorkspaceActivityPage(activities: []),
+    ]);
+    Future<void> show(String id) => tester.pumpWidget(
+      _app(
+        ActivityPage(
+          workspaceSession: workspace,
+          activityReader: reader,
+          item: (id: id, name: id),
+        ),
+      ),
+    );
+    await show('item-a');
+    expect(find.byKey(const ValueKey('activity-loading')), findsOneWidget);
+    await show('item-b');
+    await tester.pumpAndSettle();
+    pending.complete(WorkspaceActivityPage(activities: [_activity('stale')]));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity for item-b'), findsOneWidget);
+    expect(find.text('No activity for this item'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-stale')), findsNothing);
+    expect(reader.calls, 2);
+  });
+
+  testWidgets('item scope rejects foreign workspace records before retrying', (
+    tester,
+  ) async {
+    final reader = _Reader([
+      WorkspaceActivityPage(
+        activities: [
+          _activity('foreign', cafeId: 'cafe-b'),
+          _activity('otherwise-valid'),
+        ],
+      ),
+      const WorkspaceActivityException(
+        WorkspaceActivityFailure.permissionDenied,
+      ),
+    ]);
+    await tester.pumpWidget(
+      _app(
+        ActivityPage(
+          workspaceSession: _session('cafe-a'),
+          activityReader: reader,
+          item: (id: 'item-a', name: 'Milk'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Activity data is invalid'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-foreign')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('activity-otherwise-valid')),
+      findsNothing,
+    );
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.text('Activity unavailable'), findsOneWidget);
+  });
+
+  testWidgets(
+    'All Activities and Inventory use the same ordered canonical page',
+    (tester) async {
+      final reader = _Reader([
+        WorkspaceActivityPage(
+          activities: [
+            for (final type in WorkspaceActivityType.values)
+              _activity(type.name, type: type),
+            _activity(
+              'stock-in',
+              type: WorkspaceActivityType.inventoryStockAdjusted,
+              direction: 'in',
+            ),
+          ],
+        ),
+      ]);
+      await tester.pumpWidget(
+        _app(
+          ActivityPage(
+            workspaceSession: _session('cafe-a'),
+            activityReader: reader,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final all = find.widgetWithText(ChoiceChip, 'All Activities');
+      final inventory = find.widgetWithText(ChoiceChip, 'Inventory');
+      expect(tester.widget<ChoiceChip>(all).selected, isTrue);
+      await tester.tap(inventory);
+      await tester.pumpAndSettle();
+      expect(tester.widget<ChoiceChip>(inventory).selected, isTrue);
+      const titles = [
+        'Item Created',
+        'Item Updated',
+        'Update Checked',
+        'Stock Out',
+        'Item Archived',
+        'Item Restored',
+        'Stock In',
+      ];
+      for (final title in titles) {
+        await tester.scrollUntilVisible(find.text(title), 140);
+        expect(find.text(title), findsOneWidget);
+      }
+      await tester.tap(all);
+      await tester.pumpAndSettle();
+      expect(tester.widget<ChoiceChip>(all).selected, isTrue);
+      expect(reader.calls, 1);
+    },
+  );
+
+  testWidgets('Inventory can continue past a page with no visible events', (
+    tester,
+  ) async {
+    final fullPage = await WorkspaceActivityRepository(
+      session: _session('cafe-a'),
+      dataSource: _CursorSource(),
+    ).getActivities();
+    final reader = _Reader([
+      WorkspaceActivityPage(activities: [], nextCursor: fullPage.nextCursor),
+      WorkspaceActivityPage(
+        activities: [_activity('older'), _activity('older')],
+      ),
+    ]);
+    await tester.pumpWidget(
+      _app(
+        ActivityPage(
+          workspaceSession: _session('cafe-a'),
+          activityReader: reader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ChoiceChip, 'Inventory'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('activity-empty')), findsNothing);
+    expect(
+      find.text('No matching activity in the pages loaded so far.'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('activity-load-more')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('activity-older')), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-end')), findsOneWidget);
+  });
+
+  testWidgets(
+    'replacing the session in the same cafe discards the previous result',
+    (tester) async {
+      final pending = Completer<WorkspaceActivityPage>();
+      final reader = _Reader([
+        pending.future,
+        WorkspaceActivityPage(activities: [_activity('current')]),
+      ]);
+      for (var episode = 0; episode < 2; episode++) {
+        await tester.pumpWidget(
+          _app(
+            ActivityPage(
+              workspaceSession: _session('cafe-a'),
+              activityReader: reader,
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+      pending.complete(WorkspaceActivityPage(activities: [_activity('old')]));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('activity-current')), findsOneWidget);
+      expect(find.byKey(const ValueKey('activity-old')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'permission denial on a later page hides previously loaded activity',
+    (tester) async {
+      final fullPage = await WorkspaceActivityRepository(
+        session: _session('cafe-a'),
+        dataSource: _CursorSource(),
+      ).getActivities();
+      final reader = _Reader([
+        WorkspaceActivityPage(
+          activities: [_activity('cached')],
+          nextCursor: fullPage.nextCursor,
+        ),
+        const WorkspaceActivityException(
+          WorkspaceActivityFailure.permissionDenied,
+        ),
+      ]);
+      await tester.pumpWidget(
+        _app(
+          ActivityPage(
+            workspaceSession: _session('cafe-a'),
+            activityReader: reader,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Inventory'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('activity-load-more')));
+      await tester.pumpAndSettle();
+      expect(find.text('Activity unavailable'), findsOneWidget);
+      expect(find.byKey(const ValueKey('activity-cached')), findsNothing);
+      expect(find.byKey(const ValueKey('activity-load-more')), findsNothing);
+    },
+  );
+
   testWidgets('renders supported events with honest details and actor label', (
     tester,
   ) async {

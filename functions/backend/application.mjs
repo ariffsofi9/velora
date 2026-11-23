@@ -43,9 +43,10 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, enab
   }
   const http = createGoogleHttp({projectId, realWorker, transport, timeoutMs: httpTimeoutMs,
     cleanupTimeoutMs, maxBytes: maxResponseBytes});
-  function bindGoogle(attempts) {
+  function bindGoogle(attempts, acquireOAuth) {
     const accessToken = realWorker
-      ? createRealAccessToken({projectId, realWorker, acquire: realWorker.acquire, now, timeoutMs: identityTimeoutMs})
+      ? createRealAccessToken({projectId, realWorker, acquire: realWorker.acquire, acquireOAuth,
+        now, timeoutMs: identityTimeoutMs})
       : (hasProvider ? injectedAccessToken : createGoogleOAuth({projectId, http, email: credential.email,
         sign: credential.sign, now, timeoutMs: identityTimeoutMs}));
     const getAccount = createFirebaseAccounts({projectId, realWorker, http, accessToken, timeoutMs: identityTimeoutMs});
@@ -91,12 +92,12 @@ export function createApplication({projectId, publicOrigin, allowedOrigins, enab
     // Two snapshots may each retry once and still leave room for rollback
     // and fresh account checks within the Workers Free subrequest budget.
     const {getAccount, verifyIdentity, store} = realWorker
-      ? bindGoogle(path === '/staff/list' ? 2 : undefined) : google;
+      ? bindGoogle(path === '/staff/list' ? 2 : undefined, request.admission?.acquireOAuth) : google;
     // Each request retains its own verified token/identity. No shared mutable
     // actor context can bleed across concurrent Owner/Staff requests.
     let capturedToken, capturedIdentity;
     const capture = async token => {
-      const identity = await verifyIdentity(token);
+      const identity = await verifyIdentity(token, request.admission?.preAuth);
       capturedToken = token; capturedIdentity = identity;
       return identity;
     };

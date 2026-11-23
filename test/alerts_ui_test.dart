@@ -1,11 +1,14 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/core/theme/app_theme.dart';
+import 'package:velora/logic/low_stock_policy.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/alerts/alerts_page.dart';
+import 'package:velora/screens/inventory/item_details_page.dart';
 import 'package:velora/screens/home/widgets_home/notification_bell.dart';
 import 'package:velora/screens/notifications/notification_alert_item.dart';
 import 'package:velora/screens/notifications/widgets_notification/notification_alert_card.dart';
@@ -151,6 +154,111 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'stock alert drill-down uses the original item and verified workspace',
+    (tester) async {
+      final source = _InventorySource(
+        Stream.value([
+          _item('out', 'Coffee', 0, 20),
+          _item('low', 'Coffee', 5, 20),
+        ]),
+      );
+      final repository = WorkspaceInventoryRepository(
+        session: _session,
+        dataSource: source,
+      );
+      await tester.pumpWidget(
+        app(
+          AlertsPage(
+            workspaceSession: _session,
+            repository: repository,
+            initialStockAttention: StockAttention.outOfStock,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final selected = find.byKey(const ValueKey('inventory-alert-out'));
+      expect(selected, findsOneWidget);
+      expect(find.byKey(const ValueKey('inventory-alert-low')), findsNothing);
+      expect(find.text('Out of stock'), findsOneWidget);
+      await tester.tap(selected);
+      await tester.pumpAndSettle();
+      final details = tester.widget<ItemDetailsPage>(
+        find.byType(ItemDetailsPage),
+      );
+      expect(details.item.id, 'out');
+      expect(details.repository, same(repository));
+      expect(details.workspaceSession, same(_session));
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(ChoiceChip, 'Low Stock'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('inventory-alert-low')), findsOneWidget);
+      expect(selected, findsNothing);
+    },
+  );
+
+  testWidgets(
+    'replaced alert sessions hide stale rows and denial clears current stock',
+    (tester) async {
+      final oldUpdates = StreamController<List<WorkspaceInventoryDocument>>();
+      final newUpdates = StreamController<List<WorkspaceInventoryDocument>>();
+      addTearDown(oldUpdates.close);
+      addTearDown(newUpdates.close);
+      final nextWorkspace = WorkspaceSession.fromVerified(
+        const CafeWorkspace(
+          cafeId: 'new-cafe',
+          uid: 'staff-b',
+          ownerUid: 'owner-b',
+          role: CafeRole.staff,
+        ),
+      );
+      final oldSource = _InventorySource(oldUpdates.stream);
+      final newSource = _InventorySource(newUpdates.stream);
+      Future<void> show(WorkspaceSession workspace, _InventorySource source) =>
+          tester.pumpWidget(
+            app(
+              AlertsPage(
+                workspaceSession: workspace,
+                repository: WorkspaceInventoryRepository(
+                  session: workspace,
+                  dataSource: source,
+                ),
+              ),
+            ),
+          );
+      await show(_session, oldSource);
+      oldUpdates.add([_item('old', 'Previous café item', 0, 20)]);
+      await tester.pump();
+      expect(find.text('Previous café item'), findsOneWidget);
+      final oldTap = tester
+          .widget<InkWell>(
+            find.descendant(
+              of: find.byKey(const ValueKey('inventory-alert-old')),
+              matching: find.byType(InkWell),
+            ),
+          )
+          .onTap!;
+      await show(nextWorkspace, newSource);
+      oldUpdates.add([_item('stale', 'Late previous café item', 1, 20)]);
+      newUpdates.add([_item('current', 'Current café item', 2, 20)]);
+      await tester.pump();
+      expect(find.text('Previous café item'), findsNothing);
+      expect(find.text('Late previous café item'), findsNothing);
+      expect(find.text('Current café item'), findsOneWidget);
+      oldTap();
+      await tester.pumpAndSettle();
+      expect(find.byType(ItemDetailsPage), findsNothing);
+      expect(newSource.watchedPath, 'cafes/new-cafe/inventory');
+      newUpdates.addError(
+        FirebaseException(plugin: 'cloud_firestore', code: 'permission-denied'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Current café item'), findsNothing);
+      expect(find.text('Retry alerts'), findsOneWidget);
+    },
+  );
 
   testWidgets('Loading and scoped repository errors remain visible', (
     tester,

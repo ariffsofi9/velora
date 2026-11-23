@@ -202,6 +202,20 @@ void main() {
 
     await expectLater(
       WorkspaceActivityRepository(
+        session: _session('cafe-a'),
+        dataSource: _Source(),
+      ).getActivities(cursor: first.nextCursor),
+      throwsA(
+        isA<WorkspaceActivityException>().having(
+          (error) => error.failure,
+          'failure',
+          WorkspaceActivityFailure.invalidData,
+        ),
+      ),
+    );
+
+    await expectLater(
+      WorkspaceActivityRepository(
         session: _session('cafe-b'),
         dataSource: _Source(),
       ).getActivities(cursor: first.nextCursor),
@@ -255,6 +269,31 @@ void main() {
           ),
         ),
       );
+    },
+  );
+
+  test(
+    'suspended authority rejects a pending read and blocks a new read',
+    () async {
+      final source = _Source()..documents = [_document('a', _created())];
+      final session = _session('cafe-a');
+      final repository = WorkspaceActivityRepository(
+        session: session,
+        dataSource: source,
+      );
+      final pending = repository.getActivities();
+      session.suspendAuthority();
+      final denied = throwsA(
+        isA<WorkspaceActivityException>().having(
+          (error) => error.failure,
+          'failure',
+          WorkspaceActivityFailure.permissionDenied,
+        ),
+      );
+      await expectLater(pending, denied);
+      source.path = null;
+      await expectLater(repository.getActivities(), denied);
+      expect(source.path, isNull);
     },
   );
 }

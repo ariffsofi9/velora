@@ -1,20 +1,25 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
+import '../../logic/low_stock_policy.dart';
 import 'dashboard_style.dart';
 
 class InventoryOverview extends StatelessWidget {
   final int total;
   final int nearExpiry;
   final int lowStock;
+  final int outOfStock;
   final int expired;
   final VoidCallback onTap;
+  final ValueChanged<StockAttention>? onStockTap;
   const InventoryOverview({
     super.key,
     required this.total,
     required this.nearExpiry,
     required this.lowStock,
+    required this.outOfStock,
     required this.expired,
     required this.onTap,
+    this.onStockTap,
   });
 
   Widget _status(
@@ -23,8 +28,9 @@ class InventoryOverview extends StatelessWidget {
     int value,
     IconData icon,
     Color color,
-    String key,
-  ) => Expanded(
+    String key, {
+    StockAttention? stockAttention,
+  }) => Expanded(
     child: Material(
       color: Colors.white,
       shape: RoundedRectangleBorder(
@@ -32,7 +38,9 @@ class InventoryOverview extends StatelessWidget {
         side: BorderSide(color: color.withValues(alpha: .22)),
       ),
       child: InkWell(
-        onTap: onTap,
+        onTap: stockAttention != null && onStockTap != null
+            ? () => onStockTap!(stockAttention)
+            : onTap,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 12),
@@ -125,19 +133,27 @@ class InventoryOverview extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 12),
-      IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+      LayoutBuilder(
+        builder: (context, constraints) {
+          final statuses = [
             _status(
               context,
-              'Low Stock',
+              StockAttention.lowStock.label,
               lowStock,
               Icons.inventory_2_outlined,
               AppColors.danger,
               'low-stock-count',
+              stockAttention: StockAttention.lowStock,
             ),
-            const SizedBox(width: 8),
+            _status(
+              context,
+              StockAttention.outOfStock.label,
+              outOfStock,
+              Icons.remove_circle_outline,
+              AppColors.danger,
+              'out-of-stock-count',
+              stockAttention: StockAttention.outOfStock,
+            ),
             _status(
               context,
               'Near Expiry',
@@ -146,7 +162,6 @@ class InventoryOverview extends StatelessWidget {
               AppColors.warning,
               'near-expiry-count',
             ),
-            const SizedBox(width: 8),
             _status(
               context,
               'Expired',
@@ -155,8 +170,30 @@ class InventoryOverview extends StatelessWidget {
               AppColors.danger,
               'expired-count',
             ),
-          ],
-        ),
+          ];
+          Widget row(List<Widget> tiles) => IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (var index = 0; index < tiles.length; index++) ...[
+                  if (index > 0) const SizedBox(width: 8),
+                  tiles[index],
+                ],
+              ],
+            ),
+          );
+          if (constraints.maxWidth >= 345 &&
+              MediaQuery.textScalerOf(context).scale(12) <= 16) {
+            return row(statuses);
+          }
+          return Column(
+            children: [
+              row(statuses.sublist(0, 2)),
+              const SizedBox(height: 8),
+              row(statuses.sublist(2)),
+            ],
+          );
+        },
       ),
     ],
   );

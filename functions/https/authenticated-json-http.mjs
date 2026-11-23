@@ -78,6 +78,8 @@ export function createAuthenticatedJsonHttp({projectId, storeProjectId, verifyId
         if (error instanceof PreDomainFailure) throw error;
         checkOpen();
         return reply(401, {error: 'unauthenticated'});
+      } finally {
+        request.admission?.preAuth?.seal();
       }
       if (request.admission) {
         let admitted;

@@ -6,7 +6,16 @@ enum WorkspaceActivityType {
   inventoryUpdateNoop,
   inventoryStockAdjusted,
   inventoryArchived,
-  inventoryRestored,
+  inventoryRestored;
+
+  bool get isInventory => switch (this) {
+    inventoryCreated ||
+    inventoryUpdated ||
+    inventoryUpdateNoop ||
+    inventoryStockAdjusted ||
+    inventoryArchived ||
+    inventoryRestored => true,
+  };
 }
 
 class WorkspaceActivity {

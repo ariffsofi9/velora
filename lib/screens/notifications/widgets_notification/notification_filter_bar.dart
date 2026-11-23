@@ -5,11 +5,13 @@ import '../../../core/theme/app_tokens.dart';
 class NotificationFilterBar extends StatelessWidget {
   final String selected;
   final ValueChanged<String> onSelected;
+  final List<String> options;
 
   const NotificationFilterBar({
     super.key,
     required this.selected,
     required this.onSelected,
+    this.options = filters,
   });
 
   static const filters = ['All', 'Low Stock', 'Near Expiry'];
@@ -19,7 +21,7 @@ class NotificationFilterBar extends StatelessWidget {
     scrollDirection: Axis.horizontal,
     padding: const EdgeInsets.symmetric(horizontal: 20),
     child: Row(
-      children: filters.map((filter) {
+      children: options.map((filter) {
         final active = selected == filter;
         return Padding(
           padding: const EdgeInsets.only(right: 8),

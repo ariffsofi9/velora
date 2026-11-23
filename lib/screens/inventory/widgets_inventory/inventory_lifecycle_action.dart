@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/inventory_item.dart';
 import '../../../services/workspace_inventory_https_transport.dart'
-    show InventoryHttpsLifecycleException;
+    show HttpsWorkspaceInventory, InventoryHttpsLifecycleException;
 import '../../../services/workspace_inventory_lifecycle_service.dart';
 
 class InventoryLifecycleActionButton extends StatefulWidget {
@@ -17,11 +17,13 @@ class InventoryLifecycleActionButton extends StatefulWidget {
   final WorkspaceSession? workspaceSession;
   final WorkspaceInventoryLifecycleManager? manager;
   final VoidCallback onChanged;
+  final VoidCallback? onReload;
 
   const InventoryLifecycleActionButton({
     super.key,
     required this.item,
     required this.onChanged,
+    this.onReload,
     this.manager,
     this.workspaceSession,
   });
@@ -74,6 +76,9 @@ class _InventoryLifecycleActionButtonState
 
   bool _loading = false;
   bool _confirming = false;
+  bool _pending = false;
+  bool _stale = false;
+  bool _completed = false;
   String? _key;
 
   String _newKey() {
@@ -87,7 +92,14 @@ class _InventoryLifecycleActionButtonState
   Future<void> _submit() async {
     if (!mounted || !_current) return;
     final manager = widget.manager;
-    if (manager == null || _loading || _confirming) return;
+    if (manager == null ||
+        _loading ||
+        _confirming ||
+        _pending ||
+        _stale ||
+        _completed) {
+      return;
+    }
     _confirming = true;
     final archived = widget.item.isArchived;
     final action = archived
@@ -130,31 +142,48 @@ class _InventoryLifecycleActionButtonState
         ),
       );
       if (!mounted || !_current) return;
+      setState(() => _completed = true);
+      _showMessage(archived ? 'Item restored.' : 'Item archived.');
       widget.onChanged();
     } on WorkspaceInventoryLifecycleException catch (error) {
       if (!mounted || !_current) return;
-      final message =
-          error is InventoryHttpsLifecycleException && error.outcomeUnknown
+      final unknown =
+          error is InventoryHttpsLifecycleException && error.outcomeUnknown;
+      setState(() {
+        _pending =
+            unknown && manager is HttpsWorkspaceInventory && manager.isGuarded;
+        _stale =
+            !unknown &&
+            error.failure == WorkspaceInventoryLifecycleFailure.stale;
+      });
+      if (_pending || _stale) return;
+      final message = unknown
           ? 'The inventory change could not be confirmed. Check inventory before another submission.'
+          : error is InventoryHttpsLifecycleException &&
+                error.transport.code == 'resource-exhausted'
+          ? 'The inventory service is busy. Try again later.'
           : switch (error.failure) {
-              WorkspaceInventoryLifecycleFailure.stale =>
-                'This item changed. Return to the list and try again.',
-              WorkspaceInventoryLifecycleFailure.permissionDenied ||
-              WorkspaceInventoryLifecycleFailure.unauthenticated =>
+              WorkspaceInventoryLifecycleFailure.permissionDenied =>
                 'You no longer have permission to change this item.',
+              WorkspaceInventoryLifecycleFailure.unauthenticated =>
+                'Your session could not be verified. Please sign in again.',
               WorkspaceInventoryLifecycleFailure.notFound =>
                 'This inventory item is no longer available.',
               WorkspaceInventoryLifecycleFailure.conflict =>
                 'This request conflicts with an earlier action.',
               _ => 'Unable to update this item. Try again.',
             };
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      _showMessage(message);
+    } catch (_) {
+      if (_current) _showMessage('Unable to update this item. Try again.');
     } finally {
       if (_current) setState(() => _loading = false);
     }
   }
+
+  void _showMessage(String message) => ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(message)));
 
   @override
   Widget build(BuildContext context) => !_allowed
@@ -163,6 +192,25 @@ class _InventoryLifecycleActionButtonState
         )
       : widget.manager == null
       ? const Text('Secure inventory updates are unavailable.')
+      : _completed
+      ? Text(widget.item.isArchived ? 'Item restored.' : 'Item archived.')
+      : _pending
+      ? const Text(
+          'Confirmation pending. Return to Inventory and open Inventory recovery.',
+        )
+      : _stale
+      ? Column(
+          children: [
+            const Text(
+              'This item changed. Reload the list before trying again.',
+            ),
+            if (widget.onReload case final reload?)
+              TextButton(
+                onPressed: _current ? reload : null,
+                child: const Text('Reload Inventory List'),
+              ),
+          ],
+        )
       : OutlinedButton.icon(
           key: ValueKey(
             widget.item.isArchived ? 'restore-item' : 'archive-item',

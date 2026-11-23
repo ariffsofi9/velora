@@ -2,15 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/models/inventory_item.dart';
 import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/inventory/stock/stock_adjustment_page.dart';
 import 'package:velora/services/workspace_inventory_https_transport.dart'
-    show InventoryHttpsFailure, InventoryHttpsStockException;
+    show
+        HttpsWorkspaceInventory,
+        InventoryHttpsFailure,
+        InventoryHttpsStockException;
 import 'package:velora/services/workspace_inventory_stock_service.dart';
 import 'package:velora/services/workspace_session.dart';
+
+import 'platform_journal_store_test.dart' as journal;
+import 'workspace_inventory_https_transport_test.dart' as transport;
 
 final session = WorkspaceSession.fromVerified(
   const CafeWorkspace(
@@ -410,6 +417,53 @@ void main() {
       everyElement('stock-outcome-key-1'),
     );
     expect(keys, 1);
+  });
+
+  testWidgets('guarded unknown result locks the form and offers recovery', (
+    tester,
+  ) async {
+    final fixture = transport.Fixture()
+      ..current = transport.snapshot(
+        session,
+        uid: session.uid,
+        project: HttpsWorkspaceInventory.realProject,
+      )
+      ..client = transport.FakeClient(
+        (_) async => throw http.ClientException('synthetic lost response'),
+      );
+    addTearDown(fixture.close);
+    final adapter = fixture.realAdapter(
+      journal.store(journal.FakeTransactionalJournalEngine()),
+    );
+    await tester.pumpWidget(
+      app(
+        StockInPage(item: item(), workspaceSession: session, adjuster: adapter),
+      ),
+    );
+    await submit(tester, '2');
+    await tester.pumpAndSettle();
+    expect(fixture.client.requests, hasLength(1));
+    expect(
+      find.text(
+        'Confirmation pending. Return to Inventory and open Inventory recovery.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<ElevatedButton>(
+            find.byKey(const ValueKey('stock-confirm-button')),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('stock-quantity-field')))
+          .enabled,
+      isFalse,
+    );
+    expect(find.text('Stock In completed successfully.'), findsNothing);
   });
 
   testWidgets('stale result requires explicit scoped reload', (tester) async {

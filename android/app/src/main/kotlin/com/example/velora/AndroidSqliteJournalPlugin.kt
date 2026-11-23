@@ -12,9 +12,10 @@ import android.util.Base64
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 
-/** Explicit qualification plugin. It is not registered in application startup. */
+/** Private platform channel for the app-local inventory journal. */
 class AndroidSqliteJournalPlugin : FlutterPlugin {
     private var channel: MethodChannel? = null
 
@@ -24,14 +25,24 @@ class AndroidSqliteJournalPlugin : FlutterPlugin {
         val main = Handler(Looper.getMainLooper())
         channel = MethodChannel(binding.binaryMessenger, "velora/android_sqlite_journal").apply {
             setMethodCallHandler { call, result ->
-                if (call.method != "snapshot" && call.method != "commit") {
+                if (call.method !in setOf("snapshot", "commit", "sha256")) {
                     result.notImplemented()
                     return@setMethodCallHandler
                 }
                 executor.execute {
                     try {
-                        val args = call.arguments as? Map<*, *> ?: error("Invalid request")
-                        val value = if (call.method == "snapshot") store.snapshot(args) else store.commit(args)
+                        val value = when (call.method) {
+                            "snapshot" -> store.snapshot(call.arguments as Map<*, *>)
+                            "commit" -> store.commit(call.arguments as Map<*, *>)
+                            else -> {
+                                val value = call.arguments as String
+                                require(value.length <= 16384)
+                                val input = value.toByteArray(Charsets.UTF_8)
+                                require(input.size <= 16384)
+                                MessageDigest.getInstance("SHA-256").digest(input)
+                                    .joinToString("") { "%02x".format(it.toInt() and 255) }
+                            }
+                        }
                         main.post { result.success(value) }
                     } catch (_: Exception) {
                         main.post { result.error("unavailable", "Journal storage unavailable.", null) }
@@ -52,7 +63,7 @@ class AndroidSqliteJournalPlugin : FlutterPlugin {
     }
 }
 
-// Schema v1: partitions are keyed by TEST project, UID and café. Each revision
+// Schema v1: partitions are keyed by project, UID and café. Each revision
 // covers a complete set of journal keys. PlatformJournalStore owns head/history
 // semantics. Future schema changes require an explicit migration, never a reset.
 private class AndroidJournalStore(context: Context) {
@@ -60,7 +71,7 @@ private class AndroidJournalStore(context: Context) {
 
     private companion object {
         val initialization = Any()
-        const val project = "velora-spark-test"
+        val projects = setOf("velora-spark-test", "velora-73222")
         const val version = 1
         const val maxRecords = 512
         const val maxBytes = 2 * 1024 * 1024
@@ -85,7 +96,8 @@ private class AndroidJournalStore(context: Context) {
                 value.toByteArray(Charsets.UTF_8).toString(Charsets.UTF_8) == value)
             return segment(value)
         }
-        require(args["projectId"] == project)
+        val project = args["projectId"] as? String ?: error("Invalid project")
+        require(project in projects)
         val projectKey = segment(project)
         val uid = identifier("uid")
         return Scope("$projectKey/$uid/${identifier("cafeId")}", "journal/1/$projectKey/$uid/")

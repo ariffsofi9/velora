@@ -99,7 +99,7 @@ class InventoryItem {
   }
 
   static int _quantity(Object? value) {
-    if (value is int && value >= 0) return value;
+    if (value is int && value >= 0 && value <= 9007199254740991) return value;
     throw const FormatException('Invalid inventory item quantity.');
   }
 

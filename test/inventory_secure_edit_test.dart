@@ -1,17 +1,23 @@
 import 'package:velora/services/android_pilot_policy.dart';
 import 'package:velora/screens/auth/workspace_gate.dart';
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/models/inventory_item.dart';
 import 'package:velora/repositories/workspace_inventory_repository.dart';
 import 'package:velora/screens/inventory/edit_item_page.dart';
+import 'package:velora/screens/inventory/inventory_page.dart';
 import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_inventory_update_service.dart';
 import 'package:velora/services/workspace_session.dart';
+
+import 'platform_journal_store_test.dart' as journal;
+import 'workspace_inventory_https_transport_test.dart' as transport;
 
 final _session = WorkspaceSession.fromVerified(
   const CafeWorkspace(
@@ -57,7 +63,8 @@ class _Updater implements WorkspaceInventoryUpdater {
 }
 
 class _Source implements WorkspaceInventoryDataSource {
-  final List<WorkspaceInventoryDocument> documents;
+  List<WorkspaceInventoryDocument> documents;
+  int subscriptions = 0;
   _Source(this.documents);
 
   @override
@@ -65,8 +72,10 @@ class _Source implements WorkspaceInventoryDataSource {
       documents;
 
   @override
-  Stream<List<WorkspaceInventoryDocument>> watchCollection(String path) =>
-      Stream.value(documents);
+  Stream<List<WorkspaceInventoryDocument>> watchCollection(String path) {
+    subscriptions++;
+    return Stream.value(documents);
+  }
 }
 
 WorkspaceInventoryRepository _repository(InventoryItem item) =>
@@ -128,6 +137,15 @@ Future<void> _save(WidgetTester tester) async {
   await tester.tap(find.text('Save Changes'));
 }
 
+Future<void> _settleMutation(WidgetTester tester) async {
+  // Flush stream cleanup before the next advance of the fake clock.
+  for (var turn = 0; turn < 3; turn++) {
+    await tester.pump();
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+  }
+  await tester.pumpAndSettle();
+}
+
 AndroidPilotPolicy _pilotPolicy(bool invalid) => AndroidPilotPolicy.parse(
   invalid
       ? {'VELORA_ANDROID_READ_ONLY_PILOT': 'false'}
@@ -146,6 +164,162 @@ final _normalPolicy = AndroidPilotPolicy.parse(
 );
 
 void main() {
+  for (final mode in ['changed', 'unchanged', 'lost']) {
+    testWidgets('REAL guarded Edit Item confirms and refreshes: $mode', (
+      tester,
+    ) async {
+      final lost = mode == 'lost';
+      final changed = mode != 'unchanged';
+      final initial = _item();
+      final confirmed = changed
+          ? _item(name: 'Fresh Milk', version: 2)
+          : initial;
+      final result = {
+        'cafeId': 'cafe',
+        'itemId': initial.id,
+        'updated': changed,
+        'version': confirmed.version,
+      };
+      final source = _Source([
+        WorkspaceInventoryDocument(id: initial.id, data: initial.toMap()),
+      ]);
+      final engine = journal.FakeTransactionalJournalEngine();
+      final store = journal.store(engine);
+      final fixture = transport.Fixture();
+      addTearDown(fixture.close);
+      const project = HttpsWorkspaceInventory.realProject;
+      Map<String, dynamic>? original;
+      void publishConfirmedItem() {
+        source.documents = [
+          WorkspaceInventoryDocument(id: confirmed.id, data: confirmed.toMap()),
+        ];
+      }
+
+      fixture.client = transport.FakeClient((sent) async {
+        final data =
+            jsonDecode((sent as http.Request).body) as Map<String, dynamic>;
+        if (sent.url.path == '/inventory/reconcile') {
+          expect(data, {'operation': 'update', 'request': original});
+          publishConfirmedItem();
+          return transport.response({'state': 'committed', 'result': result});
+        }
+        expect(sent.url.path, '/inventory/update');
+        expect(original, isNull);
+        original = data;
+        expect(data, {
+          'idempotencyKey': data['idempotencyKey'],
+          'itemId': initial.id,
+          'expectedVersion': initial.version,
+          'expectedCafeId': 'cafe',
+          'expectedMembershipGeneration': 3,
+          'name': confirmed.name,
+          'category': initial.category,
+          'unit': initial.unit,
+          'expiryDate': '2030-01-02T00:00:00.000Z',
+          'imageUrl': initial.imageUrl,
+        });
+        final key = jsonEncode([
+          project,
+          'staff',
+          'update',
+          data['idempotencyKey'],
+        ]);
+        expect((await store.mutations.read(key) as Map)['state'], 'dispatched');
+        if (lost) throw http.ClientException('synthetic lost response');
+        publishConfirmedItem();
+        return transport.response(result);
+      });
+
+      Future<void> openInventory(int revision) async {
+        final workspace = transport.workspace(uid: 'staff', generation: 3);
+        fixture.current = transport.snapshot(
+          workspace,
+          uid: 'staff',
+          project: project,
+          revision: revision,
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: AppTheme.light,
+            home: InventoryPage(
+              workspaceSession: workspace,
+              repository: WorkspaceInventoryRepository(
+                session: workspace,
+                dataSource: source,
+              ),
+              inventoryUpdater: fixture.realAdapter(journal.store(engine)),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      Future<void> editItem() async {
+        await tester.tap(find.text(initial.name));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Edit Item'));
+        await tester.pumpAndSettle();
+        if (changed) {
+          await tester.enterText(find.byType(TextField).first, confirmed.name);
+        }
+        await _save(tester);
+        await _settleMutation(tester);
+      }
+
+      await openInventory(1);
+      var before = source.subscriptions;
+      await editItem();
+      if (lost) {
+        expect(find.textContaining('Confirmation pending'), findsOneWidget);
+        expect(
+          tester
+              .widget<ElevatedButton>(
+                find.widgetWithText(ElevatedButton, 'Save Changes'),
+              )
+              .onPressed,
+          isNull,
+        );
+        fixture.current!.workspace.invalidate();
+        await tester.pumpWidget(const SizedBox.shrink());
+        await openInventory(2);
+        await editItem();
+        expect(find.textContaining('Confirmation pending'), findsOneWidget);
+        expect(fixture.client.requests, hasLength(1));
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        await tester.pageBack();
+        await tester.pumpAndSettle();
+        await tester.tap(find.byTooltip('Inventory recovery'));
+        await tester.pumpAndSettle();
+        before = source.subscriptions;
+        await tester.tap(find.text('Check outcome'));
+        await _settleMutation(tester);
+        expect(
+          find.text('The original inventory change was confirmed.'),
+          findsOneWidget,
+        );
+        await tester.tap(find.text('Close'));
+        await tester.pumpAndSettle();
+      } else {
+        expect(
+          find.text(
+            changed ? 'Item updated successfully' : 'No changes were needed.',
+          ),
+          findsOneWidget,
+        );
+      }
+      expect(source.subscriptions, before + 1);
+      expect(
+        find.byTooltip('Stock history for ${confirmed.name}'),
+        findsOneWidget,
+      );
+      expect(fixture.client.requests.map((request) => request.url.path), [
+        '/inventory/update',
+        if (lost) '/inventory/reconcile',
+      ]);
+    });
+  }
+
   testWidgets(
     'verified Edit requires an explicit updater before allocating a key',
     (tester) async {

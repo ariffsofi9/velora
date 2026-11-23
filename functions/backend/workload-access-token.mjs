@@ -12,7 +12,8 @@ const validToken = token => typeof token === 'string' &&
  * The callable returned here also accepts an optional per-caller AbortSignal
  * via accessToken({signal}). One caller cannot cancel another caller's refresh.
  */
-export function createWorkloadAccessToken({projectId, realWorker, acquire, now = Date.now, timeoutMs = 5000} = {}) {
+export function createWorkloadAccessToken({projectId, realWorker, acquire, acquireOAuth, now = Date.now,
+  timeoutMs = 5000} = {}) {
   requireBackendProject(projectId, realWorker);
   if (typeof acquire !== 'function' || (realWorker !== undefined && acquire !== realWorker.acquire) ||
       typeof now !== 'function' || !validBudget(timeoutMs)) {
@@ -38,7 +39,7 @@ export function createWorkloadAccessToken({projectId, realWorker, acquire, now =
       performance.now() + expiryReserveMs < value.monotonicUntil;
   }
 
-  function refresh(issued) {
+  function refresh(issued, settlement) {
     const controller = new AbortController();
     const {signal} = controller;
     const started = performance.now();
@@ -54,7 +55,11 @@ export function createWorkloadAccessToken({projectId, realWorker, acquire, now =
       const acquireToken = async () => {
         try {
           signal.throwIfAborted();
-          const response = await acquire({signal});
+          // RPC completion cannot prove the remote Worker finished its exchange.
+          const response = await (settlement
+            ? settlement.dispatch(() => acquireOAuth ? acquireOAuth(signal) : acquire({signal}),
+              {observable: acquireOAuth !== undefined})
+            : acquire({signal}));
           signal.throwIfAborted();
           const {access_token: token, token_type: type, expires_in: lifetime} = response ?? {};
           const completed = clock();
@@ -105,14 +110,14 @@ export function createWorkloadAccessToken({projectId, realWorker, acquire, now =
     }
   }
 
-  const accessToken = async ({signal} = {}) => {
+  const accessToken = async ({signal, settlement} = {}) => {
     try {
       if (signal !== undefined && !(signal instanceof AbortSignal)) throw unavailable();
       signal?.throwIfAborted();
       const time = clock();
       if (cached && fresh(cached, time)) return cached.token;
       cached = undefined;
-      const flight = pending ?? refresh(time);
+      const flight = pending ?? refresh(time, settlement);
       if (flight.controller.signal.aborted) throw unavailable();
       const value = await waitFor(flight, signal);
       signal?.throwIfAborted();

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:velora/logic/low_stock_policy.dart';
 import 'package:velora/widgets/dashboard/dashboard_header.dart';
 import 'package:velora/repositories/workspace_activity_repository.dart';
 import 'package:flutter/material.dart';
@@ -217,7 +219,13 @@ void main() {
     );
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('low-stock-count'))).data,
-      '5',
+      '4',
+    );
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('out-of-stock-count')))
+          .data,
+      '1',
     );
     expect(
       tester.widget<Text>(find.byKey(const ValueKey('expired-count'))).data,
@@ -229,6 +237,83 @@ void main() {
     final query = db.collections['inventory_records']!;
     expect(query.calls, isEmpty);
   });
+
+  testWidgets(
+    'dashboard uses server snapshots for stock changes and clears on denial',
+    (tester) async {
+      final updates = StreamController<List<WorkspaceInventoryDocument>>();
+      final source = DashboardInventorySource(updates.stream);
+      addTearDown(updates.close);
+      final selected = <StockAttention>[];
+
+      WorkspaceInventoryDocument item(
+        String id,
+        int quantity, {
+        bool archived = false,
+      }) => WorkspaceInventoryDocument(
+        id: id,
+        data: {
+          'name': id,
+          'category': 'General',
+          'quantity': quantity,
+          'unit': 'pcs',
+          'expiryDate': DateTime.utc(2030),
+          'createdAt': DateTime.utc(2026),
+          if (archived) ...{
+            'lifecycleState': 'archived',
+            'archivedAt': DateTime.utc(2026),
+            'archivedBy': dashboardSession.uid,
+          },
+        },
+      );
+      Future<void> check(
+        List<WorkspaceInventoryDocument> documents,
+        List<int> expected,
+      ) async {
+        updates.add(documents);
+        await tester.pump();
+        expect([
+          for (final key in [
+            'total-count',
+            'low-stock-count',
+            'out-of-stock-count',
+          ])
+            int.parse(tester.widget<Text>(find.byKey(ValueKey(key))).data!),
+        ], expected);
+      }
+
+      await tester.pumpWidget(
+        app(
+          DashboardPage(
+            workspaceSession: dashboardSession,
+            inventoryRepository: WorkspaceInventoryRepository(
+              session: dashboardSession,
+              dataSource: source,
+            ),
+            firestore: dashboardFirestore(),
+            onStockAlertTap: selected.add,
+          ),
+        ),
+      );
+      final normal = item('normal', 6);
+      await check([normal], [1, 0, 0]);
+      await check([normal, item('tracked', 5)], [2, 1, 0]);
+      await check([normal, item('tracked', 0)], [2, 0, 1]);
+      await tester.tap(find.byKey(const ValueKey('out-of-stock-count')));
+      expect(selected, [StockAttention.outOfStock]);
+      await check([normal, item('tracked', 0, archived: true)], [1, 0, 0]);
+      await check([normal, item('tracked', 0)], [2, 0, 1]);
+      await check([normal, item('tracked', 6)], [2, 0, 0]);
+      expect(source.watchedPath, 'cafes/dashboard-cafe/inventory');
+      updates.addError(
+        FirebaseException(plugin: 'cloud_firestore', code: 'permission-denied'),
+      );
+      await tester.pump();
+      expect(find.text('Inventory health unavailable'), findsOneWidget);
+      expect(find.byKey(const ValueKey('out-of-stock-count')), findsNothing);
+      expect(find.byKey(const ValueKey('total-count')), findsNothing);
+    },
+  );
 
   testWidgets('Dashboard reads only the verified cafe inventory path', (
     tester,
@@ -332,9 +417,10 @@ void main() {
             role: CafeRole.owner,
           ),
         );
+        final source = DashboardInventorySource(Stream.value(const []));
         final repository = WorkspaceInventoryRepository(
           session: invalidated ? session : dashboardSession,
-          dataSource: DashboardInventorySource(Stream.value(const [])),
+          dataSource: source,
         );
         final observer = _RouteObserver();
         await tester.pumpWidget(
@@ -349,7 +435,14 @@ void main() {
         );
         await tester.pumpAndSettle();
         final initialRoute = observer.latest;
-        if (invalidated) session.invalidate();
+        if (!invalidated) {
+          expect(source.watchedPath, isNull);
+          expect(find.text('Inventory health unavailable'), findsOneWidget);
+          expect(find.byKey(const ValueKey('total-count')), findsNothing);
+          expect(find.byType(SuggestionsPage), findsNothing);
+          return;
+        }
+        session.invalidate();
         await tester.scrollUntilVisible(find.text('AI Suggestions'), 150);
         await tester.ensureVisible(find.text('AI Suggestions'));
         await tester.tap(find.text('AI Suggestions'));

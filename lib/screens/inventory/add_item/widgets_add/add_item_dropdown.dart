@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 class AddItemDropdown extends StatelessWidget {
   final String value;
   final List<String> items;
-  final ValueChanged<String?> onChanged;
+  final ValueChanged<String?>? onChanged;
 
   const AddItemDropdown({
     super.key,

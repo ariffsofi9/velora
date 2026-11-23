@@ -12,6 +12,7 @@ import 'package:velora/screens/team/staff_invitation_page.dart';
 import 'package:velora/screens/team/team_management_page.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/services/staff_invitation_service.dart';
+import 'package:velora/services/workspace_session.dart';
 import 'package:velora/services/firebase_emulator_config.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'helpers/invitation_firebase.dart';
@@ -68,10 +69,11 @@ class _Invites implements StaffInvitations {
 
 class _Auth extends Fake implements FirebaseAuth {
   User? user;
+  final _identityChanges = StreamController<User?>.broadcast();
   @override
   User? get currentUser => user;
   @override
-  Stream<User?> authStateChanges() => const Stream.empty();
+  Stream<User?> authStateChanges() => _identityChanges.stream;
 }
 
 CafeWorkspace _ownerScope([
@@ -250,6 +252,47 @@ final _normalPolicy = AndroidPilotPolicy.parse(
 );
 
 void main() {
+  testWidgets(
+    'invitation code is hidden when the verified Owner session ends',
+    (tester) async {
+      final auth = _Auth()..user = _User();
+      final scope = _ownerScope();
+      final session = WorkspaceSession.fromVerified(scope);
+      final invitations = _CreationInvites();
+      Widget page() => MaterialApp(
+        home: StaffInvitationPage(
+          auth: auth,
+          ownerMode: true,
+          workspace: scope,
+          workspaceSession: session,
+          invitations: invitations,
+        ),
+      );
+      await tester.pumpWidget(page());
+      await tester.enterText(
+        find.byType(TextField).first,
+        'staff@example.test',
+      );
+      await tester.tap(find.text('Create invitation'));
+      await tester.pumpAndSettle();
+      expect(find.text(_creationResponse()['code']), findsOneWidget);
+      session.invalidate();
+      await tester.pumpWidget(page());
+      expect(find.text(_creationResponse()['code']), findsNothing);
+      expect(find.text('Copy one-time code'), findsNothing);
+      expect(find.byType(TextField), findsNothing);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.widgetWithText(FilledButton, 'Create invitation'),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(invitations.creates, 1);
+    },
+  );
+
   for (final invalid in [false, true]) {
     final policy = AndroidPilotPolicy.parse(
       invalid
@@ -1668,7 +1711,7 @@ void main() {
     );
   }
   testWidgets(
-    'redeem failure displays safe stage and code without provider message',
+    'expired redemption session shows sign-in guidance without provider details',
     (tester) async {
       final invites = _Invites()
         ..redeemError = StaffInvitationFailure.fromError(
@@ -1685,7 +1728,7 @@ void main() {
       await tester.tap(find.text('Redeem invitation'));
       await tester.pumpAndSettle();
       expect(
-        find.textContaining('tokenRefresh (user-token-expired)'),
+        find.text('Verify your email and sign in again before retrying.'),
         findsOneWidget,
       );
       expect(find.textContaining('PRIVATE-TOKEN'), findsNothing);

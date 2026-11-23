@@ -10,7 +10,7 @@ import '../../core/theme/app_tokens.dart';
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 import '../../services/workspace_inventory_https_transport.dart'
-    show InventoryHttpsUpdateException;
+    show HttpsWorkspaceInventory, InventoryHttpsUpdateException;
 import '../../services/workspace_inventory_update_service.dart';
 import '../../services/workspace_session.dart';
 
@@ -81,6 +81,9 @@ class _EditItemPageState extends State<EditItemPage> {
   bool _isSaving = false;
   bool _isRefreshing = false;
   bool _hasConflict = false;
+  bool _confirmationPending = false;
+  bool get _editable =>
+      !_isSaving && !_isRefreshing && !_hasConflict && !_confirmationPending;
   String? _submissionFingerprint;
   String? _idempotencyKey;
 
@@ -119,36 +122,54 @@ class _EditItemPageState extends State<EditItemPage> {
   }
 
   Future<void> _pickExpiryDate() async {
-    if (!mounted || !_current) return;
+    if (!_current || !_editable) return;
+    final first = DateTime(2020);
+    final last = DateTime(2035);
     final pickedDate = await showDatePicker(
       context: context,
       initialDate: _expiryDate,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2035),
+      firstDate: _expiryDate.isBefore(first) ? _expiryDate : first,
+      lastDate: _expiryDate.isAfter(last) ? _expiryDate : last,
     );
-    if (pickedDate != null && _current) {
+    if (pickedDate != null && _current && _editable) {
       setState(() => _expiryDate = pickedDate);
     }
   }
 
   Future<void> _saveItem() async {
-    if (!mounted || !_current) return;
+    if (!_current || !_editable) return;
     if (!_hasVerifiedContext) {
       _showMessage('Editing requires a verified workspace and inventory item.');
       return;
     }
-    if (_isSaving || _hasConflict) return;
     final updater = widget.updater;
     if (updater == null) {
       _showMessage('Secure inventory updates are unavailable.');
       return;
     }
 
-    final name = _nameController.text.trim();
-    final category = _categoryController.text.trim();
-    final imageUrl = _imageUrlController.text.trim();
+    final whitespace = RegExp(r'\s+');
+    final controls = RegExp(r'[\x00-\x1f\x7f-\x9f]');
+    final name = _nameController.text.trim().replaceAll(whitespace, ' ');
+    final category = _categoryController.text.trim().replaceAll(
+      whitespace,
+      ' ',
+    );
+    final imageUrl = _imageUrlController.text.trim().replaceAll(
+      whitespace,
+      ' ',
+    );
     if (name.isEmpty || category.isEmpty) {
       _showMessage('Item name and category are required.');
+      return;
+    }
+    if (name.length > 100 ||
+        category.length > 60 ||
+        controls.hasMatch(name) ||
+        controls.hasMatch(category)) {
+      _showMessage(
+        'Use a valid item name of up to 100 characters and a category of up to 60 characters.',
+      );
       return;
     }
     if (!_units.contains(_unit)) {
@@ -157,45 +178,55 @@ class _EditItemPageState extends State<EditItemPage> {
     }
     if (imageUrl.isNotEmpty) {
       final uri = Uri.tryParse(imageUrl);
-      if (uri == null || uri.scheme != 'https' || uri.userInfo.isNotEmpty) {
+      if (imageUrl.length > 2048 ||
+          controls.hasMatch(imageUrl) ||
+          uri == null ||
+          uri.scheme != 'https' ||
+          uri.host.isEmpty ||
+          uri.userInfo.isNotEmpty) {
         _showMessage('Image URL must be empty or use HTTPS.');
         return;
       }
     }
 
-    final draft = WorkspaceInventoryUpdateRequest(
-      idempotencyKey: 'pending-idempotency-key',
-      itemId: _item.id,
-      expectedVersion: _item.version,
-      name: name,
-      category: category,
-      unit: _unit,
-      expiryDate: _expiryDate,
-      imageUrl: imageUrl,
-    );
-    if (_submissionFingerprint != draft.fingerprint ||
-        _idempotencyKey == null) {
-      _submissionFingerprint = draft.fingerprint;
-      _idempotencyKey =
-          widget.idempotencyKeyFactory?.call() ?? _newIdempotencyKey();
-    }
-    final request = WorkspaceInventoryUpdateRequest(
-      idempotencyKey: _idempotencyKey!,
-      itemId: draft.itemId,
-      expectedVersion: draft.expectedVersion,
-      name: draft.name,
-      category: draft.category,
-      unit: draft.unit,
-      expiryDate: draft.expiryDate,
-      imageUrl: draft.imageUrl,
-    );
-
+    FocusScope.of(context).unfocus();
     setState(() => _isSaving = true);
     try {
-      await updater.updateItem(request);
+      final draft = WorkspaceInventoryUpdateRequest(
+        idempotencyKey: 'pending-idempotency-key',
+        itemId: _item.id,
+        expectedVersion: _item.version,
+        name: name,
+        category: category,
+        unit: _unit,
+        expiryDate: _expiryDate,
+        imageUrl: imageUrl,
+      );
+      if (_submissionFingerprint != draft.fingerprint ||
+          _idempotencyKey == null) {
+        _submissionFingerprint = draft.fingerprint;
+        _idempotencyKey =
+            widget.idempotencyKeyFactory?.call() ?? _newIdempotencyKey();
+      }
+      final request = WorkspaceInventoryUpdateRequest(
+        idempotencyKey: _idempotencyKey!,
+        itemId: draft.itemId,
+        expectedVersion: draft.expectedVersion,
+        name: draft.name,
+        category: draft.category,
+        unit: draft.unit,
+        expiryDate: draft.expiryDate,
+        imageUrl: draft.imageUrl,
+      );
+
+      final result = await updater.updateItem(request);
       if (!mounted || !_current) return;
       setState(() => _isSaving = false);
-      _showMessage('Item updated successfully');
+      _showMessage(
+        result.updated
+            ? 'Item updated successfully'
+            : 'No changes were needed.',
+      );
       Navigator.pop(context, true);
     } on WorkspaceInventoryUpdateException catch (error) {
       if (!mounted || !_current) return;
@@ -203,13 +234,21 @@ class _EditItemPageState extends State<EditItemPage> {
           error is InventoryHttpsUpdateException && error.outcomeUnknown;
       setState(() {
         _isSaving = false;
+        _confirmationPending =
+            outcomeUnknown &&
+            updater is HttpsWorkspaceInventory &&
+            updater.isGuarded;
         _hasConflict =
             !outcomeUnknown &&
             error.failure == WorkspaceInventoryUpdateFailure.stale;
       });
+      if (_confirmationPending) return;
       _showMessage(
         outcomeUnknown
             ? 'The item update could not be confirmed. Check inventory before another submission.'
+            : error is InventoryHttpsUpdateException &&
+                  error.transport.code == 'resource-exhausted'
+            ? 'The inventory service is busy. Try again later.'
             : _failureMessage(error.failure),
       );
     } catch (_) {
@@ -222,13 +261,16 @@ class _EditItemPageState extends State<EditItemPage> {
   }
 
   Future<void> _reloadItem() async {
-    if (!mounted || !_current) return;
+    if (!_current || !_hasConflict || _isRefreshing) return;
     final repository =
         _repository ??
         (widget.workspaceSession == null
             ? null
             : WorkspaceInventoryRepository(session: widget.workspaceSession!));
-    if (repository == null || _isRefreshing) return;
+    if (repository == null ||
+        !identical(repository.session, widget.workspaceSession)) {
+      return;
+    }
     setState(() => _isRefreshing = true);
     try {
       final items = await repository.getItems();
@@ -275,8 +317,9 @@ class _EditItemPageState extends State<EditItemPage> {
   ) => switch (failure) {
     WorkspaceInventoryUpdateFailure.invalidInput =>
       'Check the item details and try again.',
-    WorkspaceInventoryUpdateFailure.unauthenticated ||
     WorkspaceInventoryUpdateFailure.permissionDenied =>
+      'You do not have permission to edit this item.',
+    WorkspaceInventoryUpdateFailure.unauthenticated =>
       'Your workspace access could not be verified. Please sign in again.',
     WorkspaceInventoryUpdateFailure.notFound =>
       'This inventory item no longer exists.',
@@ -319,6 +362,12 @@ class _EditItemPageState extends State<EditItemPage> {
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.textSecondary),
               ),
+              if (_confirmationPending) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'Confirmation pending. Return to Inventory and open Inventory recovery.',
+                ),
+              ],
               if (_hasConflict) ...[
                 const SizedBox(height: 16),
                 Container(
@@ -394,10 +443,12 @@ class _EditItemPageState extends State<EditItemPage> {
           items: _units
               .map((unit) => DropdownMenuItem(value: unit, child: Text(unit)))
               .toList(),
-          onChanged: (value) {
-            if (!mounted || !_current) return;
-            setState(() => _unit = value ?? _unit);
-          },
+          onChanged: _editable
+              ? (value) {
+                  if (!_current || !_editable || value == null) return;
+                  setState(() => _unit = value);
+                }
+              : null,
         ),
         const SizedBox(height: 14),
         _datePicker(),
@@ -411,7 +462,7 @@ class _EditItemPageState extends State<EditItemPage> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton(
-            onPressed: _isSaving || _hasConflict ? null : _saveItem,
+            onPressed: _editable ? _saveItem : null,
             child: _isSaving
                 ? const SizedBox.square(
                     dimension: 22,
@@ -433,12 +484,13 @@ class _EditItemPageState extends State<EditItemPage> {
     IconData icon,
   ) => TextField(
     controller: controller,
+    enabled: _editable,
     decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon)),
   );
 
   Widget _datePicker() => InkWell(
     key: const ValueKey('edit-expiry-date'),
-    onTap: _pickExpiryDate,
+    onTap: _editable ? _pickExpiryDate : null,
     borderRadius: BorderRadius.circular(18),
     child: InputDecorator(
       decoration: const InputDecoration(

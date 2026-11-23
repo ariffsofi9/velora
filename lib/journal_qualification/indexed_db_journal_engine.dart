@@ -10,11 +10,12 @@ import '../services/platform_journal_store.dart';
 
 Never _unavailable() => throw const PlatformJournalFailure();
 
-/// Synthetic qualification storage only. A callback works on one bounded
+/// IndexedDB journal storage. A callback works on one bounded
 /// snapshot. A write serializes at a native compare-and-set of that snapshot.
 final class IndexedDbJournalEngine implements TransactionalJournalEngine {
   static const databaseName = 'velora-synthetic-inventory-recovery-v1';
   static const invitationDatabase = 'velora-real-staff-invitation-v1';
+  static const inventoryDatabase = 'velora-real-inventory-recovery-v1';
   static const journalStore = 'journal';
   static const receiptStore = 'synthetic_receipt';
   static const snapshotKey = 'snapshot';
@@ -32,8 +33,10 @@ final class IndexedDbJournalEngine implements TransactionalJournalEngine {
     web.IDBFactory? Function()? factory,
   }) async {
     try {
-      if ((!name.startsWith(databaseName) && name != invitationDatabase) ||
-          (name == invitationDatabase && store != journalStore) ||
+      final production =
+          name == invitationDatabase || name == inventoryDatabase;
+      if ((!name.startsWith(databaseName) && !production) ||
+          (production && store != journalStore) ||
           (store != journalStore && store != receiptStore)) {
         _unavailable();
       }
@@ -97,10 +100,21 @@ final class IndexedDbJournalEngine implements TransactionalJournalEngine {
   }
 
   Future<String> _native({String? expected, String? replacement}) async {
-    final tx = _database.transaction(
-      _storeName.toJS,
-      replacement == null ? 'readonly' : 'readwrite',
-    );
+    final strict = replacement != null && _database.name == inventoryDatabase;
+    final tx = strict
+        ? _database.transaction(
+            _storeName.toJS,
+            'readwrite',
+            web.IDBTransactionOptions(durability: 'strict'),
+          )
+        : _database.transaction(
+            _storeName.toJS,
+            replacement == null ? 'readonly' : 'readwrite',
+          );
+    if (strict && tx.durability != 'strict') {
+      tx.abort();
+      _unavailable();
+    }
     final completion = Completer<bool>();
     tx.oncomplete = ((web.Event _) => completion.complete(true)).toJS;
     tx.onabort = ((web.Event _) => completion.complete(false)).toJS;

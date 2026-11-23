@@ -5,18 +5,20 @@ class InventoryHealthCard extends StatelessWidget {
   final int total;
   final int nearExpiry;
   final int lowStock;
+  final int outOfStock;
   final bool unavailable;
   const InventoryHealthCard({
     super.key,
     this.total = 0,
     this.nearExpiry = 0,
     this.lowStock = 0,
+    this.outOfStock = 0,
     this.unavailable = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final warning = nearExpiry > 0 || lowStock > 0;
+    final warning = nearExpiry > 0 || lowStock > 0 || outOfStock > 0;
     final title = unavailable
         ? 'Inventory health unavailable'
         : total == 0
@@ -28,6 +30,8 @@ class InventoryHealthCard extends StatelessWidget {
         ? 'Inventory could not be loaded. Please try again later.'
         : total == 0
         ? 'Add your first item to start tracking stock.'
+        : outOfStock > 0
+        ? 'Review out-of-stock items and other inventory alerts.'
         : warning
         ? 'Review near-expiry and low-stock items.'
         : 'No current expiry or stock warnings.';

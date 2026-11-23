@@ -11,12 +11,14 @@ import '../../../logic/inventory_expiry_policy.dart';
 class InventoryCard extends StatelessWidget {
   final InventoryItem item;
   final VoidCallback onTap;
+  final VoidCallback? onHistory;
   final DateTime? now;
 
   const InventoryCard({
     super.key,
     required this.item,
     required this.onTap,
+    this.onHistory,
     this.now,
   });
 
@@ -83,7 +85,7 @@ class InventoryCard extends StatelessWidget {
       ),
       _ => (AppColors.success, AppColors.successSurface),
     };
-    final isLowStock = LowStockPolicy.isLowStock(item);
+    final attention = LowStockPolicy.attention(item);
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(12),
@@ -121,9 +123,9 @@ class InventoryCard extends StatelessWidget {
                       runSpacing: 6,
                       children: [
                         _tag(expiryText, expiryColor, expirySurface),
-                        if (isLowStock)
+                        if (attention != null)
                           _tag(
-                            'Low Stock',
+                            attention.label,
                             AppColors.danger,
                             AppColors.dangerSurface,
                           ),
@@ -133,11 +135,18 @@ class InventoryCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 4),
-              const Icon(
-                Icons.chevron_right,
-                color: AppColors.textSecondary,
-                size: 20,
-              ),
+              if (onHistory != null)
+                IconButton(
+                  tooltip: 'Stock history for ${item.name}',
+                  onPressed: onHistory,
+                  icon: const Icon(Icons.history_rounded),
+                )
+              else
+                const Icon(
+                  Icons.chevron_right,
+                  color: AppColors.textSecondary,
+                  size: 20,
+                ),
             ],
           ),
         ),

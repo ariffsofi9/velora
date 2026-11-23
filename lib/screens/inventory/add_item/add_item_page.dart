@@ -9,7 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../../services/workspace_inventory_create_service.dart';
 import '../../../services/workspace_inventory_https_transport.dart'
-    show InventoryHttpsCreateException;
+    show HttpsWorkspaceInventory, InventoryHttpsCreateException;
 import '../../../services/workspace_session.dart';
 
 import 'widgets_add/add_item_date_box.dart';
@@ -74,6 +74,8 @@ class _AddItemPageState extends State<AddItemPage> {
   String selectedUnit = 'kg';
   DateTime? selectedDate;
   bool isSaving = false;
+  bool _confirmationPending = false;
+  bool get _editable => !isSaving && !_confirmationPending;
   String? _submissionFingerprint;
   String? _idempotencyKey;
 
@@ -96,7 +98,7 @@ class _AddItemPageState extends State<AddItemPage> {
   }
 
   Future<void> _pickExpiryDate() async {
-    if (!mounted || !_current) return;
+    if (!_current || !_editable) return;
     final pickedDate = await showDatePicker(
       context: context,
       firstDate: DateTime.now(),
@@ -104,20 +106,19 @@ class _AddItemPageState extends State<AddItemPage> {
       initialDate: DateTime.now(),
     );
 
-    if (pickedDate != null && _current) {
+    if (pickedDate != null && _current && _editable) {
       setState(() => selectedDate = pickedDate);
     }
   }
 
   Future<void> _saveItem() async {
-    if (!mounted || !_current) return;
+    if (!_current || !_editable) return;
     if (!_hasVerifiedWorkspace) {
       _showMessage(
         'Adding items requires a verified workspace. Please sign in again.',
       );
       return;
     }
-    if (isSaving) return;
     final creator = widget.creator;
     if (creator == null) {
       _showMessage('Secure inventory updates are unavailable.');
@@ -125,10 +126,11 @@ class _AddItemPageState extends State<AddItemPage> {
     }
 
     final quantityText = quantityController.text.trim();
-    final quantity = int.tryParse(quantityText);
-    if (itemNameController.text.trim().isEmpty ||
-        quantityText.isEmpty ||
-        selectedDate == null) {
+    final name = itemNameController.text.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final quantity = RegExp(r'^[0-9]+$').hasMatch(quantityText)
+        ? int.tryParse(quantityText)
+        : null;
+    if (name.isEmpty || quantityText.isEmpty || selectedDate == null) {
       _showMessage('Please fill item name, quantity and expiry date');
       return;
     }
@@ -136,32 +138,41 @@ class _AddItemPageState extends State<AddItemPage> {
       _showMessage('Quantity must be a whole number of zero or more.');
       return;
     }
-
-    final requestWithoutKey = WorkspaceInventoryCreateRequest(
-      idempotencyKey: 'pending-idempotency-key',
-      name: itemNameController.text.trim(),
-      category: selectedCategory,
-      quantity: quantity,
-      unit: selectedUnit,
-      expiryDate: selectedDate!,
-    );
-    final fingerprint = requestWithoutKey.fingerprint;
-    if (_submissionFingerprint != fingerprint || _idempotencyKey == null) {
-      _submissionFingerprint = fingerprint;
-      _idempotencyKey =
-          widget.idempotencyKeyFactory?.call() ?? _newIdempotencyKey();
+    if (quantity > 9007199254740991) {
+      _showMessage('Quantity exceeds the supported range.');
+      return;
     }
-    final request = WorkspaceInventoryCreateRequest(
-      idempotencyKey: _idempotencyKey!,
-      name: requestWithoutKey.name,
-      category: requestWithoutKey.category,
-      quantity: requestWithoutKey.quantity,
-      unit: requestWithoutKey.unit,
-      expiryDate: requestWithoutKey.expiryDate,
-    );
+    if (name.length > 100 || RegExp(r'[\x00-\x1f\x7f-\x9f]').hasMatch(name)) {
+      _showMessage('Enter a valid item name of up to 100 characters.');
+      return;
+    }
 
+    FocusScope.of(context).unfocus();
     setState(() => isSaving = true);
     try {
+      final requestWithoutKey = WorkspaceInventoryCreateRequest(
+        idempotencyKey: 'pending-idempotency-key',
+        name: name,
+        category: selectedCategory,
+        quantity: quantity,
+        unit: selectedUnit,
+        expiryDate: selectedDate!,
+      );
+      final fingerprint = requestWithoutKey.fingerprint;
+      if (_submissionFingerprint != fingerprint || _idempotencyKey == null) {
+        _submissionFingerprint = fingerprint;
+        _idempotencyKey =
+            widget.idempotencyKeyFactory?.call() ?? _newIdempotencyKey();
+      }
+      final request = WorkspaceInventoryCreateRequest(
+        idempotencyKey: _idempotencyKey!,
+        name: requestWithoutKey.name,
+        category: requestWithoutKey.category,
+        quantity: requestWithoutKey.quantity,
+        unit: requestWithoutKey.unit,
+        expiryDate: requestWithoutKey.expiryDate,
+      );
+
       await creator.createItem(request);
       if (!mounted || !_current) return;
       setState(() => isSaving = false);
@@ -169,10 +180,20 @@ class _AddItemPageState extends State<AddItemPage> {
       Navigator.pop(context, true);
     } on WorkspaceInventoryCreateException catch (error) {
       if (!mounted || !_current) return;
-      setState(() => isSaving = false);
+      final unknown =
+          error is InventoryHttpsCreateException && error.outcomeUnknown;
+      setState(() {
+        isSaving = false;
+        _confirmationPending =
+            unknown && creator is HttpsWorkspaceInventory && creator.isGuarded;
+      });
+      if (_confirmationPending) return;
       _showMessage(
-        error is InventoryHttpsCreateException && error.outcomeUnknown
+        unknown
             ? 'Item creation could not be confirmed. Check your connection and inventory before another submission.'
+            : error is InventoryHttpsCreateException &&
+                  error.transport.code == 'resource-exhausted'
+            ? 'The inventory service is busy. Try again later.'
             : _failureMessage(error.failure),
       );
     } catch (_) {
@@ -203,8 +224,9 @@ class _AddItemPageState extends State<AddItemPage> {
   ) => switch (failure) {
     WorkspaceInventoryCreateFailure.invalidInput =>
       'Check the item details and try again.',
-    WorkspaceInventoryCreateFailure.unauthenticated ||
     WorkspaceInventoryCreateFailure.permissionDenied =>
+      'You do not have permission to add an item to this workspace.',
+    WorkspaceInventoryCreateFailure.unauthenticated =>
       'Your workspace access could not be verified. Please sign in again.',
     WorkspaceInventoryCreateFailure.conflict =>
       'This request conflicts with an earlier submission. Change the item and retry.',
@@ -238,21 +260,30 @@ class _AddItemPageState extends State<AddItemPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const AddItemHeader(),
+              if (_confirmationPending) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Confirmation pending. Return to Inventory and open Inventory recovery.',
+                ),
+              ],
               const SizedBox(height: 20),
               const AddItemTextFieldLabel(text: 'Item Name'),
               AddItemTextField(
                 controller: itemNameController,
                 hint: 'e.g. Chicken Breast',
+                enabled: _editable,
               ),
               const SizedBox(height: 16),
               const AddItemTextFieldLabel(text: 'Category'),
               AddItemDropdown(
                 value: selectedCategory,
                 items: categories,
-                onChanged: (value) {
-                  if (!mounted || !_current) return;
-                  setState(() => selectedCategory = value!);
-                },
+                onChanged: _editable
+                    ? (value) {
+                        if (!_current || !_editable || value == null) return;
+                        setState(() => selectedCategory = value);
+                      }
+                    : null,
               ),
               const SizedBox(height: 16),
               const AddItemTextFieldLabel(text: 'Quantity'),
@@ -263,6 +294,7 @@ class _AddItemPageState extends State<AddItemPage> {
                       controller: quantityController,
                       hint: '0',
                       keyboardType: TextInputType.number,
+                      enabled: _editable,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -271,10 +303,14 @@ class _AddItemPageState extends State<AddItemPage> {
                     child: AddItemDropdown(
                       value: selectedUnit,
                       items: units,
-                      onChanged: (value) {
-                        if (!mounted || !_current) return;
-                        setState(() => selectedUnit = value!);
-                      },
+                      onChanged: _editable
+                          ? (value) {
+                              if (!_current || !_editable || value == null) {
+                                return;
+                              }
+                              setState(() => selectedUnit = value);
+                            }
+                          : null,
                     ),
                   ),
                 ],
@@ -284,10 +320,15 @@ class _AddItemPageState extends State<AddItemPage> {
               AddItemDateBox(
                 expiryText: expiryText,
                 selectedDate: selectedDate,
+                enabled: _editable,
                 onTap: _pickExpiryDate,
               ),
               const SizedBox(height: 24),
-              AddItemSaveButton(isSaving: isSaving, onTap: _saveItem),
+              AddItemSaveButton(
+                isSaving: isSaving,
+                enabled: _editable,
+                onTap: _saveItem,
+              ),
               const SizedBox(height: 12),
             ],
           ),

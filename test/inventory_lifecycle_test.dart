@@ -8,13 +8,20 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:velora/models/inventory_item.dart';
+import 'package:velora/models/inventory_movement.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/models/workspace_activity.dart';
 import 'package:velora/repositories/workspace_inventory_repository.dart';
+import 'package:velora/repositories/workspace_inventory_movement_repository.dart';
+import 'package:velora/screens/inventory/inventory_page.dart';
 import 'package:velora/screens/inventory/widgets_inventory/inventory_lifecycle_action.dart';
 import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_inventory_lifecycle_service.dart';
 import 'package:velora/services/workspace_session.dart';
+
+import 'inventory_movement_history_test.dart' show movement;
+import 'platform_journal_store_test.dart' as journal;
+import 'workspace_inventory_https_transport_test.dart' as transport;
 
 Map<String, dynamic> data({String? lifecycle}) {
   final result = <String, dynamic>{
@@ -103,11 +110,36 @@ Future<void> confirmLifecycle(WidgetTester tester, String buttonKey) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _settleMutation(WidgetTester tester) async {
+  // Allow stream cleanup before advancing the fake animation clock.
+  for (var turn = 0; turn < 3; turn++) {
+    await tester.pump();
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+  }
+  await tester.pumpAndSettle();
+}
+
+class _LifecycleHistory implements WorkspaceInventoryMovementReader {
+  final calls = <String>[];
+
+  @override
+  Future<WorkspaceMovementPage> getItemMovements(
+    String itemId, {
+    WorkspaceMovementCursor? cursor,
+  }) async {
+    calls.add(itemId);
+    return WorkspaceMovementPage(
+      movements: [movement('original', InventoryMovementType.initialStock)],
+    );
+  }
+}
+
 Future<void> pumpLifecycle(
   WidgetTester tester, {
   required bool archived,
   required WorkspaceSession workspace,
   required VoidCallback onChanged,
+  VoidCallback? onReload,
   WorkspaceInventoryLifecycleManager? manager,
 }) => tester.pumpWidget(
   MaterialApp(
@@ -120,6 +152,7 @@ Future<void> pumpLifecycle(
         workspaceSession: workspace,
         manager: manager,
         onChanged: onChanged,
+        onReload: onReload,
       ),
     ),
   ),
@@ -155,6 +188,208 @@ HttpsWorkspaceInventory httpsManager({
 }
 
 void main() {
+  for (final lost in [false, true]) {
+    testWidgets(
+      'REAL guarded Archive and Restore preserve history, lost=$lost',
+      (tester) async {
+        const project = HttpsWorkspaceInventory.realProject;
+        const itemId = 'item-a';
+        final history = _LifecycleHistory();
+        final source = Source([
+          WorkspaceInventoryDocument(id: itemId, data: data()),
+        ]);
+        final fixture = transport.Fixture();
+        addTearDown(fixture.close);
+        final engine = journal.FakeTransactionalJournalEngine();
+        final store = journal.store(engine);
+        final writes = <Map<String, dynamic>>[];
+        Map<String, Object> result = {};
+        void publish() {
+          source.documents[0] = WorkspaceInventoryDocument(
+            id: itemId,
+            data: {
+              ...data(lifecycle: result['lifecycleState'] as String),
+              'version': result['version'],
+            },
+          );
+        }
+
+        fixture.client = transport.FakeClient((sent) async {
+          final payload =
+              jsonDecode((sent as http.Request).body) as Map<String, dynamic>;
+          if (sent.url.path == '/inventory/reconcile') {
+            expect(payload, {'operation': 'lifecycle', 'request': writes.last});
+            publish();
+            return transport.response({'state': 'committed', 'result': result});
+          }
+          expect(sent.url.path, '/inventory/lifecycle');
+          final archive = writes.isEmpty;
+          expect(payload, {
+            'idempotencyKey': payload['idempotencyKey'],
+            'itemId': itemId,
+            'action': archive ? 'archive' : 'restore',
+            'expectedVersion': archive ? 2 : 3,
+            'expectedCafeId': 'cafe-a',
+            'expectedMembershipGeneration': 3,
+          });
+          final key = jsonEncode([
+            project,
+            'staff',
+            'lifecycle',
+            payload['idempotencyKey'],
+          ]);
+          expect(
+            (await store.mutations.read(key) as Map)['state'],
+            'dispatched',
+          );
+          writes.add(payload);
+          result = {
+            'cafeId': 'cafe-a',
+            'itemId': itemId,
+            'lifecycleState': archive ? 'archived' : 'active',
+            'version': archive ? 3 : 4,
+            'changed': true,
+          };
+          if (lost) throw http.ClientException('synthetic lost response');
+          publish();
+          return transport.response(result);
+        });
+
+        var revision = 0;
+        Future<void> openInventory() async {
+          final workspace = transport.workspace(
+            cafe: 'cafe-a',
+            uid: 'staff',
+            generation: 3,
+          );
+          fixture.current = transport.snapshot(
+            workspace,
+            uid: 'staff',
+            project: project,
+            revision: ++revision,
+          );
+          await tester.pumpWidget(
+            MaterialApp(
+              home: InventoryPage(
+                workspaceSession: workspace,
+                repository: WorkspaceInventoryRepository(
+                  session: workspace,
+                  dataSource: source,
+                ),
+                lifecycleManager: fixture.realAdapter(journal.store(engine)),
+                movementReader: history,
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+        }
+
+        Future<void> checkHistory() async {
+          await tester.tap(find.byTooltip('Stock history for Milk'));
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const ValueKey('movement-original')),
+            findsOneWidget,
+          );
+          await tester.pageBack();
+          await tester.pumpAndSettle();
+        }
+
+        Future<void> act(bool archive) async {
+          await tester.tap(
+            archive
+                ? find.text('Milk')
+                : find.byKey(const ValueKey('archived-item-a')),
+          );
+          await tester.pumpAndSettle();
+          final action = find.byKey(
+            ValueKey(archive ? 'archive-item' : 'restore-item'),
+          );
+          await tester.scrollUntilVisible(action, 160);
+          await tester.tap(action);
+          await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const ValueKey('lifecycle-confirm')));
+          await _settleMutation(tester);
+        }
+
+        Future<void> openArchived() async {
+          await tester.tap(find.byTooltip('Archived Items'));
+          await tester.pumpAndSettle();
+        }
+
+        Future<void> recover(bool archive) async {
+          expect(find.textContaining('Confirmation pending'), findsOneWidget);
+          fixture.current!.workspace.invalidate();
+          await tester.pumpWidget(const SizedBox.shrink());
+          await openInventory();
+          if (!archive) await openArchived();
+          final before = fixture.client.requests.length;
+          await act(archive);
+          expect(find.textContaining('Confirmation pending'), findsOneWidget);
+          expect(fixture.client.requests, hasLength(before));
+          await tester.pageBack();
+          await tester.pumpAndSettle();
+          if (!archive) {
+            await tester.pageBack();
+            await tester.pumpAndSettle();
+          }
+          await tester.tap(find.byTooltip('Inventory recovery'));
+          await tester.pumpAndSettle();
+          await tester.tap(find.text('Check outcome'));
+          await _settleMutation(tester);
+          expect(
+            find.text('The original inventory change was confirmed.'),
+            findsOneWidget,
+          );
+          await tester.tap(find.text('Close'));
+          await tester.pumpAndSettle();
+        }
+
+        await openInventory();
+        await checkHistory();
+        await act(true);
+        if (lost) {
+          await recover(true);
+        } else {
+          expect(find.text('Item archived.'), findsOneWidget);
+          tester
+              .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+              .clearSnackBars();
+          await tester.pumpAndSettle();
+        }
+        expect(find.byTooltip('Stock history for Milk'), findsNothing);
+        await openArchived();
+        expect(find.byKey(const ValueKey('archived-item-a')), findsOneWidget);
+        await checkHistory();
+        await act(false);
+        if (lost) {
+          await recover(false);
+        } else {
+          expect(find.byKey(const ValueKey('archived-empty')), findsOneWidget);
+          await tester.pageBack();
+          await tester.pumpAndSettle();
+        }
+        await checkHistory();
+        await openArchived();
+        expect(find.byKey(const ValueKey('archived-empty')), findsOneWidget);
+        expect(history.calls, [itemId, itemId, itemId]);
+        expect(source.documents.single.id, itemId);
+        expect(source.documents.single.data['quantity'], 4);
+        expect(writes, hasLength(2));
+        expect(
+          writes.first['idempotencyKey'],
+          isNot(writes.last['idempotencyKey']),
+        );
+        expect(fixture.client.requests.map((request) => request.url.path), [
+          '/inventory/lifecycle',
+          if (lost) '/inventory/reconcile',
+          '/inventory/lifecycle',
+          if (lost) '/inventory/reconcile',
+        ]);
+      },
+    );
+  }
+
   for (final archived in [false, true]) {
     testWidgets(
       'lifecycle archived=$archived is unavailable without an explicit manager',
@@ -303,11 +538,41 @@ void main() {
       expect(dispatches, 0);
       expect(changed, 0);
       expect(
-        find.text('You no longer have permission to change this item.'),
+        find.text('Your session could not be verified. Please sign in again.'),
         findsOneWidget,
       );
     },
   );
+
+  testWidgets('stale lifecycle requires a reload before another action', (
+    tester,
+  ) async {
+    final client = MockClient(
+      (_) async => http.Response(
+        '{"error":"aborted"}',
+        409,
+        headers: {'content-type': 'application/json'},
+      ),
+    );
+    addTearDown(client.close);
+    var reloads = 0;
+    await pumpLifecycle(
+      tester,
+      archived: false,
+      workspace: session,
+      manager: httpsManager(
+        workspace: session,
+        client: client,
+        idToken: (_) async => 'fixture.id.token',
+      ),
+      onChanged: () => fail('Stale transition cannot report success'),
+      onReload: () => reloads++,
+    );
+    await confirmLifecycle(tester, 'archive-item');
+    expect(find.byKey(const ValueKey('archive-item')), findsNothing);
+    await tester.tap(find.text('Reload Inventory List'));
+    expect(reloads, 1);
+  });
 
   testWidgets('unknown lifecycle outcome has no automatic redispatch', (
     tester,

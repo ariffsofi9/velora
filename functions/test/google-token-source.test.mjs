@@ -276,7 +276,11 @@ test('local Workers runtime calls the named entrypoint over a private Service Bi
       }};`,
       serviceBindings: {SOURCE: {name: 'broker', entrypoint: 'GoogleTokenSource'}},
       outboundService: () => new Response(null, {status: 403})},
-    {name: 'broker', modules: true, compatibilityDate: '2026-06-11', script: readFileSync(workerFile, 'utf8'),
+    {name: 'broker', modulesRoot: fileURLToPath(new URL('..', import.meta.url)), modules: [
+      {type: 'ESModule', path: fileURLToPath(workerFile), contents: readFileSync(workerFile, 'utf8')},
+      {type: 'ESModule', path: fileURLToPath(new URL('../backend/pre-auth-settlement.mjs', import.meta.url)),
+        contents: readFileSync(new URL('../backend/pre-auth-settlement.mjs', import.meta.url), 'utf8')},
+    ], compatibilityDate: '2026-06-11',
       bindings: {VELORA_GOOGLE_SERVICE_ACCOUNT_KEY: JSON.stringify({...credential, client_email: email})},
       async outboundService(request) {
         requests.push({url: request.url, method: request.method, body: await request.text()});

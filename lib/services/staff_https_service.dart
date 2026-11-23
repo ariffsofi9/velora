@@ -384,6 +384,17 @@ class StaffHttpsService implements PagedTeamMembers {
       );
     } on StaffHttpsException {
       rethrow;
+    } on FormatException {
+      throw const StaffHttpsException(
+        'invalid-roster-response',
+        outcomeUnknown: false,
+      );
+    } on StateError {
+      // The shared cursor decoder rejects malformed pagination metadata.
+      throw const StaffHttpsException(
+        'invalid-roster-response',
+        outcomeUnknown: false,
+      );
     } catch (_) {
       throw const StaffHttpsException('unavailable', outcomeUnknown: false);
     }
@@ -591,6 +602,12 @@ class StaffHttpsService implements PagedTeamMembers {
           outcomeUnknown: mutation,
         );
       }
+      if (!mutation && response.statusCode >= 500) {
+        throw const StaffHttpsException(
+          'backend-unavailable',
+          outcomeUnknown: false,
+        );
+      }
       if ((response.contentLength ?? 0) > maxResponseBytes ||
           !RegExp(
             r'^application/json(?:\s*;\s*charset=utf-8)?$',
@@ -633,6 +650,7 @@ class StaffHttpsService implements PagedTeamMembers {
           : StaffHttpsException(switch (e) {
               TimeoutException() => 'deadline-exceeded',
               http.ClientException() when !mutation => 'network-unavailable',
+              FormatException() when !mutation => 'invalid-roster-response',
               _ => 'unavailable',
             }, outcomeUnknown: mutation && dispatched);
     }

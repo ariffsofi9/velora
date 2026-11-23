@@ -13,7 +13,7 @@ final _asciiKey = RegExp(r'^[!-~]+$');
 
 Never _unavailable() => throw const PlatformJournalFailure();
 
-/// Offline Android qualification adapter. The caller owns the verified session.
+/// Android journal adapter. The caller owns the verified session.
 /// A read-only callback serializes at snapshot time. A write callback serializes
 /// at commit only if no writer changed the partition since that snapshot.
 final class AndroidSqliteJournalEngine implements TransactionalJournalEngine {
@@ -21,24 +21,34 @@ final class AndroidSqliteJournalEngine implements TransactionalJournalEngine {
   static const projectId = 'velora-spark-test';
 
   final WorkspaceSession workspace;
+  final String firebaseProjectId;
   final MethodChannel _channel;
 
   AndroidSqliteJournalEngine({
     required this.workspace,
+    this.firebaseProjectId = projectId,
     MethodChannel channel = const MethodChannel(channelName),
   }) : _channel = channel;
+
+  Future<String> sha256(String input) async {
+    final digest = await _channel.invokeMethod<String>('sha256', input);
+    if (digest == null) _unavailable();
+    return digest;
+  }
 
   @override
   Future<T> transaction<T>(
     Future<T> Function(JournalStorageTransaction tx) action,
   ) async {
     try {
-      if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      if (kIsWeb ||
+          defaultTargetPlatform != TargetPlatform.android ||
+          ![projectId, 'velora-73222'].contains(firebaseProjectId)) {
         _unavailable();
       }
       workspace.requireActive();
       final scope = {
-        'projectId': projectId,
+        'projectId': firebaseProjectId,
         'uid': workspace.uid,
         'cafeId': workspace.cafeId,
       };
@@ -61,7 +71,7 @@ final class AndroidSqliteJournalEngine implements TransactionalJournalEngine {
       String segment(String value) =>
           base64Url.encode(utf8.encode(value)).replaceAll('=', '');
       final prefix =
-          'journal/1/${segment(projectId)}/${segment(workspace.uid)}/';
+          'journal/1/${segment(firebaseProjectId)}/${segment(workspace.uid)}/';
       final tx = _Snapshot(prefix);
       for (final entry in rows.entries) {
         tx._add(entry.key, entry.value);

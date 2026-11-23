@@ -15,9 +15,9 @@ class WorkspaceActivityDocument {
 }
 
 class WorkspaceActivityCursor {
-  final String _cafeId;
+  final WorkspaceSession _session;
   final Object _token;
-  const WorkspaceActivityCursor._(this._cafeId, this._token);
+  const WorkspaceActivityCursor._(this._session, this._token);
 }
 
 class WorkspaceActivityPage {
@@ -102,12 +102,12 @@ class WorkspaceActivityRepository implements WorkspaceActivityReader {
   Future<WorkspaceActivityPage> getActivities({
     WorkspaceActivityCursor? cursor,
   }) async {
-    if (cursor != null && cursor._cafeId != session.cafeId) {
+    if (cursor != null && !identical(cursor._session, session)) {
       throw const WorkspaceActivityException(
         WorkspaceActivityFailure.invalidData,
       );
     }
-    session.requireActive();
+    _requireActive();
     try {
       final documents = await _dataSource.fetchPage(
         path: collectionPath,
@@ -115,7 +115,7 @@ class WorkspaceActivityRepository implements WorkspaceActivityReader {
         descending: true,
         startAfter: cursor?._token,
       );
-      session.requireActive();
+      _requireActive();
       final activities = documents
           .map((document) {
             final activity = WorkspaceActivity.fromMap(
@@ -131,10 +131,7 @@ class WorkspaceActivityRepository implements WorkspaceActivityReader {
       return WorkspaceActivityPage(
         activities: activities,
         nextCursor: documents.length == pageSize
-            ? WorkspaceActivityCursor._(
-                session.cafeId,
-                documents.last.cursorToken,
-              )
+            ? WorkspaceActivityCursor._(session, documents.last.cursorToken)
             : null,
       );
     } on FirebaseException catch (error) {
@@ -152,6 +149,14 @@ class WorkspaceActivityRepository implements WorkspaceActivityReader {
     } catch (_) {
       throw const WorkspaceActivityException(
         WorkspaceActivityFailure.unavailable,
+      );
+    }
+  }
+
+  void _requireActive() {
+    if (!session.isActive) {
+      throw const WorkspaceActivityException(
+        WorkspaceActivityFailure.permissionDenied,
       );
     }
   }

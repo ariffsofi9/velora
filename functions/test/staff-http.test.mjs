@@ -9,7 +9,7 @@ import fakes from './helpers/shared-backend-fakes.cjs';
 
 globalThis.fetch = () => { throw Error('Unexpected network'); };
 const projectId = 'velora-spark-test';
-function fixture({actorGeneration = 0, targetGeneration = 0, ...overrides} = {}) {
+function fixture({actorGeneration = 0, targetGeneration = 0, ownerOnly = false, ...overrides} = {}) {
   const identity = fakes.fixture(), seed = identity.store.snapshot();
   for (const uid of ['owner', 'staff']) {
     seed[`users/${uid}`] = profile(uid);
@@ -17,6 +17,11 @@ function fixture({actorGeneration = 0, targetGeneration = 0, ...overrides} = {})
       seed[path].membershipGeneration = uid === 'owner' ? actorGeneration : targetGeneration;
       seed[path].createdAt = new Date(identity.now());
     }
+  }
+  if (ownerOnly) {
+    delete seed['user_cafe_memberships/staff'];
+    delete seed['cafes/cafe/members/staff'];
+    delete seed['users/staff'];
   }
   const fake = createRestFake(seed), http = createGoogleHttp({projectId, transport: fake.transport});
   const store = createFirestoreStore({projectId, http, sleep: async () => {},
@@ -47,6 +52,15 @@ function fixture({actorGeneration = 0, targetGeneration = 0, ...overrides} = {})
 const commits = f => f.fake.calls.filter(call => call.method === 'commit');
 const profile = uid => ({username: uid, email: `${uid}@example.test`, role: 'owner', photoUrl: '',
   createdAt: new Date(0), updatedAt: new Date(0)});
+
+test('an Owner workspace with zero Staff returns the canonical Owner-only roster', async () => {
+  const f = fixture({ownerOnly: true}), before = f.fake.snapshot();
+  const result = await f.call();
+  assert.deepEqual(result, {status: 200, body: {cafeId: 'cafe', viewerRole: 'owner',
+    members: [{uid: 'owner', role: 'owner', name: 'owner', email: 'owner@example.test'}]}});
+  assert.deepEqual(f.lookups, ['owner']);
+  assert.deepEqual(f.fake.snapshot(), before);
+});
 
 test('requires project-bound accounts and compatible store without I/O', () => {
   const f = fixture(); assert.equal(f.fake.calls.length, 0);

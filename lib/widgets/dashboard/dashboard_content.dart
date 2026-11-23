@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../logic/low_stock_policy.dart';
 import 'dashboard_quick_action_card.dart';
 import 'dashboard_style.dart';
 import 'inventory_overview.dart';
@@ -14,12 +15,14 @@ class DashboardContent extends StatelessWidget {
   final int totalItems;
   final int nearExpiry;
   final int lowStock;
+  final int outOfStock;
   final Widget notificationBell;
   final Widget recentActivity;
   final VoidCallback onAddTap;
   final VoidCallback onInventoryTap;
   final VoidCallback onSuggestionTap;
   final VoidCallback onAlertTap;
+  final ValueChanged<StockAttention>? onStockAlertTap;
   final VoidCallback? onStockInTap;
   final VoidCallback? onStockOutTap;
   final bool showInventoryHealth;
@@ -31,12 +34,14 @@ class DashboardContent extends StatelessWidget {
     required this.totalItems,
     required this.nearExpiry,
     required this.lowStock,
+    this.outOfStock = 0,
     required this.notificationBell,
     required this.recentActivity,
     required this.onAddTap,
     required this.onInventoryTap,
     required this.onSuggestionTap,
     required this.onAlertTap,
+    this.onStockAlertTap,
     this.onStockInTap,
     this.onStockOutTap,
     this.showInventoryHealth = true,
@@ -73,8 +78,10 @@ class DashboardContent extends StatelessWidget {
                   total: totalItems,
                   nearExpiry: nearExpiry,
                   lowStock: lowStock,
+                  outOfStock: outOfStock,
                   expired: expired,
                   onTap: onInventoryTap,
+                  onStockTap: onStockAlertTap,
                 ),
                 if (showInventoryHealth) ...[
                   const SizedBox(height: 16),
@@ -82,6 +89,7 @@ class DashboardContent extends StatelessWidget {
                     total: totalItems,
                     nearExpiry: nearExpiry,
                     lowStock: lowStock,
+                    outOfStock: outOfStock,
                   ),
                 ],
                 const SizedBox(height: 24),

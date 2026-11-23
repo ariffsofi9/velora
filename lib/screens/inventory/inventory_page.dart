@@ -17,6 +17,7 @@ import '../../services/inventory_csv_export_service.dart';
 import 'add_item/add_item_page.dart';
 import 'archived_items_page.dart';
 import 'item_details_page.dart';
+import 'stock/stock_history_page.dart';
 import 'utils_inventory/inventory_sort_helper.dart';
 import 'widgets_inventory/inventory_card.dart';
 import 'widgets_inventory/inventory_empty_state.dart';
@@ -126,16 +127,22 @@ class _InventoryPageState extends State<InventoryPage> {
       identical(_repository.session, widget.workspaceSession);
 
   HttpsWorkspaceInventory? get _guardedInventory {
-    final creator = widget.inventoryCreator;
-    return _hasVerifiedContext &&
-            creator is HttpsWorkspaceInventory &&
-            creator.isGuarded &&
-            identical(
-              creator.currentSession()?.workspace,
-              widget.workspaceSession,
-            )
-        ? creator
-        : null;
+    if (!_hasVerifiedContext) return null;
+    for (final adapter in [
+      widget.stockAdjuster,
+      widget.inventoryCreator,
+      widget.inventoryUpdater,
+      widget.lifecycleManager,
+    ].whereType<HttpsWorkspaceInventory>()) {
+      if (adapter.isGuarded &&
+          identical(
+            adapter.currentSession()?.workspace,
+            widget.workspaceSession,
+          )) {
+        return adapter;
+      }
+    }
+    return null;
   }
 
   bool _isRecoveryCurrent(_InventoryRecovery recovery) =>
@@ -203,7 +210,10 @@ class _InventoryPageState extends State<InventoryPage> {
     PendingMutationOperation pending,
   ) async {
     if (!_isRecoveryCurrent(recovery) || recovery.busy) return;
-    setState(() => recovery.busy = true);
+    setState(() {
+      recovery.busy = true;
+      recovery.message = 'Reconciling the original inventory change…';
+    });
     try {
       final result = await recovery.transport.reconcile(pending);
       if (!_isRecoveryCurrent(recovery)) return;
@@ -270,7 +280,9 @@ class _InventoryPageState extends State<InventoryPage> {
                         : 'Restore item',
                   _ => 'Inventory change',
                 }),
-                subtitle: switch (pending.request['itemId']) {
+                subtitle: switch (pending.request[pending.operation == 'create'
+                    ? 'name'
+                    : 'itemId']) {
                   final String itemId => Text(
                     itemId,
                     maxLines: 1,
@@ -352,31 +364,39 @@ class _InventoryPageState extends State<InventoryPage> {
     });
   }
 
-  void _goToAddItem() {
+  Future<void> _goToAddItem() async {
     if (!_requireVerifiedContext()) return;
-    if (widget.inventoryCreator == null) {
+    final creator = widget.inventoryCreator;
+    if (creator == null) {
       _showMutationsUnavailable();
       return;
     }
-    Navigator.push(
+    final workspace = widget.workspaceSession;
+    final confirmed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
-        builder: (_) => AddItemPage(
-          workspaceSession: widget.workspaceSession,
-          creator: widget.inventoryCreator,
-        ),
+        builder: (_) =>
+            AddItemPage(workspaceSession: workspace, creator: creator),
       ),
     );
+    if (confirmed == true &&
+        mounted &&
+        _hasVerifiedContext &&
+        identical(workspace, widget.workspaceSession) &&
+        identical(creator, widget.inventoryCreator)) {
+      _retry();
+    }
   }
 
-  void _goToDetails(InventoryItem item) {
+  Future<void> _goToDetails(InventoryItem item) async {
     if (!_requireVerifiedContext()) return;
-    Navigator.push(
+    final workspace = widget.workspaceSession;
+    final changed = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (_) => ItemDetailsPage(
           item: item,
-          workspaceSession: widget.workspaceSession,
+          workspaceSession: workspace,
           repository: _repository,
           updater: widget.inventoryUpdater,
           stockAdjuster: widget.stockAdjuster,
@@ -385,17 +405,50 @@ class _InventoryPageState extends State<InventoryPage> {
         ),
       ),
     );
+    if (changed == true &&
+        mounted &&
+        _hasVerifiedContext &&
+        identical(workspace, widget.workspaceSession)) {
+      _retry();
+    }
   }
 
   void _goToArchivedItems() {
     if (!_requireVerifiedContext()) return;
+    final workspace = widget.workspaceSession;
+    final repository = _repository;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => ArchivedItemsPage(
-          workspaceSession: widget.workspaceSession,
-          repository: _repository,
+          workspaceSession: workspace,
+          repository: repository,
           lifecycleManager: widget.lifecycleManager,
+          movementReader: widget.movementReader,
+          onRefresh: () {
+            if (mounted &&
+                _hasVerifiedContext &&
+                identical(widget.workspaceSession, workspace) &&
+                identical(_repository, repository)) {
+              _retry();
+            }
+          },
+        ),
+      ),
+    );
+  }
+
+  void _goToStockHistory(InventoryItem item) {
+    if (!_requireVerifiedContext()) return;
+    final workspace = widget.workspaceSession;
+    final reader = widget.movementReader;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StockHistoryPage(
+          item: item,
+          workspaceSession: workspace,
+          movementReader: reader,
         ),
       ),
     );
@@ -707,6 +760,7 @@ class _InventoryPageState extends State<InventoryPage> {
                           return InventoryCard(
                             item: item,
                             onTap: () => _goToDetails(item),
+                            onHistory: () => _goToStockHistory(item),
                           );
                         },
                       ),

@@ -5,12 +5,14 @@ class AddItemDateBox extends StatelessWidget {
   final String expiryText;
   final DateTime? selectedDate;
   final VoidCallback onTap;
+  final bool enabled;
 
   const AddItemDateBox({
     super.key,
     required this.expiryText,
     required this.selectedDate,
     required this.onTap,
+    this.enabled = true,
   });
 
   @override
@@ -18,7 +20,7 @@ class AddItemDateBox extends StatelessWidget {
     final isEmpty = selectedDate == null;
 
     return InkWell(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(14),
       child: Container(
         height: 52,

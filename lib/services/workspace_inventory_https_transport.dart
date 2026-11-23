@@ -89,7 +89,7 @@ bool _identifier(Object? value) =>
 Never _invalidResponse() =>
     throw const InventoryHttpsFailure('invalid-response', outcomeUnknown: true);
 
-/// Unwired, provider-independent adapters for all four existing interfaces.
+/// Provider-independent adapters for the existing inventory interfaces.
 /// The caller owns client lifetime and must inject a client honoring redirects
 /// disabled on Request (no retrying/redirecting wrapper). No Firebase SDK access,
 /// live client construction, privileged writes, or automatic mutation retries.
@@ -100,6 +100,9 @@ class HttpsWorkspaceInventory
         WorkspaceInventoryUpdater,
         WorkspaceInventoryStockAdjuster,
         WorkspaceInventoryLifecycleManager {
+  static const realProject = 'velora-73222';
+  static const realHost = 'rest-api.velora-smart-inventory.workers.dev';
+
   final AndroidPilotPolicy pilotPolicy;
   final Uri endpoint;
   final String projectId;
@@ -140,7 +143,8 @@ class HttpsWorkspaceInventory
                timeout: guardedStore.timeout,
              ) {
     if ((guardedStore != null &&
-            (journal != null || projectId != 'velora-spark-test')) ||
+            (journal != null ||
+                (projectId == realProject && endpoint.host != realHost))) ||
         !['velora-spark-test', 'velora-73222'].contains(projectId) ||
         endpointProjectId != projectId ||
         endpoint.scheme != 'https' ||

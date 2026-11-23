@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show appFlavor;
 import '../../../services/android_pilot_policy.dart';
@@ -8,7 +10,7 @@ import '../../../core/theme/app_tokens.dart';
 import '../../../models/inventory_item.dart';
 import '../../../repositories/workspace_inventory_repository.dart';
 import '../../../services/workspace_inventory_https_transport.dart'
-    show InventoryHttpsStockException;
+    show HttpsWorkspaceInventory, InventoryHttpsStockException;
 import '../../../services/workspace_inventory_stock_service.dart';
 import '../../../services/workspace_session.dart';
 
@@ -124,12 +126,11 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   }
 
   static const maxSafeInteger = 9007199254740991;
-  static int _keySequence = 0;
   final quantityController = TextEditingController();
   final reasonController = TextEditingController();
   late InventoryItem item;
   bool touched = false, saving = false, refreshing = false;
-  bool needsReload = false, completed = false;
+  bool needsReload = false, completed = false, pending = false;
   String? fingerprint, idempotencyKey;
 
   bool get stockOut => widget.type == StockAdjustmentType.stockOut;
@@ -174,9 +175,12 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
   }
 
   String newKey() {
-    _keySequence = (_keySequence + 1) & 0x7fffffff;
-    return '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}-'
-        '${_keySequence.toRadixString(36).padLeft(6, '0')}-stock';
+    final random = Random.secure();
+    final nonce = List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+    return 'stock-$nonce';
   }
 
   Future<void> submit() async {
@@ -184,7 +188,13 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
     if (!_current || adjuster == null) return;
     setState(() => touched = true);
     if (!verified) return message('A verified workspace item is required.');
-    if (saving || needsReload || completed || quantityError != null) return;
+    if (saving ||
+        pending ||
+        needsReload ||
+        completed ||
+        quantityError != null) {
+      return;
+    }
     final value = quantity;
     final reason = reasonController.text.trim();
     if (value == null || value <= 0) return;
@@ -233,10 +243,19 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
       setState(() {
         saving = false;
         needsReload = reload;
+        pending =
+            outcomeUnknown &&
+            adjuster is HttpsWorkspaceInventory &&
+            adjuster.isGuarded;
       });
       message(
-        outcomeUnknown
+        pending
+            ? 'Confirmation pending. Check pending inventory changes from Inventory.'
+            : outcomeUnknown
             ? 'Could not confirm the result. Review the original stock adjustment before submitting another.'
+            : error is InventoryHttpsStockException &&
+                  error.transport.code == 'resource-exhausted'
+            ? 'The inventory service is busy. Try again later.'
             : failureMessage(error.failure),
       );
     } catch (_) {
@@ -291,7 +310,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
     WorkspaceInventoryStockFailure.conflict =>
       'This request conflicts with an earlier submission.',
     WorkspaceInventoryStockFailure.unavailable =>
-      'Could not confirm the result. Retry unchanged to safely check again.',
+      'Stock adjustment is temporarily unavailable. Try again later.',
     WorkspaceInventoryStockFailure.internal =>
       'Stock adjustment failed. Try again.',
   };
@@ -322,6 +341,12 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
               padding: EdgeInsets.fromLTRB(horizontal, 12, horizontal, 24),
               children: [
                 _ItemSummary(item: item, stockOut: stockOut),
+                if (pending) ...[
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Confirmation pending. Return to Inventory and open Inventory recovery.',
+                  ),
+                ],
                 if (needsReload) ...[
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
@@ -342,6 +367,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
                 TextField(
                   key: const ValueKey('stock-quantity-field'),
                   controller: quantityController,
+                  enabled: !saving && !pending && !completed,
                   keyboardType: TextInputType.number,
                   onChanged: (_) {
                     if (_current) setState(() => touched = true);
@@ -366,6 +392,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
                 TextField(
                   key: const ValueKey('stock-reason-field'),
                   controller: reasonController,
+                  enabled: !saving && !pending && !completed,
                   minLines: 3,
                   maxLines: 4,
                   maxLength: 200,
@@ -388,6 +415,7 @@ class _StockAdjustmentPageState extends State<StockAdjustmentPage> {
                     onPressed:
                         widget.adjuster == null ||
                             saving ||
+                            pending ||
                             needsReload ||
                             completed
                         ? null

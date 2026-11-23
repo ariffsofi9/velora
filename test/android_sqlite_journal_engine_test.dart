@@ -5,8 +5,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/services/android_sqlite_journal_engine.dart';
+import 'package:velora/services/invitation_recovery_service.dart';
 import 'package:velora/services/mutation_recovery_service.dart';
 import 'package:velora/services/platform_journal_store.dart';
+import 'package:velora/services/real_inventory_journal.dart';
+import 'package:velora/services/staff_invitation_journal_stub.dart';
 import 'package:velora/services/workspace_inventory_https_transport.dart';
 import 'package:velora/services/workspace_session.dart';
 
@@ -41,11 +44,15 @@ final class _ChannelFixture {
   int attempts = 0;
   int? failCommit;
   bool malformedSnapshot = false;
+  String project = _project;
 
   Future<Object?> handle(MethodCall call) async {
     calls.add(call.method);
+    if (call.method == 'sha256') {
+      return syntheticSha256(call.arguments as String);
+    }
     final args = call.arguments as Map<Object?, Object?>;
-    expect(args['projectId'], _project);
+    expect(args['projectId'], project);
     final scope = '${args['uid']}/${args['cafeId']}';
     final (revision, rows) = partitions[scope] ?? (0, <String, String>{});
     switch (call.method) {
@@ -93,6 +100,72 @@ void main() {
   tearDown(() {
     binding.defaultBinaryMessenger.setMockMethodCallHandler(_channel, null);
   });
+
+  test(
+    'REAL Android invitation receipt survives journal reconstruction',
+    () async {
+      final workspace = _workspace();
+      fixture.project = HttpsWorkspaceInventory.realProject;
+      final operation = PendingInvitationOperation(
+        projectId: fixture.project,
+        uid: workspace.uid,
+        requestId: 'invitation-request-fixture',
+        expectedCafeId: workspace.cafeId,
+        expectedMembershipGeneration: workspace.membershipGeneration,
+      );
+      final first = openStaffInvitationJournal(workspace)!;
+      await first.prepare(operation);
+      final reopened = openStaffInvitationJournal(workspace)!;
+      final pending = await reopened.load(fixture.project, workspace.uid);
+      expect(pending?.toJson(), operation.toJson());
+      final staff = WorkspaceSession.fromVerified(
+        const CafeWorkspace(
+          cafeId: 'cafe',
+          uid: 'staff',
+          ownerUid: 'owner',
+          role: CafeRole.staff,
+        ),
+      );
+      expect(openStaffInvitationJournal(staff), isNull);
+      workspace.invalidate();
+      expect(openStaffInvitationJournal(workspace), isNull);
+    },
+  );
+  test(
+    'REAL Android factory binds journal and digest to the native channel',
+    () async {
+      fixture.project = HttpsWorkspaceInventory.realProject;
+      final current = _workspace();
+      final store = realInventoryJournal(current)!;
+      final journal = MutationRecoveryJournal(
+        store.guardedMutations,
+        sha256: store.sha256,
+      );
+      final request = stock();
+      final permit = await journal.prepare(
+        projectId: fixture.project,
+        uid: current.uid,
+        operation: 'adjust-stock',
+        request: {...request.toCallableData(), ...current.mutationData},
+      );
+      await journal.markDispatched(permit);
+      expect(fixture.calls, contains('sha256'));
+      expect(fixture.attempts, 2);
+      final reopened = realInventoryJournal(current)!;
+      final record =
+          await reopened.mutations.read(
+                jsonEncode([
+                  fixture.project,
+                  current.uid,
+                  'adjust-stock',
+                  request.idempotencyKey,
+                ]),
+              )
+              as Map;
+      expect(record['state'], 'dispatched');
+      expect(record['projectId'], fixture.project);
+    },
+  );
 
   test(
     'stages and commits a batch once, with ordered read-your-writes',

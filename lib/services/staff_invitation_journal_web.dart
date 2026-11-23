@@ -2,10 +2,14 @@ import 'dart:convert';
 
 import '../journal_qualification/indexed_db_journal_engine.dart';
 import 'invitation_recovery_service.dart';
+import 'workspace_session.dart';
 
 final _persistence = _BrowserInvitations();
-InvitationRecoveryJournal? openStaffInvitationJournal() =>
-    InvitationRecoveryJournal(_persistence);
+InvitationRecoveryJournal? openStaffInvitationJournal(
+  WorkspaceSession? workspace,
+) => workspace?.isActive == true && workspace!.isOwner
+    ? InvitationRecoveryJournal(_persistence)
+    : null;
 
 final class _BrowserInvitations implements InvitationJournalPersistence {
   Future<IndexedDbJournalEngine> _open() => IndexedDbJournalEngine.open(

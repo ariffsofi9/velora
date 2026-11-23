@@ -145,8 +145,24 @@ test('active staff atomically creates item, movement and activity', async () => 
   const activity = [...store.docs.entries()].find(([path]) =>
     path.startsWith('cafes/cafe-a/activities/'))[1];
   assert.equal(movement.actorUid, 'staff-a');
+  assert.equal(movement.itemId, result.itemId);
+  assert.equal(movement.type, 'initial_stock');
+  assert.equal(movement.quantity, 4);
   assert.equal(activity.actorUid, 'staff-a');
   assert.equal(store.docs.size, Object.keys(membershipSeed()).length + 3);
+});
+
+test('zero initial stock records one audit pair across a replay', async () => {
+  const seed = membershipSeed();
+  const store = new MemoryStore(seed);
+  const data = {...validData, quantity: 0};
+  const first = await invoke({store, data});
+  assert.deepEqual(await invoke({store, data}), {...first, created: false});
+  assert.equal(store.docs.get(`cafes/cafe-a/inventory/${first.itemId}`).quantity, 0);
+  const [movement] = [...store.docs.values()].filter((doc) => doc.type === 'initial_stock');
+  assert.equal(movement.itemId, first.itemId);
+  assert.equal(movement.quantity, 0);
+  assert.equal(store.docs.size, Object.keys(seed).length + 3);
 });
 
 test('owner is authorized through the same verified membership chain', async () => {

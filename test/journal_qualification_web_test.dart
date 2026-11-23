@@ -62,6 +62,34 @@ Matcher _failedStorage() => throwsA(isA<PlatformJournalFailure>());
 
 void main() {
   test(
+    'REAL inventory database acknowledges a strict write and reopens',
+    () async {
+      const name = IndexedDbJournalEngine.inventoryDatabase;
+      final first = await IndexedDbJournalEngine.open(name: name);
+      try {
+        await first.transaction(
+          (tx) => tx.put('synthetic/head', '{"state":"dispatched"}'),
+        );
+      } finally {
+        first.close();
+      }
+      final reopened = await IndexedDbJournalEngine.open(name: name);
+      addTearDown(reopened.close);
+      expect(
+        await reopened.transaction((tx) => tx.read('synthetic/head')),
+        '{"state":"dispatched"}',
+      );
+      await expectLater(
+        IndexedDbJournalEngine.open(
+          name: name,
+          store: IndexedDbJournalEngine.receiptStore,
+        ),
+        _failedStorage(),
+      );
+    },
+  );
+
+  test(
     'creates schema, commits, reopens and retrieves persisted revision',
     () async {
       final name = _database();

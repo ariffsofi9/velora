@@ -129,6 +129,28 @@ test('identical retry is idempotent and changed reuse is rejected', async () => 
   assert.equal([...store.docs.keys()].filter((p) => p.includes('/activities/')).length, 1);
 });
 
+test('archive and restore preserve the original item and movement across replays', async () => {
+  const originalItemPath = 'cafes/cafe-a/inventory/item-a';
+  const movementPath = 'cafes/cafe-a/inventory_movements/stock-original';
+  const movement = {itemId: 'item-a', type: 'stock_in', quantity: 4};
+  const store = new MemoryStore({...seed(), [movementPath]: movement});
+  const archived = await invoke({store});
+  assert.equal((await invoke({store})).changed, false);
+  const restore = {
+    ...archive, action: 'restore', expectedVersion: archived.version,
+    idempotencyKey: 'lifecycle-request-restore',
+  };
+  const restored = await invoke({store, data: restore});
+  assert.equal(restored.itemId, archived.itemId);
+  assert.equal(restored.version, archived.version + 1);
+  assert.equal((await invoke({store, data: restore})).changed, false);
+  assert.equal(store.docs.get(originalItemPath).quantity, 4);
+  assert.equal(store.docs.get(originalItemPath).lifecycleState, 'active');
+  assert.deepEqual([...store.docs].filter(([path]) => path.includes('/inventory_movements/')),
+    [[movementPath, movement]]);
+  assert.equal([...store.docs.keys()].filter((path) => path.includes('/activities/')).length, 2);
+});
+
 test('rejects unauthenticated inactive invalid transition and stale version', async () => {
   await assert.rejects(invoke({uid: null}), code('unauthenticated'));
   await assert.rejects(invoke({store: new MemoryStore(seed({status: 'disabled'}))}),

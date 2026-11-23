@@ -5,14 +5,18 @@ import '../../models/workspace_activity.dart';
 import '../../repositories/workspace_activity_repository.dart';
 import '../../services/workspace_session.dart';
 
+enum _ActivityFilter { all, inventory }
+
 class ActivityPage extends StatefulWidget {
   final WorkspaceSession workspaceSession;
   final WorkspaceActivityReader? activityReader;
+  final ({String id, String name})? item;
 
   const ActivityPage({
     super.key,
     required this.workspaceSession,
     this.activityReader,
+    this.item,
   });
 
   @override
@@ -27,6 +31,7 @@ class _ActivityPageState extends State<ActivityPage> {
   WorkspaceActivityFailure? _loadMoreFailure;
   bool _loading = false;
   bool _loadingMore = false;
+  _ActivityFilter _filter = _ActivityFilter.all;
   int _generation = 0;
 
   @override
@@ -39,8 +44,9 @@ class _ActivityPageState extends State<ActivityPage> {
   @override
   void didUpdateWidget(covariant ActivityPage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.workspaceSession.cafeId != widget.workspaceSession.cafeId ||
-        oldWidget.activityReader != widget.activityReader) {
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.activityReader, widget.activityReader) ||
+        oldWidget.item?.id != widget.item?.id) {
       _generation++;
       _configureReader();
       _activities.clear();
@@ -59,56 +65,83 @@ class _ActivityPageState extends State<ActivityPage> {
         WorkspaceActivityRepository(session: widget.workspaceSession);
   }
 
-  Future<void> _loadFirstPage() async {
-    if (_loading) return;
-    final generation = _generation;
-    setState(() {
-      _loading = true;
-      _failure = null;
-    });
-    try {
-      final page = await _reader.getActivities();
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _activities
-          ..clear()
-          ..addAll(page.activities);
-        _cursor = page.nextCursor;
-        _loading = false;
-      });
-    } on WorkspaceActivityException catch (error) {
-      if (!mounted || generation != _generation) return;
-      setState(() {
-        _loading = false;
-        _failure = error.failure;
-      });
-    }
-  }
+  Future<void> _loadFirstPage() => _loadPage();
+  Future<void> _loadMore() => _loadPage(append: true);
 
-  Future<void> _loadMore() async {
-    final cursor = _cursor;
-    if (cursor == null || _loadingMore) return;
+  Future<void> _loadPage({bool append = false}) async {
+    final cursor = append ? _cursor : null;
+    if (_loading || _loadingMore || (append && cursor == null)) return;
     final generation = _generation;
+    final session = widget.workspaceSession;
+    final itemId = widget.item?.id;
     setState(() {
-      _loadingMore = true;
+      _loading = !append;
+      _loadingMore = append;
       _loadMoreFailure = null;
+      if (!append) _failure = null;
     });
     try {
+      if (!session.isActive) {
+        throw const WorkspaceActivityException(
+          WorkspaceActivityFailure.permissionDenied,
+        );
+      }
+      if (itemId != null &&
+          (itemId.isEmpty ||
+              itemId.trim() != itemId ||
+              itemId.contains('/') ||
+              itemId.length > 128)) {
+        throw const WorkspaceActivityException(
+          WorkspaceActivityFailure.invalidData,
+        );
+      }
       final page = await _reader.getActivities(cursor: cursor);
       if (!mounted || generation != _generation) return;
-      final ids = _activities.map((activity) => activity.id).toSet();
+      if (!session.isActive) {
+        throw const WorkspaceActivityException(
+          WorkspaceActivityFailure.permissionDenied,
+        );
+      }
+      if (page.activities.any(
+        (activity) => activity.cafeId != session.cafeId,
+      )) {
+        throw const WorkspaceActivityException(
+          WorkspaceActivityFailure.invalidData,
+        );
+      }
       setState(() {
+        if (!append) _activities.clear();
+        final ids = _activities.map((activity) => activity.id).toSet();
         _activities.addAll(
-          page.activities.where((activity) => ids.add(activity.id)),
+          page.activities.where(
+            (activity) =>
+                (itemId == null || activity.itemId == itemId) &&
+                ids.add(activity.id),
+          ),
         );
         _cursor = page.nextCursor;
+        _loading = false;
         _loadingMore = false;
       });
-    } on WorkspaceActivityException catch (error) {
+    } catch (error) {
       if (!mounted || generation != _generation) return;
+      final failure = !session.isActive
+          ? WorkspaceActivityFailure.permissionDenied
+          : error is WorkspaceActivityException
+          ? error.failure
+          : WorkspaceActivityFailure.unavailable;
       setState(() {
+        _loading = false;
         _loadingMore = false;
-        _loadMoreFailure = error.failure;
+        if (failure == WorkspaceActivityFailure.permissionDenied) {
+          _activities.clear();
+          _cursor = null;
+          _failure = failure;
+        } else if (append) {
+          _loadMoreFailure = failure;
+        } else {
+          _failure = failure;
+        }
       });
     }
   }
@@ -117,9 +150,12 @@ class _ActivityPageState extends State<ActivityPage> {
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: AppColors.background,
     appBar: AppBar(
-      title: const Text(
-        'Activity',
-        style: TextStyle(fontWeight: FontWeight.w700),
+      title: Text(
+        widget.workspaceSession.isActive && widget.item != null
+            ? 'Activity for ${widget.item!.name}'
+            : 'Activity',
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w700),
       ),
     ),
     body: SafeArea(
@@ -127,13 +163,44 @@ class _ActivityPageState extends State<ActivityPage> {
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 720),
-          child: _body(),
+          child: Column(
+            children: [
+              if (widget.workspaceSession.isActive && widget.item == null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Wrap(
+                    spacing: 8,
+                    children: [
+                      _filterChip(_ActivityFilter.all, 'All Activities'),
+                      _filterChip(_ActivityFilter.inventory, 'Inventory'),
+                    ],
+                  ),
+                ),
+              Expanded(child: _body()),
+            ],
+          ),
         ),
       ),
     ),
   );
 
+  Widget _filterChip(_ActivityFilter filter, String label) => ChoiceChip(
+    label: Text(label),
+    selected: _filter == filter,
+    onSelected: (selected) {
+      if (selected && _filter != filter) setState(() => _filter = filter);
+    },
+  );
+
   Widget _body() {
+    if (!widget.workspaceSession.isActive) {
+      return _ActivityState(
+        key: const ValueKey('activity-error'),
+        icon: Icons.error_outline_rounded,
+        title: _failureTitle(WorkspaceActivityFailure.permissionDenied),
+        message: _failureMessage(WorkspaceActivityFailure.permissionDenied),
+      );
+    }
     if (_loading && _activities.isEmpty) {
       return const Center(
         key: ValueKey('activity-loading'),
@@ -150,23 +217,38 @@ class _ActivityPageState extends State<ActivityPage> {
         onAction: _loadFirstPage,
       );
     }
-    if (_activities.isEmpty) {
-      return const _ActivityState(
-        key: ValueKey('activity-empty'),
+    final itemOnly = widget.item != null;
+    final inventoryOnly = !itemOnly && _filter == _ActivityFilter.inventory;
+    final visible = inventoryOnly
+        ? _activities.where((activity) => activity.type.isInventory)
+        : _activities;
+    if (visible.isEmpty && _cursor == null) {
+      return _ActivityState(
+        key: const ValueKey('activity-empty'),
         icon: Icons.history_rounded,
-        title: 'No activity yet',
-        message: 'Inventory actions for this workspace will appear here.',
+        title: itemOnly
+            ? 'No activity for this item'
+            : inventoryOnly
+            ? 'No inventory activity yet'
+            : 'No activity yet',
+        message: itemOnly
+            ? 'Recorded changes for this item will appear here.'
+            : inventoryOnly
+            ? 'Inventory actions for this workspace will appear here.'
+            : 'Activity for this workspace will appear here.',
       );
     }
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       children: [
-        const Text(
-          'Newest activity first',
-          style: TextStyle(color: AppColors.textSecondary),
+        Text(
+          visible.isEmpty
+              ? 'No matching activity in the pages loaded so far.'
+              : 'Newest activity first',
+          style: const TextStyle(color: AppColors.textSecondary),
         ),
         const SizedBox(height: 16),
-        for (final activity in _activities) ...[
+        for (final activity in visible) ...[
           _ActivityCard(
             key: ValueKey('activity-${activity.id}'),
             activity: activity,

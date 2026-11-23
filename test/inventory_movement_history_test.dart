@@ -11,6 +11,8 @@ import 'package:velora/models/cafe_workspace.dart';
 import 'package:velora/models/inventory_item.dart';
 import 'package:velora/models/inventory_movement.dart';
 import 'package:velora/repositories/workspace_inventory_movement_repository.dart';
+import 'package:velora/repositories/workspace_inventory_repository.dart';
+import 'package:velora/screens/inventory/inventory_page.dart';
 import 'package:velora/screens/inventory/item_details_page.dart';
 import 'package:velora/screens/inventory/stock/stock_history_page.dart';
 import 'package:velora/services/workspace_session.dart';
@@ -106,6 +108,31 @@ class _CursorSource implements WorkspaceMovementDataSource {
       },
     ),
   );
+}
+
+class _InventorySource implements WorkspaceInventoryDataSource {
+  final paths = <String>[];
+
+  @override
+  Future<List<WorkspaceInventoryDocument>> readCollection(String path) async {
+    paths.add(path);
+    return [
+      WorkspaceInventoryDocument(id: 'item-a', data: item('item-a').toMap()),
+      WorkspaceInventoryDocument(
+        id: 'archived-b',
+        data: {
+          ...item('archived-b', name: 'Archived Sugar').toMap(),
+          'lifecycleState': 'archived',
+          'archivedAt': DateTime.utc(2029),
+          'archivedBy': 'owner-a',
+        },
+      ),
+    ];
+  }
+
+  @override
+  Stream<List<WorkspaceInventoryDocument>> watchCollection(String path) =>
+      Stream.fromFuture(readCollection(path));
 }
 
 Future<WorkspaceMovementCursor> cursor() async {
@@ -587,7 +614,7 @@ void main() {
     expect(reader.calls[1].$1, 'item-b');
   });
 
-  testWidgets('stale results cannot replace a changed cafe session', (
+  testWidgets('stale results cannot replace a new session in the same cafe', (
     tester,
   ) async {
     final stale = Completer<WorkspaceMovementPage>();
@@ -613,7 +640,7 @@ void main() {
         StockHistoryPage(
           key: pageKey,
           item: item('item-a'),
-          workspaceSession: session('cafe-b'),
+          workspaceSession: session('cafe-a'),
           movementReader: reader,
         ),
       ),
@@ -628,5 +655,131 @@ void main() {
     expect(find.byKey(const ValueKey('movement-current')), findsOneWidget);
     expect(find.byKey(const ValueKey('movement-stale')), findsNothing);
     expect(reader.calls.map((call) => call.$1), everyElement('item-a'));
+  });
+
+  testWidgets('active and archived rows open history for their own item', (
+    tester,
+  ) async {
+    final workspace = session('cafe-a');
+    final source = _InventorySource();
+    final reader = _Reader([
+      WorkspaceMovementPage(
+        movements: [movement('listed', InventoryMovementType.stockIn)],
+      ),
+      const WorkspaceMovementPage(movements: []),
+    ]);
+    await tester.pumpWidget(
+      app(
+        InventoryPage(
+          workspaceSession: workspace,
+          repository: WorkspaceInventoryRepository(
+            session: workspace,
+            dataSource: source,
+          ),
+          movementReader: reader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Stock history for Flour'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('movement-listed')), findsOneWidget);
+    expect(
+      tester
+          .widget<StockHistoryPage>(find.byType(StockHistoryPage))
+          .workspaceSession,
+      same(workspace),
+    );
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Archived Items'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Stock history for Archived Sugar'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('stock-history-empty')), findsOneWidget);
+    expect(reader.calls, [('item-a', null), ('archived-b', null)]);
+    expect(source.paths, everyElement('cafes/cafe-a/inventory'));
+  });
+
+  testWidgets(
+    'opening history after confirmed Stock Out fetches the movement',
+    (tester) async {
+      final workspace = session('cafe-a');
+      final adjuster = _PolicyAdjuster();
+      final reader = _Reader([
+        const WorkspaceMovementPage(movements: []),
+        WorkspaceMovementPage(
+          movements: [movement('confirmed', InventoryMovementType.stockOut)],
+        ),
+      ]);
+      await tester.pumpWidget(
+        app(
+          InventoryPage(
+            workspaceSession: workspace,
+            repository: WorkspaceInventoryRepository(
+              session: workspace,
+              dataSource: _InventorySource(),
+            ),
+            stockAdjuster: adjuster,
+            movementReader: reader,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final history = find.byTooltip('Stock history for Flour');
+      await tester.tap(history);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('stock-history-empty')), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Flour'));
+      await tester.pumpAndSettle();
+      final stockOut = find.text('Stock Out');
+      await tester.ensureVisible(stockOut);
+      await tester.tap(stockOut);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('stock-quantity-field')),
+        '2',
+      );
+      final confirm = find.byKey(const ValueKey('stock-confirm-button'));
+      await tester.ensureVisible(confirm);
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(adjuster.requests.single.itemId, 'item-a');
+      expect(adjuster.requests.single.direction, StockDirection.stockOut);
+      await tester.tap(history);
+      await tester.pumpAndSettle();
+      expect(reader.calls, [('item-a', null), ('item-a', null)]);
+      expect(find.byKey(const ValueKey('movement-confirmed')), findsOneWidget);
+    },
+  );
+
+  testWidgets('history discards a pending result when authority is suspended', (
+    tester,
+  ) async {
+    final workspace = session('cafe-a');
+    final pending = Completer<WorkspaceMovementPage>();
+    await tester.pumpWidget(
+      app(
+        StockHistoryPage(
+          item: item('item-a'),
+          workspaceSession: workspace,
+          movementReader: _Reader([pending.future]),
+        ),
+      ),
+    );
+    workspace.suspendAuthority();
+    pending.complete(
+      WorkspaceMovementPage(
+        movements: [movement('hidden', InventoryMovementType.stockIn)],
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('movement-hidden')), findsNothing);
+    expect(
+      find.text('Workspace access could not be verified.'),
+      findsOneWidget,
+    );
   });
 }

@@ -291,6 +291,10 @@ void main() {
         'Archive Item',
       ]) {
         if (label == 'Archive Item') {
+          tester
+              .state<ScaffoldMessengerState>(find.byType(ScaffoldMessenger))
+              .clearSnackBars();
+          await tester.pumpAndSettle();
           await tester.scrollUntilVisible(
             find.text(label),
             250,

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {basename, dirname, join, resolve} from 'node:path';
 import {after, before, test} from 'node:test';
 import {setTimeout as delay} from 'node:timers/promises';
-import {fileURLToPath} from 'node:url';
+import {bundleWorkerFixture} from './helpers/worker-fixture-bundle.mjs';
 import {syntheticIdentity} from '../feasibility/shared-backend/integration/synthetic-identity.mjs';
 import {createApplication} from '../backend/application.mjs';
 import {CERTIFICATE_URL} from '../backend/google-http.mjs';
@@ -15,7 +15,6 @@ import {createAuthenticatedJsonHttp} from '../https/authenticated-json-http.mjs'
 
 const localRequire = createRequire(new URL('../feasibility/shared-backend/runtime/package.json', import.meta.url));
 const {Miniflare} = localRequire('miniflare');
-const {build} = localRequire('esbuild');
 const origin = 'https://velora-test.invalid';
 const project = 'velora-spark-test';
 const realProject = 'velora-73222';
@@ -55,7 +54,8 @@ async function start() {
       const body = await request.json();
       if (roster && request.url === accountUrl && body.localId.every(uid => uid === owner || staff.includes(uid))) {
         roster.lookups.push([...body.localId]);
-        return Response.json({users: body.localId.toReversed().map(uid => ({localId: uid,
+        return Response.json({users: body.localId.toReversed().filter(uid => uid !== roster.missingAccount)
+          .map(uid => ({localId: uid,
           email: `${uid}@example.test`, disabled: uid === roster.disabled,
           emailVerified: uid !== roster.unverified, validSince: '1'}))});
       }
@@ -129,8 +129,7 @@ async function start() {
 
 before(async () => {
   directory = await mkdtemp(join(tmpdir(), 'velora-admission-'));
-  const result = await build({stdin: {resolveDir: fileURLToPath(new URL('..', import.meta.url)),
-    contents: `
+  bundle = await bundleWorkerFixture(`
       import worker, {createWorkerAdmission, createWorkerApplication} from './runtime/worker-entry.mjs';
       export {AdmissionCoordinator} from './runtime/worker-entry.mjs';
       import {CERTIFICATE_URL} from './backend/google-http.mjs';
@@ -250,10 +249,7 @@ before(async () => {
         }}, dependencies) : (app ??= createWorkerApplication(env, dependencies));
         return application.fetch(incoming, work => ctx.waitUntil(work));
       }};
-    `}, bundle: true, write: false, format: 'esm', platform: 'browser', external: ['cloudflare:*', 'node:*'],
-    banner: {js: `import * as nodeCrypto from 'node:crypto';
-      const require = name => { if (name === 'node:crypto') return nodeCrypto; throw Error('Unexpected import'); };`}});
-  bundle = result.outputFiles[0].text;
+    `);
   // workerd resolves persistent storage below its starting directory.
   process.chdir(directory);
   await start();
@@ -386,9 +382,16 @@ test('REAL roster pages 20 Staff with valid profiles and stays within the Free e
   assert.equal(limited.stats.queries, 0);
   const changed = await request(owner, {foreign: staff[0], stale: staff[1], missingProfile: staff[2]});
   assert.equal(changed.response.status, 200);
-  assert.equal(changed.response.body.members.length, 18);
+  assert.deepEqual(changed.response.body.members.map(profile => profile.uid), [owner, ...staff.slice(2, 20)]);
+  assert.deepEqual(changed.response.body.members.find(profile => profile.uid === staff[2]), {
+    uid: staff[2], role: 'staff', name: 'staff-02@example.test', email: 'staff-02@example.test',
+    membershipGeneration: 0,
+  });
   assert.ok(!changed.stats.lookups.flat().includes(staff[0]));
-  assert.ok(!changed.response.body.members.some(profile => [staff[0], staff[1]].includes(profile.uid)));
+  const missingAccount = await request(owner, {foreign: staff[0], stale: staff[1],
+    missingProfile: staff[2], missingAccount: staff[2]});
+  assert.equal(missingAccount.response.status, 200);
+  assert.deepEqual(missingAccount.response.body.members.map(profile => profile.uid), [owner, ...staff.slice(3, 20)]);
   for (const options of [{disabled: staff[0]}, {unverified: staff[0]}]) {
     const invalid = await request(owner, options);
     assert.equal(invalid.response.status, 200);

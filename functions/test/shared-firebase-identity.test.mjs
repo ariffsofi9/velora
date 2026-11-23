@@ -7,6 +7,8 @@ import {createGoogleOAuth} from '../backend/google-oauth.mjs';
 import creation from '../src/inventory-create.js';
 import fakes from './helpers/shared-backend-fakes.cjs';
 import {BackendError} from '../backend/backend-errors.mjs';
+import {createPreAuthSettlement} from '../backend/pre-auth-settlement.mjs';
+import {createWorkloadAccessToken} from '../backend/workload-access-token.mjs';
 
 globalThis.fetch = () => { throw Error('Unexpected network'); };
 const projectId = 'velora-spark-test';
@@ -69,6 +71,76 @@ function fixture(overrides = {}) {
 }
 const identityFailure = error => error instanceof BackendError && error.kind === 'identity' &&
   error.code === 'unauthenticated' && error.cause === undefined && !JSON.stringify(error).includes('SECRET');
+
+test('pre-auth settlement follows real certificate, crypto and account adapters on success and rejection', async () => {
+  let calls = 0;
+  const http = createGoogleHttp({projectId, transport: async url => {
+    calls++;
+    return url === CERTIFICATE_URL
+      ? Response.json({primary: primary.pem}, {headers: {'cache-control': 'max-age=3600'}})
+      : Response.json({users: [{localId: 'owner', email: 'owner@example.test', emailVerified: true,
+        validSince: String(initial / 1000 - 1)}]});
+  }});
+  const getAccount = createFirebaseAccounts({projectId, http, accessToken: bind(async () => 'synthetic')});
+  const {verify} = fixture({http, getAccount});
+  const holder = createPreAuthSettlement();
+  assert.equal((await verify(token(), holder)).uid, 'owner');
+  holder.seal();
+  assert.equal(await holder.completion(), 'settled');
+  assert.equal(calls, 2);
+  const invalid = createPreAuthSettlement();
+  await assert.rejects(verify('invalid', invalid), identityFailure);
+  invalid.seal();
+  assert.equal(await invalid.completion(), 'settled');
+  assert.equal(calls, 2);
+});
+
+test('nested verifier deadlines and fetch abort leave actual transport and late cleanup pending', async () => {
+  const fetchResult = Promise.withResolvers(), entered = Promise.withResolvers();
+  const cancelled = Promise.withResolvers(), cleanup = Promise.withResolvers();
+  const http = createGoogleHttp({projectId, timeoutMs: 60, transport: (url, {signal}) => {
+    entered.resolve(signal);
+    return fetchResult.promise;
+  }});
+  const f = fixture({http, timeoutMs: 25});
+  const holder = createPreAuthSettlement();
+  const failed = assert.rejects(f.verify(token(), holder), identityFailure);
+  const signal = await entered.promise;
+  await failed;
+  holder.seal();
+  assert.equal(holder.status(), 'pending');
+  if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, {once: true}));
+  assert.equal(holder.status(), 'pending');
+  fetchResult.resolve(new Response(new ReadableStream({cancel() {
+    cancelled.resolve();
+    return cleanup.promise;
+  }})));
+  await cancelled.promise;
+  assert.equal(holder.status(), 'pending');
+  cleanup.resolve();
+  assert.equal(await holder.completion(), 'settled');
+  assert.equal(f.accountCalls(), 0);
+});
+
+test('a lost or timed-out access-token RPC acknowledgement cannot establish settlement', async () => {
+  const rpc = Promise.withResolvers(), entered = Promise.withResolvers();
+  const accessToken = createWorkloadAccessToken({projectId, timeoutMs: 25, acquire: ({signal}) => {
+    entered.resolve(signal);
+    return rpc.promise;
+  }});
+  const f = fixture();
+  const getAccount = createFirebaseAccounts({projectId, http: f.options.http, accessToken});
+  const verify = createFirebaseIdentity({...f.options, getAccount});
+  const holder = createPreAuthSettlement();
+  const failed = assert.rejects(verify(token(), holder), identityFailure);
+  const signal = await entered.promise;
+  await failed;
+  holder.seal();
+  assert.equal(signal.aborted, true);
+  assert.equal(holder.status(), 'unproven');
+  rpc.reject(new Error('Synthetic lost RPC acknowledgement'));
+  assert.equal(await holder.completion(), 'unproven');
+});
 
 test('inert explicit TEST-bound configuration', () => {
   const f = fixture();

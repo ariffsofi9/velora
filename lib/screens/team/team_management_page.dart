@@ -82,6 +82,8 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
     _generation++;
     final binding = ++_bindingRevision;
     _rosterIdentityVerified = false;
+    _pendingRemovals.clear();
+    _removing = false;
     unawaited(_authChanges?.cancel());
     _authChanges = null;
     _closeRosterClient();
@@ -133,6 +135,8 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
       if (!currentBinding()) return;
       active = false;
       _rosterIdentityVerified = false;
+      _pendingRemovals.clear();
+      _removing = false;
       _closeRosterClient();
       if (!initialIdentity.isCompleted) {
         initialIdentity.complete();
@@ -233,14 +237,25 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
             content: Text(
               error.outcomeUnknown
                   ? 'Removal may have completed. Refresh the roster before retrying.'
+                  : error.code == 'resource-exhausted'
+                  ? 'The team service is busy. Wait a moment, then retry.'
                   : 'Staff access could not be removed. Refresh the roster.',
             ),
           ),
         );
-        _retry();
+        if (error.code == 'permission-denied' ||
+            error.code == 'unauthenticated') {
+          setState(
+            () => _workspace = Future<TeamRoster>.error(error)..ignore(),
+          );
+        } else if (error.code != 'resource-exhausted') {
+          _retry();
+        }
       }
     } finally {
-      if (mounted) setState(() => _removing = false);
+      if (mounted && identical(service, _rest)) {
+        setState(() => _removing = false);
+      }
     }
   }
 
@@ -317,7 +332,60 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
         _auth.currentUser?.uid != uid) {
       throw StateError('Session changed.');
     }
+    final returned = roster.workspace;
+    if (returned.uid != workspace.uid ||
+        returned.cafeId != workspace.cafeId ||
+        returned.ownerUid != workspace.ownerUid ||
+        returned.role != workspace.role ||
+        returned.membershipGeneration != workspace.membershipGeneration) {
+      throw const StaffHttpsException(
+        'invalid-roster-response',
+        outcomeUnknown: false,
+      );
+    }
     return roster;
+  }
+
+  bool get _canInvite {
+    final session = widget.workspaceSession;
+    if (!_allowed ||
+        !_rosterIdentityVerified ||
+        _rest == null ||
+        session == null ||
+        !session.isActive ||
+        !session.isOwner) {
+      return false;
+    }
+    final user = _auth.currentUser;
+    return user?.uid == session.uid && user?.emailVerified == true;
+  }
+
+  void _openInvitations(int binding, Future<TeamRoster> request) {
+    if (!mounted ||
+        binding != _bindingRevision ||
+        !identical(request, _workspace) ||
+        !_canInvite) {
+      return;
+    }
+    final auth = _auth;
+    final session = widget.workspaceSession!;
+    final workspace = CafeWorkspace(
+      cafeId: session.cafeId,
+      uid: session.uid,
+      ownerUid: session.ownerUid,
+      role: session.role,
+      membershipGeneration: session.membershipGeneration,
+    );
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => StaffInvitationPage(
+          ownerMode: true,
+          auth: auth,
+          workspace: workspace,
+          workspaceSession: session,
+        ),
+      ),
+    );
   }
 
   void _retry() {
@@ -362,6 +430,7 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
   Widget build(BuildContext context) {
     if (!_allowed) return const PilotAccessBlockedPage();
     final request = _workspace;
+    final binding = _bindingRevision;
     final hasPrevious = _previousCursors.isNotEmpty;
     final previousCursor = hasPrevious ? _previousCursors.last : null;
     return Scaffold(
@@ -379,8 +448,18 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 680),
             child: FutureBuilder<TeamRoster>(
+              key: ObjectKey(request),
               future: request,
               builder: (context, snapshot) {
+                if (widget.workspaceSession?.isActive == false) {
+                  return _NoTrustedTeam(
+                    onRetry: _retry,
+                    error: const StaffHttpsException(
+                      'session-changed',
+                      outcomeUnknown: false,
+                    ),
+                  );
+                }
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(
                     child: CircularProgressIndicator(color: AppColors.primary),
@@ -389,7 +468,22 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
 
                 final workspace = snapshot.data;
                 if (snapshot.hasError || workspace == null) {
-                  return _NoTrustedTeam(onRetry: _retry, error: snapshot.error);
+                  final error = snapshot.error;
+                  final canOpenInvitations =
+                      error is StaffHttpsException &&
+                      [
+                        'resource-exhausted',
+                        'network-unavailable',
+                        'backend-unavailable',
+                      ].contains(error.code) &&
+                      _canInvite;
+                  return _NoTrustedTeam(
+                    onRetry: _retry,
+                    error: error,
+                    onInvite: canOpenInvitations
+                        ? () => _openInvitations(binding, request)
+                        : null,
+                  );
                 }
 
                 return _VerifiedTeamView(
@@ -405,9 +499,18 @@ class _TeamManagementPageState extends State<TeamManagementPage> {
                           workspace.nextCursor,
                           previous: false,
                         ),
-                  auth: _auth,
-                  workspaceSession: widget.workspaceSession,
-                  onRemove: _rest == null || _removing ? null : _remove,
+                  onInvite:
+                      _canInvite && workspace.workspace.role == CafeRole.owner
+                      ? () => _openInvitations(binding, request)
+                      : null,
+                  onRemove: _rest == null || _removing
+                      ? null
+                      : (member) {
+                          if (identical(_workspace, request) &&
+                              binding == _bindingRevision) {
+                            _remove(member);
+                          }
+                        },
                 );
               },
             ),
@@ -422,8 +525,7 @@ class _VerifiedTeamView extends StatelessWidget {
   final TeamRoster roster;
   final VoidCallback onRefresh;
   final VoidCallback? onPrevious, onNext;
-  final FirebaseAuth auth;
-  final WorkspaceSession? workspaceSession;
+  final VoidCallback? onInvite;
   final ValueChanged<TeamMember>? onRemove;
 
   const _VerifiedTeamView({
@@ -431,8 +533,7 @@ class _VerifiedTeamView extends StatelessWidget {
     required this.onRefresh,
     required this.onPrevious,
     required this.onNext,
-    required this.auth,
-    required this.workspaceSession,
+    required this.onInvite,
     required this.onRemove,
   });
 
@@ -443,12 +544,7 @@ class _VerifiedTeamView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
       children: [
-        _TeamHeader(
-          role: role,
-          workspace: roster.workspace,
-          auth: auth,
-          workspaceSession: workspaceSession,
-        ),
+        _TeamHeader(role: role, onInvite: onInvite),
         const SizedBox(height: 24),
         Text(
           'Verified Members (${roster.members.length})',
@@ -459,6 +555,11 @@ class _VerifiedTeamView extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
+        if (roster.workspace.role == CafeRole.owner &&
+            onPrevious == null &&
+            onNext == null &&
+            !roster.members.any((member) => member.role == CafeRole.staff))
+          const Text('No verified Staff members are listed.'),
         if (roster.members.isEmpty)
           const Text('No verified members are available.')
         else
@@ -510,16 +611,9 @@ class _VerifiedTeamView extends StatelessWidget {
 
 class _TeamHeader extends StatelessWidget {
   final String role;
-  final CafeWorkspace workspace;
-  final FirebaseAuth auth;
-  final WorkspaceSession? workspaceSession;
+  final VoidCallback? onInvite;
 
-  const _TeamHeader({
-    required this.role,
-    required this.workspace,
-    required this.auth,
-    required this.workspaceSession,
-  });
+  const _TeamHeader({required this.role, required this.onInvite});
 
   @override
   Widget build(BuildContext context) => Container(
@@ -569,30 +663,19 @@ class _TeamHeader extends StatelessWidget {
             fontWeight: FontWeight.w400,
           ),
         ),
-        const SizedBox(height: 16),
-        SizedBox(
-          width: double.infinity,
-          height: 48,
-          child: FilledButton.icon(
-            key: const ValueKey('invite-staff-button'),
-            onPressed:
-                role == 'Owner' &&
-                    auth.app.options.projectId == StaffHttpsService.realProject
-                ? () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => StaffInvitationPage(
-                        ownerMode: true,
-                        auth: auth,
-                        workspace: workspace,
-                        workspaceSession: workspaceSession,
-                      ),
-                    ),
-                  )
-                : null,
-            icon: const Icon(Icons.person_add_alt_1_outlined),
-            label: const Text('Invite Staff'),
+        if (onInvite != null) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: FilledButton.icon(
+              key: const ValueKey('invite-staff-button'),
+              onPressed: onInvite,
+              icon: const Icon(Icons.person_add_alt_1_outlined),
+              label: const Text('Invite Staff'),
+            ),
           ),
-        ),
+        ],
       ],
     ),
   );
@@ -669,9 +752,10 @@ class _MemberCard extends StatelessWidget {
 
 class _NoTrustedTeam extends StatelessWidget {
   final VoidCallback onRetry;
+  final VoidCallback? onInvite;
   final Object? error;
 
-  const _NoTrustedTeam({required this.onRetry, this.error});
+  const _NoTrustedTeam({required this.onRetry, this.error, this.onInvite});
 
   String get message => switch (error) {
     StaffHttpsException(code: 'unauthenticated' || 'session-changed') =>
@@ -682,6 +766,10 @@ class _NoTrustedTeam extends StatelessWidget {
       'The team service is busy. Wait a moment, then retry.',
     StaffHttpsException(code: 'network-unavailable') =>
       'Velora could not reach the team service from this app. Check your connection, then retry.',
+    StaffHttpsException(code: 'backend-unavailable') =>
+      'The team service is temporarily unavailable. Try again in a moment.',
+    StaffHttpsException(code: 'invalid-roster-response') =>
+      'The team service returned an invalid roster. Try again.',
     _ =>
       'The team list could not be verified. Check your connection and workspace access, then retry.',
   };
@@ -725,15 +813,16 @@ class _NoTrustedTeam extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 22),
-      SizedBox(
-        height: 48,
-        child: FilledButton.icon(
-          key: const ValueKey('invite-staff-button'),
-          onPressed: null,
-          icon: const Icon(Icons.person_add_alt_1_outlined),
-          label: const Text('Invite Staff'),
+      if (onInvite != null)
+        SizedBox(
+          height: 48,
+          child: FilledButton.icon(
+            key: const ValueKey('invite-staff-button'),
+            onPressed: onInvite,
+            icon: const Icon(Icons.person_add_alt_1_outlined),
+            label: const Text('Invite Staff'),
+          ),
         ),
-      ),
       const SizedBox(height: 12),
       OutlinedButton.icon(
         onPressed: onRetry,

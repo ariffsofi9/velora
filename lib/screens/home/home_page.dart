@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show appFlavor;
@@ -10,8 +11,12 @@ import 'package:http/testing.dart';
 import 'widgets_home/bottom_bar.dart';
 import '../../widgets/responsive_navigation.dart';
 import '../../widgets/dashboard/dashboard_style.dart';
+import '../../logic/low_stock_policy.dart';
 import '../../services/android_pilot_policy.dart';
 import '../../services/mutation_recovery_service.dart';
+import '../../services/real_inventory_journal.dart'
+    if (dart.library.js_interop) '../../services/real_inventory_journal_web.dart';
+import '../../services/workspace_inventory_firebase_token_provider.dart';
 import '../../services/workspace_inventory_https_transport.dart';
 import '../../services/workspace_session.dart';
 import '../../repositories/workspace_activity_repository.dart';
@@ -118,6 +123,9 @@ class _HomePageState extends State<HomePage> {
   final _inventorySessionChanges =
       StreamController<InventoryHttpsSession?>.broadcast(sync: true);
   HttpsWorkspaceInventory? _inventoryMutations;
+  HttpsWorkspaceInventory? _realInventory;
+  http.Client? _realInventoryClient;
+  int _realInventoryRevision = 0;
   AndroidPilotPolicy? _policy;
   late final _buildPolicy = AndroidPilotPolicy.fromBuildConfiguration(
     isWeb: kIsWeb,
@@ -179,15 +187,19 @@ class _HomePageState extends State<HomePage> {
     final config = widget.offlineInventoryRest;
     final workspace = widget.workspaceSession;
     final policy = _policy;
-    if (config == null ||
-        !config._matches(workspace) ||
-        policy?.state != AndroidPilotState.normal ||
+    if (policy == null ||
+        policy.state != AndroidPilotState.normal ||
         _buildPolicy.state != AndroidPilotState.normal) {
       return;
     }
+    if (config == null) {
+      _configureRealInventory(workspace, policy);
+      return;
+    }
+    if (!config._matches(workspace)) return;
     late final HttpsWorkspaceInventory adapter;
     adapter = HttpsWorkspaceInventory(
-      pilotPolicy: policy!,
+      pilotPolicy: policy,
       endpoint: Uri.https('inventory.offline.invalid'),
       projectId: OfflineInventoryRest.projectId,
       endpointProjectId: OfflineInventoryRest.projectId,
@@ -203,10 +215,65 @@ class _HomePageState extends State<HomePage> {
     _inventoryMutations = adapter;
   }
 
+  void _configureRealInventory(
+    WorkspaceSession workspace,
+    AndroidPilotPolicy policy,
+  ) {
+    const project = HttpsWorkspaceInventory.realProject;
+    final FirebaseAuth auth;
+    try {
+      auth = FirebaseAuth.instance;
+    } catch (_) {
+      return;
+    }
+    if (auth.app.options.projectId != project) return;
+    final store = realInventoryJournal(workspace);
+    if (store == null) return;
+    final session = InventoryHttpsSession(
+      workspace: workspace,
+      projectId: project,
+      uid: workspace.uid,
+      emailVerified: true,
+      revision: ++_realInventoryRevision,
+    );
+    late final HttpsWorkspaceInventory adapter;
+    InventoryHttpsSession? currentSession() {
+      final user = auth.currentUser;
+      return identical(_realInventory, adapter) &&
+              workspace.isActive &&
+              user?.uid == workspace.uid &&
+              user?.emailVerified == true
+          ? session
+          : null;
+    }
+
+    final client = http.Client();
+    adapter = HttpsWorkspaceInventory(
+      pilotPolicy: policy,
+      endpoint: Uri.https(HttpsWorkspaceInventory.realHost),
+      projectId: project,
+      endpointProjectId: project,
+      client: client,
+      currentSession: currentSession,
+      sessionChanges: _inventorySessionChanges.stream,
+      idToken: WorkspaceInventoryFirebaseTokenProvider(
+        auth: auth,
+        projectId: project,
+        currentSession: currentSession,
+      ).call,
+      guardedStore: store,
+    );
+    _realInventoryClient = client;
+    _realInventory = adapter;
+  }
+
   void _invalidateInventoryMutations() {
-    if (_inventoryMutations == null) return;
+    if (_inventoryMutations == null && _realInventory == null) return;
     _inventoryMutations = null;
+    _realInventory = null;
     _inventorySessionChanges.add(null);
+    _realInventoryClient?.close();
+    _realInventoryClient = null;
   }
 
   @override
@@ -235,15 +302,16 @@ class _HomePageState extends State<HomePage> {
         onAddTap: _openAddItem,
         onInventoryTap: () => setState(() => _selectedIndex = 1),
         onAlertTap: _openAlerts,
+        onStockAlertTap: (attention) => _openAlerts(stockAttention: attention),
         onActivityTap: _openActivity,
       ),
       InventoryPage(
         workspaceSession: widget.workspaceSession,
         repository: _inventoryRepository,
-        inventoryCreator: _inventoryMutations,
-        inventoryUpdater: _inventoryMutations,
-        stockAdjuster: _inventoryMutations,
-        lifecycleManager: _inventoryMutations,
+        inventoryCreator: _realInventory ?? _inventoryMutations,
+        inventoryUpdater: _realInventory ?? _inventoryMutations,
+        stockAdjuster: _realInventory ?? _inventoryMutations,
+        lifecycleManager: _realInventory ?? _inventoryMutations,
       ),
       const SizedBox(),
       SuggestionsPage(
@@ -265,10 +333,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _openAddItem() {
-    final creator = _inventoryMutations;
+    final creator = _realInventory ?? _inventoryMutations;
     final session = widget.workspaceSession;
     if (creator != null && session.isActive) {
-      Navigator.of(context).push<void>(
+      Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) =>
               AddItemPage(workspaceSession: session, creator: creator),
@@ -285,13 +353,21 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  void _openAlerts() {
+  void _openAlerts({StockAttention? stockAttention}) {
+    final workspace = widget.workspaceSession;
+    final repository = _inventoryRepository;
+    if (!workspace.isActive || !identical(repository.session, workspace)) {
+      return;
+    }
+    final mutations = _realInventory ?? _inventoryMutations;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => AlertsPage(
-          workspaceSession: widget.workspaceSession,
-          repository: _inventoryRepository,
+          workspaceSession: workspace,
+          repository: repository,
+          inventoryMutations: mutations,
+          initialStockAttention: stockAttention,
         ),
       ),
     );

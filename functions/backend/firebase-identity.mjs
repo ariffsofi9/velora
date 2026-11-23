@@ -9,6 +9,8 @@ const emailShape = value => typeof value === 'string' && value.trim() === value 
 const kidShape = value => typeof value === 'string' && value.trim() === value && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const fail = kind => { throw new BackendError(kind, kind === 'identity' ? 'unauthenticated' : 'unavailable'); };
+const cryptoWork = (settlement, action) =>
+  settlement ? settlement.dispatch(action, {observable: true}) : action();
 const clock = now => {
   const time = now();
   if (!Number.isSafeInteger(time) || time < 0 || time > 253402300799000) throw Error();
@@ -22,19 +24,19 @@ export function createFirebaseAccounts({projectId, realWorker, http, accessToken
       typeof accessToken !== 'function' || accessToken.projectId !== projectId || !validBudget(timeoutMs)) {
     throw new BackendError('configuration', 'invalid-configuration');
   }
-  const lookup = async (uids, roster) => {
+  const lookup = async (uids, roster, settlement) => {
     if (!Array.isArray(uids) || !uids.length || uids.length > 100 ||
         Array.from(uids).some(uid => !uidShape(uid)) || new Set(uids).size !== uids.length) fail('account');
     const requested = new Set(uids);
     let active = true;
     try {
       return await bounded(async () => {
-        const token = await accessToken();
+        const token = await accessToken(settlement ? {settlement} : undefined);
         if (!active || typeof token !== 'string' || token.trim() !== token ||
             !/^[A-Za-z0-9._~+/-]{1,8192}={0,2}$/.test(token)) throw Error();
         const r = await http(`https://identitytoolkit.googleapis.com/v1/projects/${projectId}/accounts:lookup`, {
           method: 'POST', headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json'},
-          body: JSON.stringify({localId: [...requested]})});
+          body: JSON.stringify({localId: [...requested]})}, settlement);
         const users = roster && r.data?.users === undefined ? [] : r.data?.users;
         if (!active || r.status !== 200 || !Array.isArray(users) || users.length > requested.size ||
             (!roster && users.length !== requested.size)) throw Error();
@@ -49,11 +51,11 @@ export function createFirebaseAccounts({projectId, realWorker, http, accessToken
           return [Object.freeze({uid: u.localId, disabled: false, emailVerified: true, email: u.email,
             tokensValidAfterTime: new Date(Number(u.validSince) * 1000).toISOString()})];
         });
-      }, timeoutMs, 'account');
+      }, timeoutMs, 'account', 'unavailable', settlement);
     } catch { fail('account'); }
     finally { active = false; }
   };
-  const getAccount = async uid => (await lookup([uid], false))[0];
+  const getAccount = async (uid, settlement) => (await lookup([uid], false, settlement))[0];
   return Object.freeze(Object.assign(getAccount, {projectId, getMany: uids => lookup(uids, true)}));
 }
 
@@ -113,13 +115,13 @@ export function createFirebaseIdentity({projectId, realWorker, http, getAccount,
     throw new BackendError('configuration', 'invalid-configuration');
   }
   let cache, pending, lastRefresh = -Infinity;
-  async function refresh() {
+  async function refresh(settlement) {
     if (pending) return pending;
     const start = clock(now);
     if (start - lastRefresh < 30000) throw Error();
     lastRefresh = start;
     const flight = bounded(async () => {
-      const r = await http(CERTIFICATE_URL, {method: 'GET'});
+      const r = await http(CERTIFICATE_URL, {method: 'GET'}, settlement);
       const policy = r.headers.get('cache-control') ?? '';
       const ages = [...policy.matchAll(/(?:^|,)\s*max-age=(\d+)\s*(?=,|$)/gi)];
       const age = r.headers.get('age') ?? '0';
@@ -133,31 +135,32 @@ export function createFirebaseIdentity({projectId, realWorker, http, getAccount,
       const keys = new Map();
       for (const [kid, pem] of entries) {
         if (!kidShape(kid)) throw Error();
-        keys.set(kid, await certificate(pem, clock(now)));
+        keys.set(kid, await cryptoWork(settlement, () => certificate(pem, clock(now))));
       }
       const until = Math.min(start + lifetime * 1000, ...[...keys.values()].map(k => k.until));
       if (clock(now) < start || until <= clock(now)) throw Error();
       return {keys, from: start, until};
-    }, timeoutMs, 'identity', 'unauthenticated');
+    }, timeoutMs, 'identity', 'unauthenticated', settlement);
     pending = flight;
     try { cache = await flight; } catch (error) { cache = undefined; throw error; }
     finally { if (pending === flight) pending = undefined; }
   }
-  const verifyIdentity = async token => {
+  const verifyIdentity = async (token, settlement) => {
     let active = true;
     try {
       return await bounded(async () => {
         const {header, claims, signature, signed} = tokenParts(token);
         if (!claimsValid(claims, projectId, clock(now))) throw Error();
         const time = clock(now);
-        if (!cache || time < cache.from || time >= cache.until || !cache.keys.has(header.kid)) await refresh();
+        if (!cache || time < cache.from || time >= cache.until || !cache.keys.has(header.kid)) await refresh(settlement);
         if (!active) throw Error();
         const verifiedCache = cache;
         const at = clock(now), entry = verifiedCache?.keys.get(header.kid);
         if (!entry || at < verifiedCache.from || at >= verifiedCache.until || at < entry.from || at >= entry.until ||
-            !await webcrypto.subtle.verify('RSASSA-PKCS1-v1_5', entry.key, signature, signed)) throw Error();
+            !await cryptoWork(settlement, () =>
+              webcrypto.subtle.verify('RSASSA-PKCS1-v1_5', entry.key, signature, signed))) throw Error();
         if (!active || !claimsValid(claims, projectId, clock(now))) throw Error();
-        const user = await getAccount(claims.sub);
+        const user = await getAccount(claims.sub, settlement);
         // Recheck after every async security dependency; no stale positive account
         // cache. Auth revocation is still not atomic with a later Firestore commit.
         const validAfter = user?.tokensValidAfterTime;
@@ -170,7 +173,7 @@ export function createFirebaseIdentity({projectId, realWorker, http, getAccount,
             !Number.isFinite(Date.parse(validAfter)) || new Date(validAfter).toISOString() !== validAfter ||
             claims.auth_time * 1000 < Date.parse(validAfter)) throw Error();
         return Object.freeze({uid: claims.sub, token: Object.freeze(claims)});
-      }, timeoutMs, 'identity', 'unauthenticated');
+      }, timeoutMs, 'identity', 'unauthenticated', settlement);
     } catch { fail('identity'); }
     finally { active = false; }
   };

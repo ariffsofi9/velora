@@ -118,7 +118,7 @@ class WorkspaceInventoryMovementRepository
         WorkspaceMovementFailure.invalidData,
       );
     }
-    session.requireActive();
+    _requireActive();
     try {
       final documents = await _dataSource.fetchPage(
         path: collectionPath,
@@ -127,7 +127,7 @@ class WorkspaceInventoryMovementRepository
         descending: true,
         startAfter: cursor?._token,
       );
-      session.requireActive();
+      _requireActive();
       final movements = documents
           .map((document) {
             final movement = InventoryMovement.fromMap(
@@ -167,6 +167,14 @@ class WorkspaceInventoryMovementRepository
     } catch (_) {
       throw const WorkspaceMovementException(
         WorkspaceMovementFailure.unavailable,
+      );
+    }
+  }
+
+  void _requireActive() {
+    if (!session.isActive) {
+      throw const WorkspaceMovementException(
+        WorkspaceMovementFailure.permissionDenied,
       );
     }
   }

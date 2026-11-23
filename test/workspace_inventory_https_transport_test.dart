@@ -156,6 +156,13 @@ class Fixture {
   Future<void> close() async {
     await changes.close();
   }
+
+  HttpsWorkspaceInventory realAdapter(PlatformJournalStore store) => adapter(
+    endpoint: Uri.https(HttpsWorkspaceInventory.realHost),
+    project: HttpsWorkspaceInventory.realProject,
+    endpointProject: HttpsWorkspaceInventory.realProject,
+    guardedStore: store,
+  );
 }
 
 http.StreamedResponse response(
@@ -636,13 +643,14 @@ void main() {
   );
 
   test(
-    'guarded Staff Stock Out holds a fresh key and refreshed version until the original receipt is observed',
+    'REAL guarded Staff Stock Out retains the original key after restart and a lost response',
     () async {
       final f = Fixture();
       addTearDown(f.close);
       f.current = snapshot(
         workspace(uid: 'staff', generation: 7),
         uid: 'staff',
+        project: HttpsWorkspaceInventory.realProject,
       );
       final engine = journal_test.FakeTransactionalJournalEngine();
       final store = journal_test.store(engine);
@@ -685,7 +693,7 @@ void main() {
         return response(result);
       });
 
-      final originating = f.adapter(guardedStore: store);
+      final originating = f.realAdapter(store);
       expect(originating.isGuarded, true);
       await expectLater(originating.adjustStock(original), throwsA(failure()));
       expect(quantity, 3);
@@ -703,8 +711,9 @@ void main() {
         workspace(uid: 'staff', generation: 7),
         uid: 'staff',
         revision: 2,
+        project: HttpsWorkspaceInventory.realProject,
       );
-      final recreated = f.adapter(guardedStore: journal_test.store(engine));
+      final recreated = f.realAdapter(journal_test.store(engine));
       final pending = (await recreated.pendingInventory()).single;
       expect(pending.toJson(), originalRecord.toJson());
       final replacement = stock(key: 'fresh-stock-request', version: version);
@@ -746,6 +755,92 @@ void main() {
       expect(result.resultingQuantity, 1);
       expect(movements.keys, [original.idempotencyKey, next.idempotencyKey]);
       expect(f.client.requests.last.url.path, '/inventory/adjust-stock');
+    },
+  );
+
+  test(
+    'REAL Stock In journals before dispatch and honors a staff denial',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      const project = HttpsWorkspaceInventory.realProject;
+      f.current = snapshot(
+        workspace(uid: 'staff', generation: 8),
+        uid: 'staff',
+        project: project,
+      );
+      final engine = journal_test.FakeTransactionalJournalEngine();
+      final store = PlatformJournalStore(
+        engine: engine,
+        sha256: (input) async => syntheticSha256(input),
+      );
+      final request = stock(direction: StockDirection.stockIn);
+      final journalKey = jsonEncode([
+        project,
+        'staff',
+        'adjust-stock',
+        request.idempotencyKey,
+      ]);
+      var allowed = false;
+      f.client = FakeClient((sent) async {
+        expect(
+          sent.url,
+          Uri.https(
+            HttpsWorkspaceInventory.realHost,
+            '/inventory/adjust-stock',
+          ),
+        );
+        final body = jsonDecode((sent as http.Request).body);
+        expect(body, {
+          ...request.toCallableData(),
+          'expectedCafeId': 'cafe',
+          'expectedMembershipGeneration': 8,
+        });
+        final persisted = await store.mutations.read(journalKey) as Map;
+        expect(persisted['state'], 'dispatched');
+        expect(persisted['request'], body);
+        return allowed
+            ? response({
+                ...acknowledgement('adjust-stock'),
+                'direction': 'in',
+                'resultingQuantity': 7,
+              })
+            : response({'error': 'permission-denied'}, status: 403);
+      });
+      // Construct after installing the fake client.
+      final stockAdapter = f.realAdapter(store);
+      await expectLater(
+        stockAdapter.adjustStock(request),
+        throwsA(
+          isA<InventoryHttpsStockException>()
+              .having(
+                (error) => error.failure,
+                'failure',
+                WorkspaceInventoryStockFailure.permissionDenied,
+              )
+              .having((error) => error.outcomeUnknown, 'unknown', false),
+        ),
+      );
+      expect(
+        (await store.mutations.read(journalKey) as Map)['state'],
+        'rejected',
+      );
+      expect(await stockAdapter.pendingInventory(), isEmpty);
+      allowed = true;
+      final result = await stockAdapter.adjustStock(request);
+      expect(result.resultingQuantity, 7);
+      expect(
+        (await store.mutations.read(journalKey) as Map)['state'],
+        'acknowledged',
+      );
+      expect(
+        () => f.adapter(
+          project: project,
+          endpointProject: project,
+          guardedStore: store,
+        ),
+        throwsA(isA<InventoryHttpsFailure>()),
+      );
     },
   );
 

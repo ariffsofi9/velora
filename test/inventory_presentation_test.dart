@@ -7,6 +7,7 @@ import 'package:velora/screens/inventory/add_item/add_item_page.dart';
 import 'package:velora/screens/inventory/edit_item_page.dart';
 import 'package:velora/screens/inventory/item_details_page.dart';
 import 'package:velora/screens/inventory/widgets_inventory/inventory_card.dart';
+import 'package:velora/services/workspace_inventory_create_service.dart';
 import 'package:velora/services/workspace_session.dart';
 
 final _session = WorkspaceSession.fromVerified(
@@ -17,6 +18,18 @@ final _session = WorkspaceSession.fromVerified(
     role: CafeRole.staff,
   ),
 );
+
+class _UnexpectedCreator implements WorkspaceInventoryCreator {
+  int calls = 0;
+
+  @override
+  Future<WorkspaceInventoryCreateResult> createItem(
+    WorkspaceInventoryCreateRequest request,
+  ) async {
+    calls++;
+    throw StateError('An invalid form must never reach the creator.');
+  }
+}
 
 void main() {
   final item = InventoryItem(
@@ -62,10 +75,11 @@ void main() {
   testWidgets('Add Item keeps required-field validation before saving', (
     tester,
   ) async {
+    final creator = _UnexpectedCreator();
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.light,
-        home: AddItemPage(workspaceSession: _session),
+        home: AddItemPage(workspaceSession: _session, creator: creator),
       ),
     );
 
@@ -77,6 +91,7 @@ void main() {
       find.text('Please fill item name, quantity and expiry date'),
       findsOneWidget,
     );
+    expect(creator.calls, 0);
   });
 
   testWidgets('Add Item shows only fields supported by the create callable', (

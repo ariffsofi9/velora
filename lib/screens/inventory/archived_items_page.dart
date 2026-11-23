@@ -3,20 +3,26 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_tokens.dart';
 import '../../models/inventory_item.dart';
 import '../../repositories/workspace_inventory_repository.dart';
+import '../../repositories/workspace_inventory_movement_repository.dart';
 import '../../services/workspace_inventory_lifecycle_service.dart';
 import '../../services/workspace_session.dart';
 import 'item_details_page.dart';
+import 'stock/stock_history_page.dart';
 
 class ArchivedItemsPage extends StatefulWidget {
   final WorkspaceSession workspaceSession;
   final WorkspaceInventoryRepository repository;
   final WorkspaceInventoryLifecycleManager? lifecycleManager;
+  final WorkspaceInventoryMovementReader? movementReader;
+  final VoidCallback? onRefresh;
 
   const ArchivedItemsPage({
     super.key,
     required this.workspaceSession,
     required this.repository,
     this.lifecycleManager,
+    this.movementReader,
+    this.onRefresh,
   });
 
   @override
@@ -29,11 +35,70 @@ class _ArchivedItemsPageState extends State<ArchivedItemsPage> {
   @override
   void initState() {
     super.initState();
-    _stream = widget.repository.watchArchivedItems();
+    _stream = _watchArchivedItems();
   }
 
+  @override
+  void didUpdateWidget(covariant ArchivedItemsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspaceSession, widget.workspaceSession) ||
+        !identical(oldWidget.repository, widget.repository)) {
+      _stream = _watchArchivedItems();
+    }
+  }
+
+  bool get _hasVerifiedContext =>
+      widget.workspaceSession.isActive &&
+      identical(widget.repository.session, widget.workspaceSession);
+
+  Stream<List<InventoryItem>> _watchArchivedItems() => _hasVerifiedContext
+      ? widget.repository.watchArchivedItems()
+      : const Stream.empty();
+
   void _retry() {
-    setState(() => _stream = widget.repository.watchArchivedItems());
+    setState(() => _stream = _watchArchivedItems());
+  }
+
+  void _goToStockHistory(InventoryItem item) {
+    if (!_hasVerifiedContext) return;
+    final workspace = widget.workspaceSession;
+    final reader = widget.movementReader;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StockHistoryPage(
+          item: item,
+          workspaceSession: workspace,
+          movementReader: reader,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _goToDetails(InventoryItem item) async {
+    if (!_hasVerifiedContext) return;
+    final workspace = widget.workspaceSession;
+    final repository = widget.repository;
+    final refresh = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ItemDetailsPage(
+          item: item,
+          workspaceSession: workspace,
+          repository: repository,
+          lifecycleManager: widget.lifecycleManager,
+          movementReader: widget.movementReader,
+        ),
+      ),
+    );
+    if (refresh == true &&
+        mounted &&
+        _hasVerifiedContext &&
+        identical(widget.workspaceSession, workspace) &&
+        identical(widget.repository, repository)) {
+      _retry();
+      widget.onRefresh?.call();
+    }
   }
 
   @override
@@ -41,8 +106,14 @@ class _ArchivedItemsPageState extends State<ArchivedItemsPage> {
     backgroundColor: AppColors.background,
     appBar: AppBar(title: const Text('Archived Items')),
     body: StreamBuilder<List<InventoryItem>>(
+      key: ObjectKey(_stream),
       stream: _stream,
       builder: (context, snapshot) {
+        if (!_hasVerifiedContext) {
+          return const Center(
+            child: Text('Workspace access could not be verified.'),
+          );
+        }
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
         }
@@ -89,18 +160,12 @@ class _ArchivedItemsPageState extends State<ArchivedItemsPage> {
                 subtitle: Text(
                   '${item.quantity} ${item.unit} • ${item.category}',
                 ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.push<bool>(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ItemDetailsPage(
-                      item: item,
-                      workspaceSession: widget.workspaceSession,
-                      repository: widget.repository,
-                      lifecycleManager: widget.lifecycleManager,
-                    ),
-                  ),
+                trailing: IconButton(
+                  tooltip: 'Stock history for ${item.name}',
+                  onPressed: () => _goToStockHistory(item),
+                  icon: const Icon(Icons.history_rounded),
                 ),
+                onTap: () => _goToDetails(item),
               ),
             );
           },

@@ -63,7 +63,7 @@ export function createGoogleHttp({projectId, realWorker, transport, timeoutMs = 
       ((url === CERTIFICATE_URL && method === 'GET') ||
        ((url === OAUTH_URL || url === accountUrl || firestore) && method === 'POST'));
   }
-  const http = async (url, options = {}) => {
+  const http = async (url, options = {}, settlement) => {
     const {method = 'GET', body, headers, mutation = false, firestoreRpc} = options;
     try {
       if (typeof url !== 'string' || !destination(url, method, firestoreRpc) || typeof mutation !== 'boolean' ||
@@ -72,17 +72,21 @@ export function createGoogleHttp({projectId, realWorker, transport, timeoutMs = 
       throw new BackendError('http', 'endpoint-denied');
     }
     const controller = new AbortController();
-    let reader, active = true, dispatched = false;
-    const check = () => { if (!active) throw Error(); };
+    let reader, active = true, dispatched = false, cleanupDone;
+    const open = () => active && (!settlement || settlement.status() === 'open');
+    const check = () => { if (!open()) throw Error(); };
     try {
       return await bounded(async () => {
         check();
         dispatched = true;
         const response = await transport(url, {method, body, headers,
           redirect: 'error', signal: controller.signal});
-        if (!active) {
-          // Observe cancellation without waiting for an untrusted late stream.
-          try { Promise.resolve(response.body?.cancel()).catch(() => {}); } catch { /* ignored */ }
+        if (!open()) {
+          // A tracked late body remains pending until its cancellation settles.
+          try {
+            const cancel = Promise.resolve(response.body?.cancel()).catch(() => {});
+            if (settlement) await cancel;
+          } catch { /* ignored */ }
           throw Error();
         }
         if (response.redirected || (response.url && response.url !== url) ||
@@ -94,6 +98,10 @@ export function createGoogleHttp({projectId, realWorker, transport, timeoutMs = 
         if (length !== null && (!/^\d+$/.test(length) || Number(length) > maxBytes)) throw Error();
         reader = response.body?.getReader();
         if (!reader) throw Error();
+        if (settlement) {
+          const cleanup = new Promise(resolve => { cleanupDone = resolve; });
+          void settlement.dispatch(() => cleanup, {observable: true}).catch(() => {});
+        }
         const chunks = [];
         let size = 0;
         for (;;) {
@@ -113,7 +121,7 @@ export function createGoogleHttp({projectId, realWorker, transport, timeoutMs = 
         check();
         // Copy headers so an injected response cannot mutate the cache policy.
         return {status: response.status, headers: new Headers(response.headers), data};
-      }, timeoutMs, 'http');
+      }, timeoutMs, 'http', 'unavailable', settlement);
     } catch {
       // A commit transport failure is always potentially applied, even if a
       // future store caller forgets to mark the RPC as a mutation.
@@ -122,7 +130,9 @@ export function createGoogleHttp({projectId, realWorker, transport, timeoutMs = 
       active = false;
       controller.abort();
       if (reader) {
-        try { await bounded(() => reader.cancel(), cleanupTimeoutMs, 'http'); } catch { /* bounded cleanup */ }
+        const cancel = Promise.resolve().then(() => reader.cancel());
+        if (cleanupDone) void cancel.then(cleanupDone, cleanupDone);
+        try { await bounded(() => cancel, cleanupTimeoutMs, 'http'); } catch { /* bounded cleanup */ }
       }
     }
   };

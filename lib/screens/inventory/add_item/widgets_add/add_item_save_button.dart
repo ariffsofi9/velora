@@ -3,24 +3,28 @@ import 'package:flutter/material.dart';
 
 class AddItemSaveButton extends StatelessWidget {
   final bool isSaving;
+  final bool enabled;
   final VoidCallback onTap;
 
   const AddItemSaveButton({
     super.key,
     required this.isSaving,
     required this.onTap,
+    this.enabled = true,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: isSaving ? null : onTap,
+      onTap: isSaving || !enabled ? null : onTap,
       child: Container(
         height: 54,
         width: double.infinity,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          color: AppColors.primary,
+          color: !isSaving && !enabled
+              ? AppColors.primary.withValues(alpha: .45)
+              : AppColors.primary,
           boxShadow: [
             BoxShadow(
               color: AppColors.primary.withValues(alpha: .03),

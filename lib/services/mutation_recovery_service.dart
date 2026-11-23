@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 /// Implementations must provide durable atomic CAS across tabs/processes and
@@ -294,8 +295,7 @@ class MutationRecoveryJournal {
   final MutationJournalPersistence persistence;
 
   /// Trusted injected SHA-256 of UTF-8 input, returning 64 lowercase hex digits.
-  /// No default cryptographic/provider or durable platform implementation exists.
-  final String Function(String) sha256;
+  final FutureOr<String> Function(String) sha256;
   final Duration timeout;
   MutationRecoveryJournal(
     this.persistence, {
@@ -306,8 +306,11 @@ class MutationRecoveryJournal {
       _bad();
     }
   }
-  String _digest(String value) {
-    final digest = sha256(value);
+  Future<String> _digest(String value) async {
+    final pending = sha256(value);
+    final digest = pending is Future<String>
+        ? await pending.timeout(timeout)
+        : pending;
     if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(digest) ||
         digest.trim() != digest) {
       _bad();
@@ -321,13 +324,13 @@ class MutationRecoveryJournal {
     }
   }
 
-  PendingMutationOperation _parse(
+  Future<PendingMutationOperation> _parse(
     Object raw,
     String project,
     String uid,
     String operation,
     String key,
-  ) {
+  ) async {
     if (raw is! Map ||
         raw.length != (raw.containsKey('result') ? 10 : 9) ||
         raw.keys.any(
@@ -364,7 +367,7 @@ class MutationRecoveryJournal {
     final request = Map<String, Object>.from(raw['request'] as Map);
     final canonical = mutationJournalCanonicalJson(operation, request);
     if (request['idempotencyKey'] != key ||
-        raw['payloadDigest'] != _digest(canonical) ||
+        raw['payloadDigest'] != await _digest(canonical) ||
         (raw['state'] == 'rejected' && raw['everUncertain'] != false) ||
         (raw['state'] == 'unknown' && raw['everUncertain'] != true) ||
         (['prepared', 'dispatched'].contains(raw['state']) &&
@@ -400,7 +403,9 @@ class MutationRecoveryJournal {
       final raw = await persistence
           .read(jsonEncode([project, uid, operation, key]))
           .timeout(timeout);
-      return raw == null ? null : _parse(raw, project, uid, operation, key);
+      return raw == null
+          ? null
+          : await _parse(raw, project, uid, operation, key);
     } catch (_) {
       _bad();
     }
@@ -414,13 +419,14 @@ class MutationRecoveryJournal {
   }) async {
     try {
       _namespace(projectId, uid);
-      final canonical = mutationJournalCanonicalJson(operation, request);
-      final digest = _digest(canonical);
+      final snapshot = Map<String, Object>.unmodifiable(request);
+      final canonical = mutationJournalCanonicalJson(operation, snapshot);
+      final digest = await _digest(canonical);
       final previous = await load(
         projectId,
         uid,
         operation,
-        request['idempotencyKey'] as String,
+        snapshot['idempotencyKey'] as String,
       );
       if (previous != null &&
           (previous.state != 'rejected' ||
@@ -440,7 +446,7 @@ class MutationRecoveryJournal {
         'prepared',
         (previous?.revision ?? 0) + 1,
         false,
-        Map.unmodifiable(Map<String, Object>.from(request)),
+        snapshot,
         null,
       );
       _retryable.remove(record.storageKey);
@@ -454,7 +460,7 @@ class MutationRecoveryJournal {
   }
 
   Future<void> _cas(PendingMutationOperation next, int? previous) async {
-    _parse(
+    await _parse(
       next.toJson(),
       next.projectId,
       next.uid,

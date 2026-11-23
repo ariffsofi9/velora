@@ -1,4 +1,5 @@
 import {BackendError, requireBackendProject} from './backend-errors.mjs';
+import {recordAdmission} from './admission-telemetry.mjs';
 
 export function exactHttpsOrigin(value) {
   try {
@@ -94,7 +95,10 @@ export function createHttpPolicy({projectId, publicOrigin, allowedOrigins, route
       if (request.method !== 'POST') return headers(reply(405, 'method-not-allowed'), origin, false, originAllowed);
       const {signal} = request;
       if (signal?.aborted) return headers(reply(408, 'deadline-exceeded'), origin, false, originAllowed);
-      if (active >= maxConcurrent) return headers(reply(429, 'resource-exhausted'), origin, false, originAllowed);
+      if (active >= maxConcurrent) {
+        if (realWorker) recordAdmission('worker-local-limit', () => ({active, limit: maxConcurrent}));
+        return headers(reply(429, 'resource-exhausted'), origin, false, originAllowed);
+      }
       // Keep admission independent of all proxy/IP/identity header claims.
       const acceptedHeaders = new Headers();
       for (const name of routeHeaders) {
@@ -116,10 +120,14 @@ export function createHttpPolicy({projectId, publicOrigin, allowedOrigins, route
         if (permit === null) return headers(reply(429, 'resource-exhausted'), origin, false, originAllowed);
         pending = new Set();
       }
+      const preAuth = permit?.preAuth;
+      if (preAuth) signal?.addEventListener('abort', preAuth.seal, {once: true});
       // Hand off the original stream and cancellation signal without cloning
       // or forwarding ingress-specific metadata (including Worker subrequests).
       const response = await handler({url: url.href, method: request.method, headers: acceptedHeaders,
         body: request.body, signal, ...(permit ? {admission: {
+          preAuth,
+          acquireOAuth: permit.acquireOAuth,
           attribute: uid => permit.attribute(uid, signal),
           track(work) {
             pending.add(work);
@@ -136,14 +144,20 @@ export function createHttpPolicy({projectId, publicOrigin, allowedOrigins, route
       return headers(reply(503, 'unavailable', true), origin, false, originAllowed);
     } finally {
       if (permit) {
+        if (permit.preAuth) {
+          request.signal?.removeEventListener('abort', permit.preAuth.seal);
+          permit.preAuth.seal();
+        }
         const finish = async () => {
-          try { await permit.finish(); }
+          try {
+            if (!permit.acquireOAuth || await permit.preAuth.completion() === 'settled') await permit.finish();
+          }
           catch { /* An uncertain release leaves the durable slot counted. */ }
           finally { active--; }
         };
         // A nested deadline can return before protected work settles. Keep both
         // slots held without extending the request's deadline for that work.
-        if (pending?.size) {
+        if (pending?.size || (permit.acquireOAuth && permit.preAuth.status() === 'pending')) {
           const cleanup = (async () => {
             while (pending.size) await Promise.allSettled(pending);
             await finish();

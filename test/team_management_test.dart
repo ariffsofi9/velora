@@ -13,10 +13,10 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:velora/core/theme/app_theme.dart';
 import 'package:velora/models/cafe_workspace.dart';
+import 'package:velora/screens/team/staff_invitation_page.dart';
 import 'package:velora/screens/team/team_management_page.dart';
 import 'package:velora/services/workspace_resolver.dart';
 import 'package:velora/services/team_members_service.dart';
-import 'package:velora/services/firebase_emulator_config.dart';
 import 'package:velora/services/workspace_session.dart';
 import 'helpers/invitation_firebase.dart';
 
@@ -35,6 +35,9 @@ class _Auth extends Fake implements FirebaseAuth {
   int reads = 0;
   User? user = _User();
   final changes = StreamController<User?>.broadcast(sync: true);
+  @override
+  FirebaseApp get app => _RosterApp('velora-spark-test');
+
   @override
   User? get currentUser {
     reads++;
@@ -353,7 +356,7 @@ void main() {
     home: child,
   );
 
-  const rosterOrigin = 'https://staff-roster.example.test';
+  const rosterOrigin = 'https://rest-api.velora-smart-inventory.workers.dev';
   Future<void> settleRoster(WidgetTester tester) async {
     await tester.pump();
     // Stream cleanup can complete on the real event loop before fake time moves.
@@ -418,10 +421,10 @@ void main() {
           ),
         ),
       );
-      await settleRoster(tester);
       auth.changes.add(user);
-      await tester.pumpAndSettle();
+      await settleRoster(tester);
       expect(find.text('REAL Owner'), findsOneWidget);
+      expect(find.text('No verified Staff members are listed.'), findsNothing);
       await tester.tap(find.text('Next page'));
       await settleRoster(tester);
       expect(find.text('REAL Staff'), findsOneWidget);
@@ -433,7 +436,7 @@ void main() {
           'expectedMembershipGeneration': 7,
         },
       ]);
-      expect(user.refreshes, [true, true]);
+      expect(user.refreshes, [false, false]);
       auth.changes.add(user);
       await tester.pumpAndSettle();
       expect(find.text('REAL Staff'), findsNothing);
@@ -441,6 +444,43 @@ void main() {
       expect(requests, hasLength(2));
     },
   );
+
+  testWidgets('REAL Owner roster clears when workspace authority is revoked', (
+    tester,
+  ) async {
+    final user = _RosterUser(ownerWorkspace.uid);
+    final auth = _RosterAuth(user);
+    final workspace = WorkspaceSession.fromVerified(ownerWorkspace);
+    var requests = 0;
+    http.Client createClient() => MockClient((_) async {
+      requests++;
+      return rosterResponse(ownerWorkspace, [
+        row(ownerWorkspace.uid, 'Verified Owner', CafeRole.owner),
+      ]);
+    });
+    Widget page() => app(
+      TeamManagementPage(
+        auth: auth,
+        workspaceSession: workspace,
+        createRosterClient: createClient,
+      ),
+    );
+    await tester.pumpWidget(page());
+    auth.changes.add(user);
+    await settleRoster(tester);
+    expect(find.text('Verified Owner'), findsOneWidget);
+    final invite = tester
+        .widget<FilledButton>(find.byKey(const ValueKey('invite-staff-button')))
+        .onPressed!;
+    workspace.invalidate();
+    await tester.pumpWidget(page());
+    invite();
+    await tester.pumpAndSettle();
+    expect(find.text('Verified Owner'), findsNothing);
+    expect(find.byType(StaffInvitationPage), findsNothing);
+    expect(find.byKey(const ValueKey('invite-staff-button')), findsNothing);
+    expect(requests, 1);
+  });
 
   testWidgets('REAL Staff response cannot include an unrelated Staff user', (
     tester,
@@ -455,10 +495,12 @@ void main() {
       row(workspace.ownerUid, 'REAL Owner', CafeRole.owner),
       row(workspace.uid, 'REAL Staff', CafeRole.staff),
     ];
+    final user = _RosterUser(workspace.uid);
+    final auth = _RosterAuth(user);
     await tester.pumpWidget(
       app(
         TeamManagementPage(
-          auth: _RosterAuth(_RosterUser(workspace.uid)),
+          auth: auth,
           workspaceSession: WorkspaceSession.fromVerified(workspace),
           rosterOrigin: rosterOrigin,
           createRosterClient: () =>
@@ -466,6 +508,7 @@ void main() {
         ),
       ),
     );
+    auth.changes.add(user);
     await settleRoster(tester);
     expect(find.text('REAL Owner'), findsOneWidget);
     expect(find.text('REAL Staff'), findsOneWidget);
@@ -517,9 +560,99 @@ void main() {
           ),
         ),
       );
-      await tester.pumpAndSettle();
+      auth.changes.add(user);
+      await settleRoster(tester);
       expect(find.text('Team members unavailable'), findsOneWidget);
       expect(calls, failure == 'REST 503' ? 1 : 0);
+    });
+  }
+
+  testWidgets(
+    'REAL Owner with zero Staff sees the empty state and can invite',
+    (tester) async {
+      final user = _RosterUser(ownerWorkspace.uid);
+      final auth = _RosterAuth(user);
+      await tester.pumpWidget(
+        app(
+          TeamManagementPage(
+            auth: auth,
+            workspaceSession: WorkspaceSession.fromVerified(ownerWorkspace),
+            createRosterClient: () => MockClient((request) async {
+              expect(request.method, 'POST');
+              expect(request.url.path, '/staff/list');
+              return rosterResponse(ownerWorkspace, [
+                row(ownerWorkspace.uid, 'REAL Owner', CafeRole.owner),
+              ]);
+            }),
+          ),
+        ),
+      );
+      auth.changes.add(user);
+      await settleRoster(tester);
+      expect(find.text('REAL Owner'), findsOneWidget);
+      expect(
+        find.text('No verified Staff members are listed.'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const ValueKey('invite-staff-button')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    },
+  );
+
+  for (final (status, code, message) in [
+    (401, 'unauthenticated', 'Your sign-in could not be verified'),
+    (403, 'permission-denied', 'The service denied access'),
+    (429, 'resource-exhausted', 'The team service is busy'),
+    (503, 'unavailable', 'The team service is temporarily unavailable'),
+    (200, 'malformed', 'The team service returned an invalid roster'),
+    (0, 'network', 'Velora could not reach the team service'),
+  ]) {
+    testWidgets('REAL roster classifies $code independently', (tester) async {
+      final user = _RosterUser(ownerWorkspace.uid);
+      final auth = _RosterAuth(user);
+      await tester.pumpWidget(
+        app(
+          TeamManagementPage(
+            auth: auth,
+            workspaceSession: WorkspaceSession.fromVerified(ownerWorkspace),
+            createRosterClient: () => MockClient((request) async {
+              expect(request.url.path, '/staff/list');
+              if (status == 0) throw http.ClientException('Offline fixture');
+              return http.Response(
+                jsonEncode({'error': code}),
+                status,
+                headers: {'content-type': 'application/json'},
+              );
+            }),
+          ),
+        ),
+      );
+      auth.changes.add(user);
+      await settleRoster(tester);
+      expect(find.textContaining(message), findsOneWidget);
+      expect(find.textContaining('Verified Members'), findsNothing);
+      final invite = find.byKey(const ValueKey('invite-staff-button'));
+      if ([429, 503, 0].contains(status)) {
+        expect(tester.widget<FilledButton>(invite).onPressed, isNotNull);
+        if (status == 429) {
+          await tester.tap(invite);
+          await tester.pumpAndSettle();
+          expect(
+            tester
+                .widget<StaffInvitationPage>(find.byType(StaffInvitationPage))
+                .ownerMode,
+            isTrue,
+          );
+        }
+      } else {
+        expect(invite, findsNothing);
+      }
     });
   }
 
@@ -627,13 +760,7 @@ void main() {
       expect(find.text('staff@example.test'), findsOneWidget);
       expect(find.text('Verified Members (2)'), findsOneWidget);
 
-      final invite = tester.widget<FilledButton>(
-        find.widgetWithText(FilledButton, 'Invite Staff'),
-      );
-      expect(
-        invite.onPressed,
-        FirebaseEmulatorConfig.invitationsAvailable ? isNotNull : isNull,
-      );
+      expect(find.text('Invite Staff'), findsNothing);
       expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
     },
   );
@@ -653,10 +780,7 @@ void main() {
 
     expect(find.text('Team members unavailable'), findsOneWidget);
     expect(find.text('Sarah Parker'), findsNothing);
-    final invite = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, 'Invite Staff'),
-    );
-    expect(invite.onPressed, isNull);
+    expect(find.text('Invite Staff'), findsNothing);
   });
 
   for (final width in [320.0, 393.0, 768.0]) {
@@ -704,14 +828,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('staff@example.test'), findsOneWidget);
     expect(find.text('sarah@example.test'), findsOneWidget);
-    expect(
-      tester
-          .widget<FilledButton>(
-            find.widgetWithText(FilledButton, 'Invite Staff'),
-          )
-          .onPressed,
-      isNull,
-    );
+    expect(find.text('Invite Staff'), findsNothing);
+    expect(find.text('Remove access'), findsNothing);
     expect(find.byIcon(Icons.more_vert_rounded), findsNothing);
   });
 

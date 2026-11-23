@@ -4,12 +4,15 @@ import '../../core/theme/app_tokens.dart';
 import 'package:flutter/material.dart';
 
 import '../../models/inventory_item.dart';
+import '../../logic/low_stock_policy.dart';
+import '../../repositories/workspace_activity_repository.dart';
 import '../../repositories/workspace_inventory_repository.dart';
 import '../../repositories/workspace_inventory_movement_repository.dart';
 import '../../services/workspace_inventory_update_service.dart';
 import '../../services/workspace_inventory_stock_service.dart';
 import '../../services/workspace_inventory_lifecycle_service.dart';
 import '../../services/workspace_session.dart';
+import '../activity/activity_page.dart';
 import 'edit_item_page.dart';
 import 'stock/stock_adjustment_page.dart';
 import 'stock/stock_history_page.dart';
@@ -26,6 +29,7 @@ class ItemDetailsPage extends StatelessWidget {
   final WorkspaceInventoryStockAdjuster? stockAdjuster;
   final WorkspaceInventoryMovementReader? movementReader;
   final WorkspaceInventoryLifecycleManager? lifecycleManager;
+  final WorkspaceActivityReader? activityReader;
 
   const ItemDetailsPage({
     super.key,
@@ -36,6 +40,7 @@ class ItemDetailsPage extends StatelessWidget {
     this.stockAdjuster,
     this.movementReader,
     this.lifecycleManager,
+    this.activityReader,
   });
 
   bool get _hasVerifiedContext =>
@@ -180,6 +185,21 @@ class ItemDetailsPage extends StatelessWidget {
     );
   }
 
+  void _goToActivity(BuildContext context) {
+    if (!_hasVerifiedContext || item.id.trim().isEmpty) return;
+    final workspace = workspaceSession!;
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ActivityPage(
+          workspaceSession: workspace,
+          activityReader: activityReader,
+          item: (id: item.id, name: item.name),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (workspaceSession != null && !_hasVerifiedContext) {
@@ -196,6 +216,7 @@ class ItemDetailsPage extends StatelessWidget {
     final expiryText = ExpiryHelper.daysLeftText(item.expiryDate);
     final expiryColor = ExpiryHelper.statusColor(item.expiryDate);
     final expiryBg = ExpiryHelper.statusBgColor(item.expiryDate);
+    final stockAttention = LowStockPolicy.attention(item);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -240,6 +261,11 @@ class ItemDetailsPage extends StatelessWidget {
                     label: 'Quantity',
                     value: '${item.quantity} ${item.unit}',
                   ),
+                  if (stockAttention != null)
+                    ItemDetailInfoRow(
+                      label: 'Stock Status',
+                      value: stockAttention.label,
+                    ),
                   ItemDetailInfoRow(label: 'Category', value: item.category),
                   ItemDetailInfoRow(
                     label: 'Expiry Date',
@@ -263,13 +289,27 @@ class ItemDetailsPage extends StatelessWidget {
                 icon: const Icon(Icons.history_rounded),
                 label: const Text('Stock History'),
               ),
+              if (_hasVerifiedContext && item.id.trim().isNotEmpty) ...[
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  key: const ValueKey('open-item-activity'),
+                  onPressed: () => _goToActivity(context),
+                  icon: const Icon(Icons.receipt_long_outlined),
+                  label: const Text('View Activity'),
+                ),
+              ],
               const SizedBox(height: 12),
               if (_hasVerifiedContext && lifecycleManager != null)
                 InventoryLifecycleActionButton(
                   workspaceSession: workspaceSession,
                   item: item,
                   manager: lifecycleManager,
-                  onChanged: () => Navigator.pop(context, true),
+                  onChanged: () {
+                    if (ModalRoute.of(context)?.isCurrent == true) {
+                      Navigator.pop(context, true);
+                    }
+                  },
+                  onReload: () => Navigator.pop(context, true),
                 )
               else
                 OutlinedButton.icon(
